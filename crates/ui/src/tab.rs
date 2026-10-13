@@ -1,9 +1,10 @@
-//! Tabs and their panes: one pane per tab for now.
+//! Tabs and their panes: a tab lays its panes out with a [`SplitTree<PaneId>`].
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use fogu_core::{Profile, RgbColor, Size};
+use fogu_core::{Profile, RgbColor, Size, SplitTree};
 use fogu_session::{SessionHandle, SessionInput};
 use fogu_term::{RenderSnapshot, Scroll, TermHandle};
 use tokio::sync::mpsc::Sender;
@@ -16,8 +17,8 @@ use crate::subscription::EventSlot;
 pub struct TabId(pub u64);
 
 /// Identifies a pane (and its session subscription); monotonic, never reused, so events from a
-/// restarted tab's old session can't reach the new one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// restarted pane's old session can't reach the new one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PaneId(pub u64);
 
 /// Lifecycle of a pane's session.
@@ -45,6 +46,12 @@ pub struct Pane {
     pub resize_generation: u64,
     /// PTY size waiting for the debounce timer.
     pub pending_resize: Option<Size>,
+    /// Last OSC 0/2 title (sanitized by the session; `None` after a reset).
+    pub title_from_osc: Option<String>,
+    /// Status line drawn over an ended pane ("[process exited with code 0] …").
+    pub status: Option<String>,
+    /// `Close` was sent; the pane goes on `Exited` or after the grace period.
+    pub closing: bool,
 }
 
 impl Pane {
@@ -60,6 +67,9 @@ impl Pane {
             state: PaneState::Running,
             resize_generation: 0,
             pending_resize: None,
+            title_from_osc: None,
+            status: None,
+            closing: false,
         }
     }
 
@@ -111,42 +121,54 @@ impl Pane {
     }
 }
 
-/// One tab: a profile, its title sources, colour and (for now) a single pane.
+/// One tab: a profile, its title sources, colour and its panes laid out by a split tree.
 #[derive(Debug)]
 pub struct Tab {
     pub id: TabId,
-    /// The profile the tab was opened from (`RestartTab` reopens it).
+    /// The profile the tab was opened from (splits and restarts reopen it).
     pub profile: Profile,
-    /// Last OSC 0/2 title (sanitized by the session; `None` after a reset).
-    pub title_from_osc: Option<String>,
     /// The user's rename; wins over everything until cleared.
     pub title_override: Option<String>,
-    /// Header tint + pane border; defaults to the profile's colour.
+    /// Header tint + focused pane border; defaults to the profile's colour.
     pub color: Option<RgbColor>,
-    pub pane: Pane,
-    /// `CloseTab` sent `Close`; removed on `Exited` or after the grace period.
-    pub closing: bool,
+    /// Pane arrangement; never empty while the tab exists.
+    pub layout: SplitTree<PaneId>,
+    /// Every pane of `layout`.
+    pub panes: BTreeMap<PaneId, Pane>,
+    /// The pane receiving keys; always a leaf of `layout`.
+    pub focused: PaneId,
 }
 
 impl Tab {
-    /// A new tab for `profile` around `pane`.
+    /// A new tab for `profile` with the single pane `pane`.
     pub fn new(id: TabId, profile: Profile, pane: Pane) -> Self {
         Self {
             id,
             color: profile.color,
             profile,
-            title_from_osc: None,
             title_override: None,
-            pane,
-            closing: false,
+            layout: SplitTree::new(pane.id),
+            focused: pane.id,
+            panes: BTreeMap::from([(pane.id, pane)]),
         }
     }
 
-    /// The title shown in the header and the window title.
+    /// The focused pane.
+    pub fn focused_pane(&self) -> Option<&Pane> {
+        self.panes.get(&self.focused)
+    }
+
+    /// The focused pane, mutably.
+    pub fn focused_pane_mut(&mut self) -> Option<&mut Pane> {
+        self.panes.get_mut(&self.focused)
+    }
+
+    /// The title shown in the header and the window title (the focused pane's OSC title).
     pub fn title(&self) -> &str {
         resolve_title(
             self.title_override.as_deref(),
-            self.title_from_osc.as_deref(),
+            self.focused_pane()
+                .and_then(|p| p.title_from_osc.as_deref()),
             self.profile.disable_dynamic_title,
             &self.profile.name,
         )

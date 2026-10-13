@@ -1,0 +1,34 @@
+---
+source: crates/core/tests/split_snapshot.rs
+expression: toml
+---
+[root.split]
+dir = "horizontal"
+ratio = 0.5
+
+[root.split.a.split]
+dir = "vertical"
+ratio = 0.5
+
+[root.split.a.split.a]
+leaf = 3
+
+[root.split.a.split.b]
+leaf = 0
+
+[root.split.b.split]
+dir = "vertical"
+ratio = 0.5
+
+[root.split.b.split.a]
+leaf = 1
+
+[root.split.b.split.b.split]
+dir = "horizontal"
+ratio = 0.5
+
+[root.split.b.split.b.split.a]
+leaf = 4
+
+[root.split.b.split.b.split.b]
+leaf = 2

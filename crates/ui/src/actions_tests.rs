@@ -3,8 +3,9 @@
 
 use std::sync::Arc;
 
-use fogu_core::{Action, Config, RgbColor};
+use fogu_core::{Action, Config, Dir, Rect, RgbColor, SessionEndBehavior};
 use fogu_session::{ExitInfo, SessionInput, SessionOutput, SessionRuntime};
+use fogu_term::input::{KeyCode, KeyInput, Mods};
 
 use crate::app::App;
 use crate::message::Message;
@@ -35,8 +36,36 @@ fn ids(app: &App) -> Vec<TabId> {
     app.tabs.iter().map(|t| t.id).collect()
 }
 
+/// Tab `index`'s focused pane.
 fn pane_of(app: &App, index: usize) -> PaneId {
-    app.tabs[index].pane.id
+    app.tabs[index].focused
+}
+
+/// The active tab's panes in layout order.
+fn leaves(app: &App) -> Vec<PaneId> {
+    let tab = app.active_tab().unwrap();
+    tab.layout.leaves().into_iter().copied().collect()
+}
+
+/// Splits the focused pane and answers the session's cwd query; returns the new pane.
+fn split(app: &mut App, action: Action) -> PaneId {
+    let target = pane_of(app, app.active_index().unwrap());
+    act(app, action);
+    let cwd = SessionOutput::Cwd {
+        path: "/tmp".into(),
+        remote: false,
+    };
+    send(app, Message::Session(target, cwd));
+    let new = pane_of(app, app.active_index().unwrap());
+    assert_ne!(new, target, "the new pane is focused");
+    new
+}
+
+fn exited(code: i32) -> SessionOutput {
+    SessionOutput::Exited(ExitInfo {
+        code: Some(code),
+        signal: None,
+    })
 }
 
 /// What the UI sent to stub session `n` (in opening order).
@@ -197,6 +226,7 @@ fn events_from_unknown_panes_are_ignored() {
     let mut app = headless();
     send(&mut app, Message::Session(PaneId(999), EXITED));
     assert_eq!(app.tabs.len(), 1);
+    assert!(app.active_pane().unwrap().status.is_none());
     let pane = pane_of(&app, 0);
     act(&mut app, Action::RestartTab);
     assert_ne!(pane_of(&app, 0), pane, "restart opens a new pane");
@@ -205,4 +235,129 @@ fn events_from_unknown_panes_are_ignored() {
         Message::Session(pane, SessionOutput::Title("old".into())),
     );
     assert_eq!(app.title(), "Default shell");
+}
+
+#[test]
+fn split_twice_navigate_and_close_the_middle_pane() {
+    let mut app = headless();
+    let p0 = pane_of(&app, 0);
+    let p1 = split(&mut app, Action::SplitRight);
+    assert!(matches!(
+        sent(&mut app, 0).as_slice(),
+        [SessionInput::QueryCwd]
+    ));
+    let p2 = split(&mut app, Action::SplitDown);
+    assert_eq!(leaves(&app), [p0, p1, p2]);
+    assert_eq!(app.tabs.len(), 1, "splits stay in the tab");
+
+    act(&mut app, Action::PaneNav(Dir::Up));
+    assert_eq!(pane_of(&app, 0), p1);
+    act(&mut app, Action::PaneNav(Dir::Left));
+    assert_eq!(pane_of(&app, 0), p0);
+    act(&mut app, Action::PaneNav(Dir::Left));
+    assert_eq!(pane_of(&app, 0), p0, "no neighbour: focus stays");
+    send(&mut app, Message::FocusPane(p1));
+    assert_eq!(pane_of(&app, 0), p1);
+
+    act(&mut app, Action::ClosePane);
+    assert!(matches!(
+        sent(&mut app, 1).as_slice(),
+        [SessionInput::QueryCwd, SessionInput::Close]
+    ));
+    assert_eq!(leaves(&app), [p0, p1, p2], "waits for the session to exit");
+    send(&mut app, Message::Session(p1, EXITED));
+    assert_eq!(leaves(&app), [p0, p2]);
+    assert_eq!(pane_of(&app, 0), p0, "focus moves to a remaining pane");
+    act(&mut app, Action::PaneNav(Dir::Right));
+    assert_eq!(pane_of(&app, 0), p2);
+
+    // Closing the last panes closes the tab (and, here, the app).
+    act(&mut app, Action::ClosePane);
+    send(&mut app, Message::CloseTimeout(p2));
+    act(&mut app, Action::ClosePane);
+    send(&mut app, Message::Session(p0, EXITED));
+    assert!(app.tabs.is_empty());
+}
+
+#[test]
+fn split_without_a_local_cwd_reply_opens_after_the_timeout() {
+    let mut app = headless();
+    let p0 = pane_of(&app, 0);
+    act(&mut app, Action::SplitRight);
+    let remote = SessionOutput::Cwd {
+        path: "/srv".into(),
+        remote: true,
+    };
+    send(&mut app, Message::Session(p0, remote));
+    assert_eq!(leaves(&app), [p0], "remote paths are ignored");
+    send(&mut app, Message::CwdTimeout(p0));
+    assert_eq!(leaves(&app).len(), 2);
+    send(&mut app, Message::CwdTimeout(p0));
+    assert_eq!(leaves(&app).len(), 2, "one pane per query");
+}
+
+#[test]
+fn divider_ratio_is_clamped_and_equalized() {
+    let mut app = headless();
+    split(&mut app, Action::SplitRight);
+    let tab = app.active;
+    let first_width = |app: &App| {
+        let area = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 50.0,
+        };
+        app.active_tab().unwrap().layout.layout(area, 0.0)[0].1.w
+    };
+    send(&mut app, Message::SplitRatio(tab, Vec::new(), 5.0));
+    assert!((first_width(&app) - 90.0).abs() < 1e-3);
+    send(&mut app, Message::SplitRatio(tab, Vec::new(), -1.0));
+    assert!((first_width(&app) - 10.0).abs() < 1e-3);
+    send(&mut app, Message::Equalize(tab));
+    assert!((first_width(&app) - 50.0).abs() < 1e-3);
+}
+
+#[test]
+fn exited_pane_keeps_and_restarts_on_enter_or_closes() {
+    let mut app = headless();
+    let p0 = pane_of(&app, 0);
+    send(&mut app, Message::Session(p0, exited(3)));
+    let status = app.active_pane().unwrap().status.clone().unwrap();
+    assert!(status.contains("exited with code 3") && status.contains("Enter to restart"));
+    let enter = KeyInput {
+        key: KeyCode::Enter,
+        text: None,
+        mods: Mods::default(),
+    };
+    send(&mut app, Message::Key(enter));
+    let restarted = pane_of(&app, 0);
+    assert_ne!(restarted, p0, "Enter restarts the pane in place");
+    assert_eq!(leaves(&app), [restarted]);
+    assert!(app.active_pane().unwrap().status.is_none());
+
+    // `Close`: the exited pane goes away, its sibling and the tab stay.
+    app.tabs[0].profile.behavior_on_session_end = SessionEndBehavior::Close;
+    let p1 = split(&mut app, Action::SplitDown);
+    send(&mut app, Message::Session(p1, exited(0)));
+    assert_eq!(leaves(&app), [restarted]);
+    assert_eq!(app.tabs.len(), 1);
+}
+
+#[test]
+fn grid_resize_targets_its_pane_and_never_goes_below_two_by_one() {
+    let mut app = headless();
+    let p0 = pane_of(&app, 0);
+    let p1 = split(&mut app, Action::SplitRight);
+    send(
+        &mut app,
+        Message::GridResized {
+            pane: p0,
+            cols: 0,
+            rows: 0,
+        },
+    );
+    let size = |app: &App, id| app.pane(id).unwrap().size();
+    assert_eq!((size(&app, p0).cols, size(&app, p0).rows), (2, 1));
+    assert_eq!(size(&app, p1).cols, 80, "the sibling is untouched");
 }

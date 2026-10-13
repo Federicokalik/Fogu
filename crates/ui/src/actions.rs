@@ -1,10 +1,12 @@
 //! Tab lifecycle and keymap actions: new / close / switch / rename / colour / restart / new tab
-//! here, and session events routed to their tab.
+//! here, and session events routed to their pane. Pane-level operations live in `panes.rs`.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use fogu_core::{Action, EffectiveProfile, Profile, ProfileKind, Size, resolve};
+use fogu_core::{
+    Action, EffectiveProfile, Profile, ProfileKind, SessionEndBehavior, Side, Size, resolve,
+};
 use fogu_session::{SessionHandle, SessionInput, SessionOutput};
 use fogu_term::{Scroll, TermHandle, input, sanitize_title};
 use iced::widget::operation;
@@ -13,6 +15,7 @@ use iced::{Task, clipboard, window};
 use crate::app::App;
 use crate::context_menu::{ContextMenu, MENU_INPUT, parse_color};
 use crate::message::{Message, PasteSource};
+use crate::panes::{CwdFor, CwdQuery};
 use crate::tab::{Pane, PaneId, PaneState, Tab, TabId};
 use crate::tab_bar::{RENAME_INPUT, Rename};
 
@@ -23,9 +26,9 @@ const INITIAL_SIZE: Size = Size {
     px_w: 0,
     px_h: 0,
 };
-/// How long `CloseTab` waits for `Exited` before dropping the tab anyway.
-const CLOSE_GRACE: Duration = Duration::from_secs(2);
-/// How long a `NewTabHere` cwd query stays valid.
+/// How long closing a pane waits for `Exited` before dropping it anyway.
+pub(crate) const CLOSE_GRACE: Duration = Duration::from_secs(2);
+/// How long a cwd query stays valid.
 const CWD_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl App {
@@ -37,8 +40,9 @@ impl App {
         self.tabs.iter().find(|t| t.id == self.active)
     }
 
+    /// The active tab's focused pane.
     pub(crate) fn active_pane(&self) -> Option<&Pane> {
-        self.active_tab().map(|t| &t.pane)
+        self.active_tab().and_then(Tab::focused_pane)
     }
 
     pub(crate) fn active_pane_mut(&mut self) -> Option<&mut Pane> {
@@ -46,14 +50,20 @@ impl App {
         self.tabs
             .iter_mut()
             .find(|t| t.id == active)
-            .map(|t| &mut t.pane)
+            .and_then(Tab::focused_pane_mut)
+    }
+
+    /// Index of the tab holding pane `id`.
+    pub(crate) fn tab_of(&self, id: PaneId) -> Option<usize> {
+        self.tabs.iter().position(|t| t.panes.contains_key(&id))
+    }
+
+    pub(crate) fn pane(&self, id: PaneId) -> Option<&Pane> {
+        self.tabs.iter().find_map(|t| t.panes.get(&id))
     }
 
     pub(crate) fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
-        self.tabs
-            .iter_mut()
-            .map(|t| &mut t.pane)
-            .find(|p| p.id == id)
+        self.tabs.iter_mut().find_map(|t| t.panes.get_mut(&id))
     }
 
     fn take_id(&mut self) -> u64 {
@@ -84,7 +94,7 @@ impl App {
     }
 
     /// A new pane running `profile`, sized like the active pane.
-    fn open_pane(&mut self, profile: &Profile, cwd: Option<PathBuf>) -> Pane {
+    pub(crate) fn open_pane(&mut self, profile: &Profile, cwd: Option<PathBuf>) -> Pane {
         let size = self.active_pane().map_or(INITIAL_SIZE, Pane::size);
         let terminal = &self.config.terminal;
         let mut term = TermHandle::new(
@@ -128,7 +138,7 @@ impl App {
         SessionHandle { input, events }
     }
 
-    /// Makes `id` the visible tab: focus out/in reports, fresh snapshot (inactive panes skip
+    /// Makes `id` the visible tab: focus out/in reports, fresh snapshots (inactive panes skip
     /// wakeup refreshes).
     pub(crate) fn activate(&mut self, id: TabId) {
         if id == self.active && self.active_pane().is_some() {
@@ -137,14 +147,14 @@ impl App {
         self.focus_report(false);
         self.active = id;
         self.focus_report(true);
-        if let Some(pane) = self.active_pane_mut() {
-            pane.refresh();
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+            tab.panes.values_mut().for_each(Pane::refresh);
         }
     }
 
     /// Sends a focus in/out report to the active pane, if the app asked for them and the
     /// window is focused.
-    fn focus_report(&self, focused: bool) {
+    pub(crate) fn focus_report(&self, focused: bool) {
         if let Some(pane) = self.active_pane().filter(|_| self.focused)
             && let Some(bytes) = input::encode_focus(focused, pane.term.mode())
         {
@@ -160,11 +170,19 @@ impl App {
                 let profile = self.default_profile();
                 self.open_tab(profile, None);
             }
-            Action::NewTabHere => self.query_cwd(),
+            Action::NewTabHere => {
+                if let Some(pane) = self.active_pane().map(|p| p.id) {
+                    self.ask_cwd(pane, CwdFor::Tab);
+                }
+            }
             Action::CloseTab => return self.close_tab(self.active),
             Action::NextTab | Action::PrevTab | Action::GoToTab(_) => self.switch(action),
             Action::RenameTab => return self.start_rename(self.active),
-            Action::RestartTab => self.restart_active(),
+            Action::RestartTab => {
+                if let Some(pane) = self.active_pane().map(|p| p.id) {
+                    self.restart_pane(pane);
+                }
+            }
             Action::Copy => {
                 if let Some(text) = self.active_pane().and_then(|p| p.term.selection_text()) {
                     return clipboard::write(text);
@@ -194,13 +212,15 @@ impl App {
                 };
                 return window::oldest().and_then(move |id| window::set_mode(id, mode));
             }
-            Action::SplitRight
-            | Action::SplitDown
-            | Action::ClosePane
-            | Action::PaneNav(_)
-            | Action::SelectAll
-            | Action::Reconnect
-            | Action::OpenProfilePicker => {
+            Action::SplitRight => return self.split_focused(Side::Right),
+            Action::SplitDown => return self.split_focused(Side::Bottom),
+            Action::ClosePane => {
+                if let Some(pane) = self.active_pane().map(|p| p.id) {
+                    return self.close_pane(pane);
+                }
+            }
+            Action::PaneNav(dir) => self.pane_nav(dir),
+            Action::SelectAll | Action::Reconnect | Action::OpenProfilePicker => {
                 tracing::debug!(%action, "action not implemented yet");
             }
         }
@@ -223,52 +243,32 @@ impl App {
         }
     }
 
-    /// Asks the active local pane for its cwd; the reply (`Cwd`, `remote: false`) opens the tab.
-    fn query_cwd(&mut self) {
-        let Some(pane) = self.active_pane() else {
-            return;
-        };
-        if pane.control(SessionInput::QueryCwd) {
-            self.pending_here = Some((pane.id, Instant::now()));
+    /// Asks pane `pane` for its cwd on behalf of `purpose`; `false` when the session is gone.
+    pub(crate) fn ask_cwd(&mut self, pane: PaneId, purpose: CwdFor) -> bool {
+        let asked = self
+            .pane(pane)
+            .is_some_and(|p| p.control(SessionInput::QueryCwd));
+        if asked {
+            self.pending_cwd = Some(CwdQuery {
+                pane,
+                asked: Instant::now(),
+                purpose,
+            });
         }
+        asked
     }
 
-    /// Replaces the active tab's pane with a fresh session of the same profile.
-    fn restart_active(&mut self) {
-        let Some(index) = self.active_index() else {
-            return;
-        };
-        let Some(profile) = self.tabs.get(index).map(|t| t.profile.clone()) else {
-            return;
-        };
-        let pane = self.open_pane(&profile, None);
-        if let Some(tab) = self.tabs.get_mut(index) {
-            // Dropping the old pane closes its input channel: the old session ends itself.
-            tab.pane = pane;
-            tab.title_from_osc = None;
-            tab.closing = false;
-        }
-    }
-
-    /// Asks the tab's session to close; the tab goes on `Exited` or after [`CLOSE_GRACE`].
-    /// A tab whose session is already gone is removed at once.
+    /// Closes every pane of tab `id`; the tab goes with its last pane.
     pub(crate) fn close_tab(&mut self, id: TabId) -> Task<Message> {
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) else {
+        let Some(tab) = self.tabs.iter().find(|t| t.id == id) else {
             return Task::none();
         };
-        if tab.closing {
-            return Task::none();
-        }
-        if tab.pane.state == PaneState::Running && tab.pane.control(SessionInput::Close) {
-            tab.closing = true;
-            let pane = tab.pane.id;
-            return self.after(CLOSE_GRACE, Message::CloseTimeout(pane));
-        }
-        self.remove_tab(id)
+        let panes: Vec<PaneId> = tab.panes.keys().copied().collect();
+        Task::batch(panes.into_iter().map(|pane| self.close_pane(pane)))
     }
 
-    /// Drops tab `id` (its pane closes its session); exits the app after the last tab.
-    fn remove_tab(&mut self, id: TabId) -> Task<Message> {
+    /// Drops tab `id` (its panes close their sessions); exits the app after the last tab.
+    pub(crate) fn remove_tab(&mut self, id: TabId) -> Task<Message> {
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
             return Task::none();
         };
@@ -290,13 +290,6 @@ impl App {
             }
         }
         Task::none()
-    }
-
-    pub(crate) fn on_close_timeout(&mut self, pane: PaneId) -> Task<Message> {
-        match self.tabs.iter().find(|t| t.pane.id == pane && t.closing) {
-            Some(tab) => self.remove_tab(tab.id),
-            None => Task::none(),
-        }
     }
 
     fn start_rename(&mut self, id: TabId) -> Task<Message> {
@@ -384,22 +377,35 @@ impl App {
     /// Routes a session event to its pane; events from panes that no longer exist are dropped.
     pub(crate) fn on_session(&mut self, pane_id: PaneId, event: SessionOutput) -> Task<Message> {
         let active = self.active;
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.pane.id == pane_id) else {
+        let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.panes.contains_key(&pane_id))
+        else {
+            return Task::none();
+        };
+        let is_active = tab.id == active;
+        let Some(pane) = tab.panes.get_mut(&pane_id) else {
             return Task::none();
         };
         match event {
             // Inactive panes keep `dirty` set (no further wakeups) until activated.
-            SessionOutput::Wakeup if tab.id == active => tab.pane.refresh(),
+            SessionOutput::Wakeup if is_active => pane.refresh(),
             SessionOutput::Title(title) => {
-                tab.title_from_osc = (!title.is_empty()).then_some(title);
+                pane.title_from_osc = (!title.is_empty()).then_some(title);
             }
             SessionOutput::Exited(info) => {
                 tracing::info!(?info, "session exited");
-                return self.on_pane_ended(pane_id, PaneState::Exited);
+                let status = match (info.code, info.signal) {
+                    (_, Some(signal)) => format!("[process killed by signal {signal}]"),
+                    (code, None) => format!("[process exited with code {}]", code.unwrap_or(0)),
+                };
+                return self.on_pane_ended(pane_id, PaneState::Exited, &status);
             }
             SessionOutput::Error(err) => {
                 tracing::error!(error = %err, "session failed");
-                return self.on_pane_ended(pane_id, PaneState::Crashed);
+                let status = "[crashed — see log]";
+                return self.on_pane_ended(pane_id, PaneState::Crashed, status);
             }
             SessionOutput::Cwd { path, remote } => self.on_cwd(pane_id, path, remote),
             SessionOutput::Prompt(_, kind) => match kind {},
@@ -415,43 +421,57 @@ impl App {
         Task::none()
     }
 
-    /// Marks the pane ended; a tab that was closing goes away now.
-    fn on_pane_ended(&mut self, pane_id: PaneId, state: PaneState) -> Task<Message> {
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.pane.id == pane_id) else {
+    /// Marks the pane ended. A pane being closed, or whose profile says `Close`, goes away
+    /// now; otherwise it shows `status` and restarts on Enter.
+    fn on_pane_ended(&mut self, pane_id: PaneId, state: PaneState, status: &str) -> Task<Message> {
+        let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|t| t.panes.contains_key(&pane_id))
+        else {
             return Task::none();
         };
-        tab.pane.state = state;
-        tab.pane.refresh();
-        if tab.closing {
-            let id = tab.id;
-            return self.remove_tab(id);
+        let close = state == PaneState::Exited
+            && tab.profile.behavior_on_session_end == SessionEndBehavior::Close;
+        let Some(pane) = tab.panes.get_mut(&pane_id) else {
+            return Task::none();
+        };
+        pane.state = state;
+        pane.status = Some(format!("{status} — Enter to restart"));
+        pane.refresh();
+        if pane.closing || close {
+            return self.remove_pane(pane_id);
         }
         Task::none()
     }
 
     /// A cwd report. Attacker-controlled text: only logged sanitized, and only a local
-    /// (`remote: false`) path answering a fresh `NewTabHere` query opens a tab.
+    /// (`remote: false`) path answering a fresh query opens a tab or a split.
     fn on_cwd(&mut self, pane_id: PaneId, path: PathBuf, remote: bool) {
         tracing::debug!(
             cwd = %sanitize_title(&path.to_string_lossy()),
             remote,
             "cwd reported"
         );
-        let Some((pending, asked)) = self.pending_here else {
+        let Some(query) = self.pending_cwd else {
             return;
         };
-        if pending != pane_id || remote || asked.elapsed() > CWD_QUERY_TIMEOUT {
+        if query.pane != pane_id || remote || query.asked.elapsed() > CWD_QUERY_TIMEOUT {
             return;
         }
-        self.pending_here = None;
-        let profile = self
-            .tabs
-            .iter()
-            .find(|t| t.pane.id == pane_id)
-            .map(|t| t.profile.clone())
-            .filter(|p| matches!(p.kind, ProfileKind::Local(_)))
-            .unwrap_or_else(Profile::default_shell);
-        self.open_tab(profile, Some(path));
+        self.pending_cwd = None;
+        match query.purpose {
+            CwdFor::Tab => {
+                let profile = self
+                    .tab_of(pane_id)
+                    .and_then(|i| self.tabs.get(i))
+                    .map(|t| t.profile.clone())
+                    .filter(|p| matches!(p.kind, ProfileKind::Local(_)))
+                    .unwrap_or_else(Profile::default_shell);
+                self.open_tab(profile, Some(path));
+            }
+            CwdFor::Split(side) => self.split_now(pane_id, side, Some(path)),
+        }
     }
 }
 

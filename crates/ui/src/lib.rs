@@ -1,9 +1,9 @@
 //! `fogu-ui`: the iced application (tabs, split container, terminal widget, settings,
 //! palette, prompts).
 //!
-//! One window with tabs (one pane each) running local shells: keyboard input through the keymap,
-//! scrollback, mouse selection + copy, sanitized/bracketed paste, zoom, clear, tab rename/colour
-//! and a tab context menu.
+//! One window with tabs of split panes running local shells: keyboard input through the keymap,
+//! scrollback, mouse selection + copy, sanitized/bracketed paste, zoom, clear, tab rename/colour,
+//! a tab context menu and mouse-resizable splits.
 
 mod actions;
 mod app;
@@ -14,7 +14,9 @@ mod metrics;
 mod modal;
 mod mouse;
 mod palette;
+mod panes;
 mod runs;
+mod split_container;
 mod subscription;
 mod tab;
 mod tab_bar;

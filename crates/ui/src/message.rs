@@ -1,6 +1,6 @@
 //! Application messages.
 
-use fogu_core::{Action, RgbColor};
+use fogu_core::{Action, NodePath, RgbColor};
 use fogu_session::SessionOutput;
 use fogu_term::input::KeyInput;
 use fogu_term::{Scroll, SelectionType};
@@ -36,14 +36,18 @@ pub enum PasteSource {
     Primary,
 }
 
-/// Everything `update` reacts to. Pane-level messages without a [`PaneId`] target the active
-/// tab's pane (the only one on screen).
+/// Everything `update` reacts to. Pane-level input without a [`PaneId`] (keymap actions) targets
+/// the active tab's focused pane; input from a pane widget arrives wrapped in [`Message::Pane`].
 #[derive(Clone, Debug)]
 pub enum Message {
     /// An event from pane `.0`'s session.
     Session(PaneId, SessionOutput),
-    /// The terminal widget now fits a different grid.
+    /// Pane-level input (keys, mouse, paste, scroll) produced by pane `.0`'s widget.
+    Pane(PaneId, Box<Message>),
+    /// Pane `pane`'s widget now fits a different grid.
     GridResized {
+        /// The pane whose rectangle changed.
+        pane: PaneId,
         /// Columns that fit.
         cols: u16,
         /// Rows that fit.
@@ -55,8 +59,16 @@ pub enum Message {
     ScaleFactor(f32),
     /// The window's new logical size (keeps context menus inside it).
     WindowResized(iced::Size),
-    /// Pane focus gained (`true`: window focused or pane clicked) or lost (window unfocused).
+    /// Window focus gained or lost.
     Focused(bool),
+    /// A click into pane `.0`: focus it (and the window's terminal area).
+    FocusPane(PaneId),
+    /// Divider drag: set the ratio of the split at `.1` in tab `.0`.
+    SplitRatio(TabId, NodePath, f32),
+    /// Double-click on a divider: equalize tab `.0`'s splits.
+    Equalize(TabId),
+    /// A split's cwd query to pane `.0` got no answer in time: split without a cwd.
+    CwdTimeout(PaneId),
     /// A key press for the focused pane (no hotkey matched).
     Key(KeyInput),
     /// Text committed by the input method for the focused pane.
@@ -108,4 +120,20 @@ pub enum Message {
     SetTabColor(Option<RgbColor>),
     /// Escape pressed anywhere: cancel rename / close the menu.
     Escape,
+}
+
+impl Message {
+    /// Wraps pane-level input coming from pane `pane`'s widget in [`Message::Pane`]; other
+    /// messages pass through unchanged.
+    pub fn for_pane(self, pane: PaneId) -> Self {
+        match self {
+            Self::Key(_)
+            | Self::Text(_)
+            | Self::MouseInput(_)
+            | Self::Select(_)
+            | Self::Scroll(_)
+            | Self::Paste(_) => Self::Pane(pane, Box::new(self)),
+            other => other,
+        }
+    }
 }

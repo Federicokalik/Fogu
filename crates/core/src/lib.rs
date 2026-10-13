@@ -9,6 +9,7 @@ mod profile;
 mod quick_connect;
 mod scheme;
 mod size;
+mod split;
 
 pub use action::{Action, Dir, Hotkeys};
 pub use config::Config;
@@ -21,3 +22,4 @@ pub use profile::{
 pub use quick_connect::{QuickConnect, QuickConnectError};
 pub use scheme::{ColorScheme, RgbColor};
 pub use size::Size;
+pub use split::{Divider, Node, NodePath, Orientation, Rect, Side, SplitTree};

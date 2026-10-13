@@ -859,6 +859,7 @@ dependencies = [
 name = "fogu-core"
 version = "0.1.0"
 dependencies = [
+ "insta",
  "serde",
  "thiserror 2.0.21",
  "toml",
