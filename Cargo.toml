@@ -20,7 +20,9 @@ version = "0.1.0"
 # the renderer choice is visible here instead of relying on upstream defaults. No `tokio` feature:
 # iced::application uses its own default executor (iced_futures::backend::default::Executor)
 # regardless of this feature; add it only if iced ever needs to drive a tokio runtime.
-iced = { version = "=0.14.0", features = ["wgpu", "tiny-skia"] }
+# `advanced`: the custom `Widget` trait, `fill_quad`/`fill_text` and the cosmic-text/fontdb
+# re-exports the terminal widget draws and measures with.
+iced = { version = "=0.14.0", features = ["wgpu", "tiny-skia", "advanced"] }
 # why: structured logging, used by `fogu`'s main().
 tracing = "0.1.44"
 # why: tracing subscriber with env-filter so `RUST_LOG` controls verbosity; `tracing-log` (a default

@@ -885,8 +885,12 @@ dependencies = [
 name = "fogu-ui"
 version = "0.1.0"
 dependencies = [
+ "fogu-core",
  "fogu-session",
+ "fogu-term",
  "iced",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

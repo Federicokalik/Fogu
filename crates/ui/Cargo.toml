@@ -10,3 +10,7 @@ workspace = true
 [dependencies]
 fogu-session = { path = "../session" }
 iced = { workspace = true }
+fogu-core = { path = "../core" }
+fogu-term = { path = "../term" }
+tokio.workspace = true
+tracing.workspace = true

@@ -1,0 +1,325 @@
+//! `TerminalView`: one iced widget that draws a whole [`RenderSnapshot`] with `fill_quad` and
+//! `fill_text` only, so it renders the same on wgpu and tiny-skia.
+//!
+//! Cells are grouped into style runs per row (`runs.rs`); every run is placed at
+//! `x = col * cell_w`, never at the shaped advance.
+
+use fogu_term::{CellFlags, CursorShape, RenderSnapshot, Rgb};
+use iced::advanced::layout::{self, Layout};
+use iced::advanced::renderer::{self, Quad};
+use iced::advanced::text::{self, LineHeight, Shaping, Text, Wrapping};
+use iced::advanced::widget::{Tree, Widget};
+use iced::advanced::{Clipboard, Shell, mouse};
+use iced::alignment::Vertical;
+use iced::{Border, Element, Event, Font, Length, Pixels, Point, Rectangle, Size, font};
+
+use crate::message::Message;
+use crate::metrics::CellMetrics;
+use crate::palette::{Colors, to_iced};
+use crate::runs::{Style, Underline, cell_style, row_runs};
+
+/// Number of whole cells that fit in `bounds` (at least 1×1).
+pub fn grid_size(bounds: Size, metrics: &CellMetrics) -> (u16, u16) {
+    let fit = |len: f32, cell: f32| {
+        let n = (len / cell).floor().clamp(1.0, f32::from(u16::MAX));
+        #[expect(clippy::cast_sign_loss, reason = "clamped to 1..=u16::MAX above")]
+        let n = n as u16;
+        n
+    };
+    (
+        fit(bounds.width, metrics.cell_w),
+        fit(bounds.height, metrics.cell_h),
+    )
+}
+
+/// The terminal widget. Borrowed from the pane for one `view`.
+#[derive(Debug)]
+pub struct TerminalView<'a> {
+    snapshot: &'a RenderSnapshot,
+    colors: &'a Colors,
+    metrics: CellMetrics,
+    font: Font,
+    focused: bool,
+    overlay: Option<&'static str>,
+}
+
+impl<'a> TerminalView<'a> {
+    /// Draws `snapshot`; `overlay` is a status line such as "[process exited]".
+    pub fn new(
+        snapshot: &'a RenderSnapshot,
+        colors: &'a Colors,
+        metrics: CellMetrics,
+        font: Font,
+        focused: bool,
+        overlay: Option<&'static str>,
+    ) -> Self {
+        Self {
+            snapshot,
+            colors,
+            metrics,
+            font,
+            focused,
+            overlay,
+        }
+    }
+
+    fn cell_rect(&self, origin: Point, col: usize, row: usize, cols: usize) -> Rectangle {
+        let m = &self.metrics;
+        Rectangle {
+            x: origin.x + cells(col) * m.cell_w,
+            y: origin.y + cells(row) * m.cell_h,
+            width: cells(cols) * m.cell_w,
+            height: m.cell_h,
+        }
+    }
+
+    fn draw_text(
+        &self,
+        renderer: &mut iced::Renderer,
+        content: String,
+        rect: Rectangle,
+        style: &Style,
+        color: Rgb,
+        clip: Rectangle,
+    ) {
+        let font = Font {
+            weight: if style.bold {
+                font::Weight::Bold
+            } else {
+                font::Weight::Normal
+            },
+            style: if style.italic {
+                font::Style::Italic
+            } else {
+                font::Style::Normal
+            },
+            ..self.font
+        };
+        let text = Text {
+            content,
+            // A little slack so the last glyph of a run is never clipped by rounding.
+            bounds: Size::new(rect.width + self.metrics.cell_w, rect.height),
+            size: Pixels(self.metrics.font_size),
+            line_height: LineHeight::Absolute(Pixels(self.metrics.cell_h)),
+            font,
+            align_x: text::Alignment::Left,
+            align_y: Vertical::Top,
+            shaping: Shaping::Advanced,
+            wrapping: Wrapping::None,
+        };
+        text::Renderer::fill_text(renderer, text, rect.position(), to_iced(color), clip);
+    }
+
+    fn draw_runs(&self, renderer: &mut iced::Renderer, origin: Point, clip: Rectangle) {
+        let default_bg = self.colors.background();
+        let mut runs = Vec::new();
+        for (row, cells) in self.snapshot.rows().enumerate() {
+            row_runs(cells, self.colors, &mut runs);
+            for run in &runs {
+                let rect = self.cell_rect(origin, run.col, row, run.cols);
+                if run.style.bg != default_bg {
+                    fill(renderer, rect, run.style.bg);
+                }
+                if !run.style.hidden && !run.text.trim_end().is_empty() {
+                    let color = run.style.fg;
+                    self.draw_text(renderer, run.text.clone(), rect, &run.style, color, clip);
+                }
+                self.draw_decorations(renderer, rect, &run.style);
+            }
+        }
+    }
+
+    fn draw_decorations(&self, renderer: &mut iced::Renderer, rect: Rectangle, style: &Style) {
+        let thickness = (self.metrics.cell_h / 16.0).max(1.0);
+        let line = |y: f32| Rectangle {
+            y,
+            height: thickness,
+            ..rect
+        };
+        let bottom = rect.y + rect.height - thickness;
+        match style.underline {
+            Some(Underline::Single) => fill(renderer, line(bottom), style.underline_color),
+            Some(Underline::Double) => {
+                fill(renderer, line(bottom), style.underline_color);
+                fill(
+                    renderer,
+                    line(bottom - 2.0 * thickness),
+                    style.underline_color,
+                );
+            }
+            None => {}
+        }
+        if style.strike {
+            fill(renderer, line(rect.y + rect.height / 2.0), style.fg);
+        }
+    }
+
+    fn draw_cursor(&self, renderer: &mut iced::Renderer, origin: Point, clip: Rectangle) {
+        let cursor = self.snapshot.cursor;
+        if !cursor.visible {
+            return;
+        }
+        let row = self.snapshot.rows().nth(cursor.row);
+        let cell = row.and_then(|r| r.get(cursor.col));
+        let wide = cell.is_some_and(|c| c.flags.contains(CellFlags::WIDE_CHAR));
+        let rect = self.cell_rect(origin, cursor.col, cursor.row, if wide { 2 } else { 1 });
+        let color = self.colors.cursor();
+        let thickness = (self.metrics.cell_w / 6.0).max(1.0);
+        let shape = if self.focused {
+            cursor.shape
+        } else {
+            CursorShape::HollowBlock
+        };
+        match shape {
+            CursorShape::Block => {
+                fill(renderer, rect, color);
+                // Redraw the character under the cursor in the background colour.
+                if let Some(cell) = cell.filter(|c| c.ch != ' ') {
+                    let style = cell_style(cell, self.colors);
+                    let mut text = String::from(cell.ch);
+                    text.extend(cell.zerowidth.iter().flat_map(|z| z.iter()));
+                    let bg = self.colors.background();
+                    self.draw_text(renderer, text, rect, &style, bg, clip);
+                }
+            }
+            CursorShape::Beam => fill(
+                renderer,
+                Rectangle {
+                    width: thickness,
+                    ..rect
+                },
+                color,
+            ),
+            CursorShape::Underline => {
+                let y = rect.y + rect.height - thickness;
+                fill(
+                    renderer,
+                    Rectangle {
+                        y,
+                        height: thickness,
+                        ..rect
+                    },
+                    color,
+                );
+            }
+            CursorShape::HollowBlock => {
+                let quad = Quad {
+                    bounds: rect,
+                    border: Border {
+                        color: to_iced(color),
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..Quad::default()
+                };
+                renderer::Renderer::fill_quad(renderer, quad, iced::Color::TRANSPARENT);
+            }
+            CursorShape::Hidden => {}
+        }
+    }
+
+    fn draw_overlay(&self, renderer: &mut iced::Renderer, bounds: Rectangle) {
+        let Some(label) = self.overlay else { return };
+        let row = (self.snapshot.cursor.row + 1).min(self.snapshot.rows.saturating_sub(1));
+        let cols = label.chars().count();
+        let rect = self.cell_rect(bounds.position(), 0, row, cols);
+        fill(renderer, rect, self.colors.foreground());
+        let style = Style {
+            fg: self.colors.background(),
+            bg: self.colors.foreground(),
+            underline_color: self.colors.background(),
+            bold: true,
+            italic: false,
+            underline: None,
+            strike: false,
+            hidden: false,
+        };
+        let bg = self.colors.background();
+        self.draw_text(renderer, label.to_owned(), rect, &style, bg, bounds);
+    }
+}
+
+/// A cell count as `f32` (grids are at most `u16::MAX` cells wide/high).
+fn cells(n: usize) -> f32 {
+    f32::from(u16::try_from(n).unwrap_or(u16::MAX))
+}
+
+fn fill(renderer: &mut iced::Renderer, bounds: Rectangle, color: Rgb) {
+    let quad = Quad {
+        bounds,
+        ..Quad::default()
+    };
+    renderer::Renderer::fill_quad(renderer, quad, to_iced(color));
+}
+
+impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        layout::Node::new(limits.max())
+    }
+
+    fn update(
+        &mut self,
+        _tree: &mut Tree,
+        _event: &Event,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _renderer: &iced::Renderer,
+        _clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        _viewport: &Rectangle,
+    ) {
+        // Any event (incl. the RedrawRequested sent before every frame) checks whether the
+        // widget's size now holds a different grid.
+        let (cols, rows) = grid_size(layout.bounds().size(), &self.metrics);
+        if (usize::from(cols), usize::from(rows)) != (self.snapshot.cols, self.snapshot.rows) {
+            shell.publish(Message::GridResized { cols, rows });
+        }
+    }
+
+    fn draw(
+        &self,
+        _tree: &Tree,
+        renderer: &mut iced::Renderer,
+        _theme: &iced::Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+        let bounds = layout.bounds();
+        fill(renderer, bounds, self.colors.background());
+        let origin = bounds.position();
+        self.draw_runs(renderer, origin, bounds);
+        self.draw_cursor(renderer, origin, bounds);
+        self.draw_overlay(renderer, bounds);
+    }
+}
+
+impl<'a> From<TerminalView<'a>> for Element<'a, Message> {
+    fn from(view: TerminalView<'a>) -> Self {
+        Element::new(view)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::FontUnits;
+
+    #[test]
+    fn grid_size_floors_and_clamps() {
+        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0);
+        // cell 10 × 19
+        assert_eq!(grid_size(Size::new(805.0, 460.0), &m), (80, 24));
+        assert_eq!(grid_size(Size::new(3.0, 0.0), &m), (1, 1));
+    }
+}

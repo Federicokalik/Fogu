@@ -4,4 +4,9 @@ Fogu is MIT-licensed. Third-party material included in the repository is listed 
 its own licence. Rust crate dependencies are not listed here; their licences are checked by
 `cargo deny`.
 
-Nothing is included yet.
+## Built-in colour schemes
+
+- **Fogu Dark** (the `ColorScheme::default()` values in `crates/core/src/scheme.rs`): colour
+  values copied from Tabby (<https://github.com/Eugeny/tabby>),
+  `tabby-terminal/src/colorSchemes.ts` (`DefaultColorSchemes.defaultColorScheme`). Tabby is
+  MIT-licensed, Copyright (c) 2017 Tabby Developers (Eugeny).
