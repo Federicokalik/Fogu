@@ -1,0 +1,11 @@
+[package]
+name = "fogu-session"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fogu-term = { path = "../term" }

@@ -1,0 +1,11 @@
+[package]
+name = "fogu-term"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fogu-core = { path = "../core" }

@@ -1,0 +1,6 @@
+/target
+
+# local only, never committed
+/wiki/
+CLAUDE.md
+/.claude/

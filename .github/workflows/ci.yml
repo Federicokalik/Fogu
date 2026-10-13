@@ -1,0 +1,44 @@
+name: ci
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *" # nightly: fuzz-smoke
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # no toolchain action: rustup (preinstalled on ubuntu-24.04) auto-installs the
+      # toolchain + components from rust-toolchain.toml, which is also the MSRV
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libxkbcommon-dev libwayland-dev socat
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: every crate opts into workspace lints
+        run: |
+          for f in crates/*/Cargo.toml; do
+            grep -q 'workspace = true' "$f" || exit 1
+          done
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny
+      - run: cargo nextest run --workspace --locked --no-tests=pass
+      - run: cargo test --doc --workspace --locked
+      - run: cargo deny check
+  fuzz-smoke:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: detect fuzz targets
+        id: has-fuzz
+        run: echo "present=$([ -d fuzz ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - if: steps.has-fuzz.outputs.present == 'true'
+        run: cargo install cargo-fuzz --locked
+      - if: steps.has-fuzz.outputs.present == 'true'
+        run: for t in $(cargo fuzz list); do cargo fuzz run "$t" -- -max_total_time=60; done
