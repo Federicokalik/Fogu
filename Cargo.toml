@@ -25,6 +25,10 @@ iced = { version = "=0.14.0", features = ["wgpu", "tiny-skia"] }
 tracing = "0.1.44"
 # why: tracing subscriber with env-filter so `RUST_LOG` controls verbosity.
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# why: the VT engine (parser, grid, scrollback, reflow).
+alacritty_terminal = "0.26.0"
+# why: snapshot tests of grid state (dev-dependency only).
+insta = "1.49.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

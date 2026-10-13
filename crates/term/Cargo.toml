@@ -9,3 +9,7 @@ workspace = true
 
 [dependencies]
 fogu-core = { path = "../core" }
+alacritty_terminal.workspace = true
+
+[dev-dependencies]
+insta.workspace = true

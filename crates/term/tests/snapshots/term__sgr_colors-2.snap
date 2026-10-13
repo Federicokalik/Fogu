@@ -1,0 +1,9 @@
+---
+source: crates/term/tests/term.rs
+expression: attrs_of_first_row(&t)
+---
+'r' fg=Named(Red) bg=Named(Background) flags=Flags(0x0)
+'e' fg=Named(Red) bg=Named(Background) flags=Flags(0x0)
+'d' fg=Named(Red) bg=Named(Background) flags=Flags(0x0)
+'B' fg=Indexed(208) bg=Named(Background) flags=Flags(BOLD)
+'T' fg=Named(Foreground) bg=Spec(Rgb { r: 1, g: 2, b: 3 }) flags=Flags(ITALIC)

@@ -1,0 +1,5 @@
+---
+source: crates/term/tests/term.rs
+expression: t.dump_grid()
+---
+0123456789abcdef

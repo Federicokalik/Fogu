@@ -1,0 +1,7 @@
+---
+source: crates/term/tests/term.rs
+expression: t.dump_grid()
+---
+one
+two
+TH three

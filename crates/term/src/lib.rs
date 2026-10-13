@@ -1,7 +1,19 @@
-//! `fogu-term`: sync wrapper over `alacritty_terminal` (`TermHandle::feed`/`sync_timeout`,
-//! OSC side scanner, login-script matcher, search, selection→text, links, input encoding).
+//! `fogu-term`: sync terminal core over `alacritty_terminal`.
 //!
-//! Empty for now.
+//! Feed bytes with [`TermHandle::feed`], draw from [`TermHandle::snapshot`], forward
+//! [`TermHandle::drain_events`] to the session/UI. No async runtime, no GUI, no PTY.
 
-/// Placeholder export so this crate links.
-pub const CRATE: &str = "fogu-term";
+mod event_proxy;
+mod handle;
+mod snapshot;
+
+pub use alacritty_terminal::grid::Scroll;
+pub use alacritty_terminal::selection::SelectionRange;
+pub use alacritty_terminal::term::{ClipboardType, TermMode};
+pub use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
+pub use event_proxy::{
+    CLIPBOARD_STORE_MAX_BYTES, EventProxy, Palette, TITLE_MAX_CHARS, TermEvent, default_palette,
+    sanitize_title,
+};
+pub use handle::TermHandle;
+pub use snapshot::{Cell, CellFlags, Cursor, RenderSnapshot};
