@@ -94,6 +94,19 @@ impl TermHandle {
         }
     }
 
+    /// A second handle onto the same terminal (grid, events, palette, `dirty`) with its own idle
+    /// parser: the session task feeds one handle, the UI snapshots/resizes the other. Only the
+    /// feeding handle may call [`feed`](Self::feed) and [`drain_events`](Self::drain_events).
+    #[must_use]
+    pub fn share(&self) -> Self {
+        Self {
+            term: Arc::clone(&self.term),
+            processor: Processor::new(),
+            shared: Arc::clone(&self.shared),
+            dirty: Arc::clone(&self.dirty),
+        }
+    }
+
     /// Parses `bytes`, locking the `Term` once per chunk of at most 64 KiB. `feed(&[])` flushes a
     /// synchronized update (DEC 2026) whose [`sync_timeout`](Self::sync_timeout) has passed.
     pub fn feed(&mut self, bytes: &[u8]) {

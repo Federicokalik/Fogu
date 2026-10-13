@@ -11,3 +11,4 @@ workspace = true
 fogu-ui = { path = "../ui" }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }

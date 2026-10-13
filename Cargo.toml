@@ -23,9 +23,25 @@ version = "0.1.0"
 iced = { version = "=0.14.0", features = ["wgpu", "tiny-skia"] }
 # why: structured logging, used by `fogu`'s main().
 tracing = "0.1.44"
-# why: tracing subscriber with env-filter so `RUST_LOG` controls verbosity.
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-# why: the VT engine (parser, grid, scrollback, reflow).
+# why: tracing subscriber with env-filter so `RUST_LOG` controls verbosity; `tracing-log` (a default
+# feature, listed explicitly) is the `log` -> tracing bridge for dependencies, so no direct
+# `tracing-log` dependency is needed.
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "tracing-log"] }
+# why: non-blocking daily-rotated log file in $XDG_STATE_HOME/fogu.
+tracing-appender = "0.2.5"
+# why: async runtime for session tasks; multi-thread rt, mpsc, child
+# process wait, timers, `select!`.
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "sync", "process", "io-util", "time", "macros"] }
+# why: tokio-native PTY open/spawn/resize without unsafe in our code.
+pty-process = { version = "0.5.3", features = ["async"] }
+# why: safe `dup`, `tcsetwinsize`, `getuid` and process-group SIGKILL; already in the
+# tree via pty-process.
+rustix = { version = "1.1.5", features = ["termios", "process", "fs"] }
+# why: cheap shareable byte buffers for `SessionInput::Data` and the pending-write queue.
+bytes = "1.12.1"
+# why: one error enum per library domain (`SessionError`).
+thiserror = "2.0.21"
+# why: the VT engine (parser, grid, scrollback, reflow): mature, maintained, used by Alacritty.
 alacritty_terminal = "0.26.0"
 # why: snapshot tests of grid state (dev-dependency only).
 insta = "1.49.0"
