@@ -66,8 +66,9 @@ impl fmt::Debug for TermHandle {
 
 impl TermHandle {
     /// Creates a terminal of `cols` x `rows` cells (each at least 1) keeping `scrollback_lines`
-    /// lines of history.
-    pub fn new(cols: u16, rows: u16, scrollback_lines: usize) -> Self {
+    /// lines of history. `word_separators` ends a double-click (semantic) selection
+    /// (`Config.terminal.word_separators`); pass [`WORD_SEPARATORS`] for the default.
+    pub fn new(cols: u16, rows: u16, scrollback_lines: usize, word_separators: &str) -> Self {
         let (cols, rows) = (cols.max(1), rows.max(1));
         let shared = Arc::new(Mutex::new(Shared {
             events: Vec::new(),
@@ -84,7 +85,7 @@ impl TermHandle {
         // OSC 52 read is also disabled here (`OnlyCopy`); the proxy drops it regardless.
         let config = Config {
             scrolling_history: scrollback_lines,
-            semantic_escape_chars: WORD_SEPARATORS.to_owned(),
+            semantic_escape_chars: word_separators.to_owned(),
             ..Config::default()
         };
         let size = Size {

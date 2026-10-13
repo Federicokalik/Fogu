@@ -1,0 +1,365 @@
+//! `Action`: the closed set of commands hotkeys (and later menus, the command palette and CLI
+//! flags) resolve to. `Hotkeys` is the config's `BTreeMap<Action, Vec<KeyChord>>` plus a
+//! precomputed reverse lookup.
+
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+use std::str::FromStr;
+
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::keychord::KeyChord;
+
+/// A pane-navigation direction (`PaneNav`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Dir {
+    /// Toward the pane on the left.
+    Left,
+    /// Toward the pane on the right.
+    Right,
+    /// Toward the pane above.
+    Up,
+    /// Toward the pane below.
+    Down,
+}
+
+impl Dir {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Up => "up",
+            Self::Down => "down",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "up" => Self::Up,
+            "down" => Self::Down,
+            _ => return None,
+        })
+    }
+}
+
+/// One user-triggerable command. Closed set; there is no plugin system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Action {
+    /// Opens a new tab with the default profile.
+    NewTab,
+    /// Closes the focused tab.
+    CloseTab,
+    /// Focuses the next tab.
+    NextTab,
+    /// Focuses the previous tab.
+    PrevTab,
+    /// Focuses tab number `n` (1-based).
+    GoToTab(u8),
+    /// Starts renaming the focused tab.
+    RenameTab,
+    /// Splits the focused pane, new pane to the right.
+    SplitRight,
+    /// Splits the focused pane, new pane below.
+    SplitDown,
+    /// Closes the focused pane (closes the tab if it is the last pane).
+    ClosePane,
+    /// Moves focus to the neighbouring pane in `Dir`.
+    PaneNav(Dir),
+    /// Copies the selection to the clipboard.
+    Copy,
+    /// Pastes from the clipboard.
+    Paste,
+    /// Pastes from the primary selection.
+    PastePrimary,
+    /// Selects the whole buffer.
+    SelectAll,
+    /// Clears the screen and scrollback.
+    Clear,
+    /// Increases the font size.
+    ZoomIn,
+    /// Decreases the font size.
+    ZoomOut,
+    /// Resets the font size to the configured default.
+    ZoomReset,
+    /// Scrolls up one page.
+    ScrollPageUp,
+    /// Scrolls down one page.
+    ScrollPageDown,
+    /// Scrolls to the top of the scrollback.
+    ScrollTop,
+    /// Scrolls to the bottom (live screen).
+    ScrollBottom,
+    /// Toggles window fullscreen.
+    ToggleFullscreen,
+    /// Opens a new local tab in the focused pane's current directory.
+    NewTabHere,
+    /// Reconnects a disconnected session.
+    Reconnect,
+    /// Restarts the focused pane's process/connection.
+    RestartTab,
+    /// Opens the profile picker.
+    OpenProfilePicker,
+}
+
+/// An `Action` string was not one of the known slugs (e.g. `"new-tab"`, `"go-to-tab-3"`,
+/// `"pane-nav-left"`).
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("unknown action {0:?}")]
+pub struct ActionParseError(String);
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NewTab => write!(f, "new-tab"),
+            Self::CloseTab => write!(f, "close-tab"),
+            Self::NextTab => write!(f, "next-tab"),
+            Self::PrevTab => write!(f, "prev-tab"),
+            Self::GoToTab(n) => write!(f, "go-to-tab-{n}"),
+            Self::RenameTab => write!(f, "rename-tab"),
+            Self::SplitRight => write!(f, "split-right"),
+            Self::SplitDown => write!(f, "split-down"),
+            Self::ClosePane => write!(f, "close-pane"),
+            Self::PaneNav(dir) => write!(f, "pane-nav-{}", dir.as_str()),
+            Self::Copy => write!(f, "copy"),
+            Self::Paste => write!(f, "paste"),
+            Self::PastePrimary => write!(f, "paste-primary"),
+            Self::SelectAll => write!(f, "select-all"),
+            Self::Clear => write!(f, "clear"),
+            Self::ZoomIn => write!(f, "zoom-in"),
+            Self::ZoomOut => write!(f, "zoom-out"),
+            Self::ZoomReset => write!(f, "zoom-reset"),
+            Self::ScrollPageUp => write!(f, "scroll-page-up"),
+            Self::ScrollPageDown => write!(f, "scroll-page-down"),
+            Self::ScrollTop => write!(f, "scroll-top"),
+            Self::ScrollBottom => write!(f, "scroll-bottom"),
+            Self::ToggleFullscreen => write!(f, "toggle-fullscreen"),
+            Self::NewTabHere => write!(f, "new-tab-here"),
+            Self::Reconnect => write!(f, "reconnect"),
+            Self::RestartTab => write!(f, "restart-tab"),
+            Self::OpenProfilePicker => write!(f, "open-profile-picker"),
+        }
+    }
+}
+
+impl FromStr for Action {
+    type Err = ActionParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(rest) = s.strip_prefix("go-to-tab-") {
+            return rest
+                .parse::<u8>()
+                .map(Self::GoToTab)
+                .map_err(|_| ActionParseError(s.to_owned()));
+        }
+        if let Some(rest) = s.strip_prefix("pane-nav-") {
+            return Dir::parse(rest)
+                .map(Self::PaneNav)
+                .ok_or_else(|| ActionParseError(s.to_owned()));
+        }
+        Ok(match s {
+            "new-tab" => Self::NewTab,
+            "close-tab" => Self::CloseTab,
+            "next-tab" => Self::NextTab,
+            "prev-tab" => Self::PrevTab,
+            "rename-tab" => Self::RenameTab,
+            "split-right" => Self::SplitRight,
+            "split-down" => Self::SplitDown,
+            "close-pane" => Self::ClosePane,
+            "copy" => Self::Copy,
+            "paste" => Self::Paste,
+            "paste-primary" => Self::PastePrimary,
+            "select-all" => Self::SelectAll,
+            "clear" => Self::Clear,
+            "zoom-in" => Self::ZoomIn,
+            "zoom-out" => Self::ZoomOut,
+            "zoom-reset" => Self::ZoomReset,
+            "scroll-page-up" => Self::ScrollPageUp,
+            "scroll-page-down" => Self::ScrollPageDown,
+            "scroll-top" => Self::ScrollTop,
+            "scroll-bottom" => Self::ScrollBottom,
+            "toggle-fullscreen" => Self::ToggleFullscreen,
+            "new-tab-here" => Self::NewTabHere,
+            "reconnect" => Self::Reconnect,
+            "restart-tab" => Self::RestartTab,
+            "open-profile-picker" => Self::OpenProfilePicker,
+            _ => return Err(ActionParseError(s.to_owned())),
+        })
+    }
+}
+
+impl Serialize for Action {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Action {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(D::Error::custom)
+    }
+}
+
+/// The config's `hotkeys` table: one or more chords per action, plus a chord → action reverse
+/// index built once.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Hotkeys {
+    bindings: BTreeMap<Action, Vec<KeyChord>>,
+    reverse: HashMap<KeyChord, Action>,
+}
+
+impl Hotkeys {
+    /// Builds the reverse index from `bindings`. When the same chord is bound to more than one
+    /// action, the later one (in `Action`'s declaration order) wins the lookup; [`validate`]
+    /// flags the ambiguity so the user can fix it.
+    ///
+    /// [`validate`]: crate::config::validate
+    #[must_use]
+    pub fn new(bindings: BTreeMap<Action, Vec<KeyChord>>) -> Self {
+        let mut reverse = HashMap::new();
+        for (&action, chords) in &bindings {
+            for &chord in chords {
+                reverse.insert(chord, action);
+            }
+        }
+        Self { bindings, reverse }
+    }
+
+    /// The default keymap. Actions that are rarely used or easy to trigger by accident
+    /// (`close-pane`, `clear`, `reconnect-tab`, `restart-tab`) default unbound;
+    /// `PastePrimary`/`NewTabHere` are reached with the mouse/context menu, so they default
+    /// unbound as well.
+    #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "fixed table of valid chord strings; covered by \
+                  `default_keymap_parses` below"
+    )]
+    pub fn default_keymap() -> Self {
+        let chord = |s: &str| KeyChord::parse(s).expect("valid default chord");
+        let chords = |strs: &[&str]| strs.iter().map(|s| chord(s)).collect::<Vec<_>>();
+
+        let mut bindings = BTreeMap::new();
+        bindings.insert(Action::NewTab, chords(&["Ctrl-Shift-T"]));
+        bindings.insert(Action::CloseTab, chords(&["Ctrl-Shift-W"]));
+        bindings.insert(Action::NextTab, chords(&["Ctrl-Shift-Right", "Ctrl-Tab"]));
+        bindings.insert(
+            Action::PrevTab,
+            chords(&["Ctrl-Shift-Left", "Ctrl-Shift-Tab"]),
+        );
+        for n in 1..=9u8 {
+            bindings.insert(Action::GoToTab(n), chords(&[&format!("Alt-{n}")]));
+        }
+        bindings.insert(Action::GoToTab(10), chords(&["Alt-0"]));
+        bindings.insert(Action::RenameTab, chords(&["Ctrl-Shift-R"]));
+        bindings.insert(Action::SplitRight, chords(&["Ctrl-Shift-S"]));
+        bindings.insert(Action::SplitDown, chords(&["Ctrl-Shift-D"]));
+        bindings.insert(Action::ClosePane, chords(&[]));
+        bindings.insert(Action::PaneNav(Dir::Right), chords(&["Ctrl-Alt-Right"]));
+        bindings.insert(Action::PaneNav(Dir::Down), chords(&["Ctrl-Alt-Down"]));
+        bindings.insert(Action::PaneNav(Dir::Up), chords(&["Ctrl-Alt-Up"]));
+        bindings.insert(Action::PaneNav(Dir::Left), chords(&["Ctrl-Alt-Left"]));
+        bindings.insert(Action::Copy, chords(&["Ctrl-Shift-C"]));
+        bindings.insert(Action::Paste, chords(&["Ctrl-Shift-V", "Shift-Insert"]));
+        bindings.insert(Action::PastePrimary, chords(&[]));
+        bindings.insert(Action::SelectAll, chords(&["Ctrl-Shift-A"]));
+        bindings.insert(Action::Clear, chords(&[]));
+        bindings.insert(Action::ZoomIn, chords(&["Ctrl-=", "Ctrl-Shift-="]));
+        bindings.insert(Action::ZoomOut, chords(&["Ctrl--", "Ctrl-Shift--"]));
+        bindings.insert(Action::ZoomReset, chords(&["Ctrl-0"]));
+        bindings.insert(Action::ScrollPageUp, chords(&["Alt-PageUp"]));
+        bindings.insert(Action::ScrollPageDown, chords(&["Alt-PageDown"]));
+        bindings.insert(Action::ScrollTop, chords(&["Ctrl-PageUp"]));
+        bindings.insert(Action::ScrollBottom, chords(&["Ctrl-PageDown"]));
+        bindings.insert(Action::ToggleFullscreen, chords(&["F11"]));
+        bindings.insert(Action::NewTabHere, chords(&[]));
+        bindings.insert(Action::Reconnect, chords(&[]));
+        bindings.insert(Action::RestartTab, chords(&[]));
+        bindings.insert(Action::OpenProfilePicker, chords(&["Ctrl-Shift-E"]));
+        Self::new(bindings)
+    }
+
+    /// The action bound to `chord`, if any.
+    #[must_use]
+    pub fn lookup(&self, chord: KeyChord) -> Option<Action> {
+        self.reverse.get(&chord).copied()
+    }
+
+    /// The chords bound to `action` (empty if unbound).
+    #[must_use]
+    pub fn chords_for(&self, action: Action) -> &[KeyChord] {
+        self.bindings.get(&action).map_or(&[], Vec::as_slice)
+    }
+
+    /// The underlying table, e.g. for [`validate`](crate::config::validate).
+    #[must_use]
+    pub const fn bindings(&self) -> &BTreeMap<Action, Vec<KeyChord>> {
+        &self.bindings
+    }
+}
+
+impl Serialize for Hotkeys {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.bindings.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Hotkeys {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bindings = BTreeMap::<Action, Vec<KeyChord>>::deserialize(deserializer)?;
+        Ok(Self::new(bindings))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used, reason = "tests")]
+
+    use super::*;
+
+    #[test]
+    fn default_keymap_parses() {
+        let keymap = Hotkeys::default_keymap();
+        assert_eq!(
+            keymap.lookup(KeyChord::parse("Ctrl-Shift-T").unwrap()),
+            Some(Action::NewTab)
+        );
+        assert_eq!(
+            keymap.lookup(KeyChord::parse("Alt-1").unwrap()),
+            Some(Action::GoToTab(1))
+        );
+        assert_eq!(
+            keymap.lookup(KeyChord::parse("Alt-0").unwrap()),
+            Some(Action::GoToTab(10))
+        );
+        assert_eq!(keymap.chords_for(Action::ClosePane), []);
+    }
+
+    #[test]
+    fn action_strings_round_trip() {
+        let actions = [
+            Action::NewTab,
+            Action::GoToTab(3),
+            Action::PaneNav(Dir::Left),
+            Action::OpenProfilePicker,
+        ];
+        for action in actions {
+            let s = action.to_string();
+            assert_eq!(s.parse::<Action>().unwrap(), action, "{s:?}");
+        }
+        assert!("not-an-action".parse::<Action>().is_err());
+        assert!("go-to-tab-not-a-number".parse::<Action>().is_err());
+        assert!("pane-nav-sideways".parse::<Action>().is_err());
+    }
+
+    #[test]
+    fn hotkeys_serde_round_trips_through_toml() {
+        let keymap = Hotkeys::default_keymap();
+        let text = toml::to_string(&keymap).unwrap();
+        let back: Hotkeys = toml::from_str(&text).unwrap();
+        assert_eq!(back.bindings(), keymap.bindings());
+    }
+}

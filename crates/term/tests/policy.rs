@@ -4,10 +4,10 @@
 //! **Re-run this file whenever `alacritty_terminal` (or `vte`) is bumped** — a new release could
 //! add a reply this policy never intended to allow.
 
-use fogu_term::{CLIPBOARD_STORE_MAX_BYTES, OscScanner, TermEvent, TermHandle};
+use fogu_term::{CLIPBOARD_STORE_MAX_BYTES, OscScanner, TermEvent, TermHandle, WORD_SEPARATORS};
 
 fn fed(bytes: &[u8]) -> TermHandle {
-    let mut t = TermHandle::new(80, 24, 100);
+    let mut t = TermHandle::new(80, 24, 100, WORD_SEPARATORS);
     t.feed(bytes);
     t
 }

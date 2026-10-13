@@ -12,7 +12,7 @@ use fogu_session::{
     ExitInfo, SessionError, SessionHandle, SessionInput, SessionOutput, SessionRuntime, build_env,
     open, supervise,
 };
-use fogu_term::TermHandle;
+use fogu_term::{TermHandle, WORD_SEPARATORS};
 use tokio::sync::mpsc;
 
 const SIZE: Size = Size {
@@ -32,7 +32,7 @@ fn profile(program: &str, args: &[&str]) -> LocalProfile {
 
 /// Opens a session and returns it plus a UI-side view of its terminal.
 fn start(rt: &SessionRuntime, profile: &LocalProfile) -> (SessionHandle, TermHandle) {
-    let term = TermHandle::new(SIZE.cols, SIZE.rows, 1000);
+    let term = TermHandle::new(SIZE.cols, SIZE.rows, 1000, WORD_SEPARATORS);
     let view = term.share();
     (open(rt.handle(), profile, SIZE, term), view)
 }

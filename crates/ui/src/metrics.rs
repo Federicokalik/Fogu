@@ -11,7 +11,7 @@ use iced::advanced::graphics::text::cosmic_text::skrifa::{FontRef, MetadataProvi
 use iced::advanced::graphics::text::font_system;
 use iced::{Font, Vector};
 
-/// Requested terminal font (fixed default).
+/// Requested terminal font.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontSpec {
     /// Family name; `monospace` resolves to fontdb's monospace family.

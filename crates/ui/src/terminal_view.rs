@@ -20,7 +20,7 @@ use crate::keys;
 use crate::keys::LocalKey;
 use crate::message::Message;
 use crate::metrics::{CellMetrics, cells_f32 as cells};
-use crate::mouse::{Grid, MouseState};
+use crate::mouse::{Grid, MouseConfig, MouseState};
 use crate::palette::{Colors, to_iced};
 use crate::runs::{Style, Underline, cell_style, row_runs};
 
@@ -47,6 +47,7 @@ pub struct TerminalView<'a> {
     font: Font,
     focused: bool,
     overlay: Option<&'static str>,
+    mouse_config: MouseConfig,
 }
 
 impl<'a> TerminalView<'a> {
@@ -58,6 +59,7 @@ impl<'a> TerminalView<'a> {
         font: Font,
         focused: bool,
         overlay: Option<&'static str>,
+        mouse_config: MouseConfig,
     ) -> Self {
         Self {
             snapshot,
@@ -66,6 +68,7 @@ impl<'a> TerminalView<'a> {
             font,
             focused,
             overlay,
+            mouse_config,
         }
     }
 
@@ -344,6 +347,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
             cols: self.snapshot.cols,
             rows: self.snapshot.rows,
             mode: self.snapshot.mode,
+            config: self.mouse_config,
         };
         if tree
             .state

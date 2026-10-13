@@ -47,6 +47,17 @@ thiserror = "2.0.21"
 alacritty_terminal = "0.26.0"
 # why: snapshot tests of grid state (dev-dependency only).
 insta = "1.49.0"
+# why: `Config`/`Profile`/`ColorScheme` (de)serialisation; `derive` only, no
+# other feature needed.
+serde = { version = "1.0.229", features = ["derive"] }
+# why: native config file format: human-editable, comments allowed, no YAML
+# type-coercion surprises.
+toml = "1.1.8"
+# why: `$XDG_CONFIG_HOME/fogu` path. Chose `xdg` over
+# `directories`: this is a Linux-only app, so `directories`' macOS/Windows path
+# logic is dead code we would carry for nothing; `xdg` is the smaller, Linux-specific crate for
+# exactly the XDG Base Directory spec we need.
+xdg = "3.0.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

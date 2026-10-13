@@ -1,10 +1,23 @@
 //! `fogu-core`: pure config/model crate (config schema, profiles, `SplitTree`, colour
-//! schemes, keymap parsing, `Action` enum, recovery-state model). No tokio, no GUI, no I/O.
+//! schemes, keymap parsing, `Action` enum, recovery-state model). No tokio, no GUI, no I/O
+//! (except [`config::load`]/[`config::save`], plain `std::fs`).
 
+mod action;
+pub mod config;
+mod keychord;
 mod profile;
+mod quick_connect;
 mod scheme;
 mod size;
 
-pub use profile::LocalProfile;
+pub use action::{Action, Dir, Hotkeys};
+pub use config::Config;
+pub use keychord::{KeyChord, KeyName, Mods, NamedKey};
+pub use profile::{
+    EffectiveProfile, EffectiveSsh, Group, GroupId, LocalOpts, LocalProfile, Osc52Policy, Profile,
+    ProfileDefaults, ProfileId, ProfileKind, SessionEndBehavior, SshOpts, effective_osc52_write,
+    resolve,
+};
+pub use quick_connect::{QuickConnect, QuickConnectError};
 pub use scheme::{ColorScheme, RgbColor};
 pub use size::Size;

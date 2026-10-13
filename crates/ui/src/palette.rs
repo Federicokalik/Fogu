@@ -38,13 +38,9 @@ impl Colors {
                 );
             }
         }
-        let fg = rgb(scheme.foreground);
+        let fg = rgb(scheme.fg);
         set(&mut table, NamedColor::Foreground as usize, fg);
-        set(
-            &mut table,
-            NamedColor::Background as usize,
-            rgb(scheme.background),
-        );
+        set(&mut table, NamedColor::Background as usize, rgb(scheme.bg));
         set(&mut table, NamedColor::Cursor as usize, rgb(scheme.cursor));
         set(&mut table, NamedColor::BrightForeground as usize, fg);
         set(&mut table, NamedColor::DimForeground as usize, dim(fg));

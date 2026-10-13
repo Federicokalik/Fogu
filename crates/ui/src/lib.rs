@@ -18,6 +18,7 @@ mod terminal_view;
 
 use std::sync::Arc;
 
+use fogu_core::Config;
 use fogu_session::SessionRuntime;
 use iced::Size;
 
@@ -25,16 +26,17 @@ use iced::Size;
 // dependency — `iced` stays an implementation detail of this crate.
 pub use iced::Result;
 
-/// Runs the Fogu GUI: a window with one pane running the user's default shell.
+/// Runs the Fogu GUI: a window with one pane running the user's default shell, configured by
+/// `config` (loaded by the `fogu` binary via `fogu_core::config::load`).
 ///
 /// # Errors
 ///
 /// Returns an error if the session runtime cannot start or iced fails to initialise the
 /// windowing or graphics backend.
-pub fn run() -> Result {
+pub fn run(config: Arc<Config>) -> Result {
     let runtime = Arc::new(SessionRuntime::new().map_err(iced::Error::ExecutorCreationFailed)?);
     iced::application(
-        move || app::App::boot(Arc::clone(&runtime)),
+        move || app::App::boot(Arc::clone(&runtime), Arc::clone(&config)),
         app::App::update,
         app::App::view,
     )

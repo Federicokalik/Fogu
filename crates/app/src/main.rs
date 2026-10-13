@@ -1,10 +1,13 @@
-//! `fogu`: entry point. Initialises logging (stderr + daily file) and runs the GUI.
+//! `fogu`: entry point. Initialises logging (stderr + daily file), loads the config file and
+//! runs the GUI.
 //!
-//! Takes no CLI flags yet.
+//! There are no CLI flags and no `--config-dir` override yet.
 
 use std::os::unix::fs::DirBuilderExt as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use fogu_core::config;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
@@ -19,7 +22,24 @@ const MAX_LOG_FILES: usize = 7;
 
 fn main() -> fogu_ui::Result {
     let _log_guard = init_logging();
-    fogu_ui::run()
+    let config = load_config();
+    fogu_ui::run(Arc::new(config))
+}
+
+/// Loads `$XDG_CONFIG_HOME/fogu/config.toml` (no `--config-dir` override yet). A
+/// missing file is normal (nothing is saved until the user changes a setting from the UI); any
+/// other failure (bad TOML, schema mismatch) falls back to `Config::default()` and is logged with
+/// the file's line/column when available.
+fn load_config() -> fogu_core::Config {
+    let dir = config::config_dir(None);
+    let (loaded, err) = config::load(&dir);
+    if let Some(err) = err {
+        tracing::error!(error = %err, "failed to load config; using defaults");
+    }
+    for issue in config::validate(&loaded) {
+        tracing::warn!(%issue, "config issue");
+    }
+    loaded
 }
 
 /// stderr + non-blocking daily file in `$XDG_STATE_HOME/fogu/`; `log` records are bridged

@@ -2,10 +2,12 @@
 
 use std::fmt::Write as _;
 
-use fogu_term::{CellFlags, Color, NamedColor, Rgb, Scroll, TermEvent, TermHandle, TermMode};
+use fogu_term::{
+    CellFlags, Color, NamedColor, Rgb, Scroll, TermEvent, TermHandle, TermMode, WORD_SEPARATORS,
+};
 
 fn term(cols: u16, rows: u16) -> TermHandle {
-    TermHandle::new(cols, rows, 100)
+    TermHandle::new(cols, rows, 100, WORD_SEPARATORS)
 }
 
 fn fed(cols: u16, rows: u16, bytes: &[u8]) -> TermHandle {
@@ -272,7 +274,7 @@ fn synchronized_update_defers_until_end() {
 
 #[test]
 fn large_feed_is_chunked_without_loss() {
-    let mut t = TermHandle::new(10, 2, 0);
+    let mut t = TermHandle::new(10, 2, 0, WORD_SEPARATORS);
     let mut bytes = vec![b'a'; 200 * 1024];
     bytes.extend_from_slice(b"\r\nend");
     t.feed(&bytes);

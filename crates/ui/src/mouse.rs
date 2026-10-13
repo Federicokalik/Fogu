@@ -15,12 +15,18 @@ use crate::keys;
 use crate::message::{Message, PasteSource, SelectEvent};
 use crate::metrics::{CellMetrics, CellPos, pixel_to_cell};
 
-/// Scrollback lines per wheel notch.
-const LINES_PER_NOTCH: f32 = 3.0;
 /// Auto-scroll pace while drag-selecting past the top/bottom edge.
 const AUTOSCROLL_EVERY: Duration = Duration::from_millis(50);
-/// Middle-click pastes PRIMARY.
-const PASTE_ON_MIDDLE_CLICK: bool = true;
+
+/// The mouse-related config values the terminal widget needs
+/// (`Config.terminal.{wheel_lines,paste_on_middle_click}`).
+#[derive(Clone, Copy, Debug)]
+pub struct MouseConfig {
+    /// Scrollback lines per wheel notch.
+    pub wheel_lines: u32,
+    /// Middle-click pastes from PRIMARY.
+    pub paste_on_middle_click: bool,
+}
 
 /// Where the grid sits on screen.
 #[derive(Clone, Copy, Debug)]
@@ -35,6 +41,19 @@ pub struct Grid {
     pub rows: usize,
     /// Terminal modes (mouse tracking, alternate screen, ...).
     pub mode: TermMode,
+    /// Mouse-related config (wheel lines, middle-click paste).
+    pub config: MouseConfig,
+}
+
+/// `grid.config.wheel_lines` as `f32` (the accumulator below is fractional: trackpads send
+/// pixel deltas).
+fn wheel_lines(grid: &Grid) -> f32 {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a wheel-notch line count; always tiny relative to f32's 24-bit mantissa"
+    )]
+    let lines = grid.config.wheel_lines as f32;
+    lines
 }
 
 impl Grid {
@@ -124,7 +143,7 @@ impl MouseState {
                 return true;
             }
             Event::Mouse(mouse::Event::ButtonPressed(Button::Middle))
-                if PASTE_ON_MIDDLE_CLICK && cursor.is_over(grid.bounds) =>
+                if grid.config.paste_on_middle_click && cursor.is_over(grid.bounds) =>
             {
                 shell.publish(Message::Paste(PasteSource::Primary));
                 return true;
@@ -184,7 +203,7 @@ impl MouseState {
 
     fn wheel(&mut self, delta: ScrollDelta, grid: &Grid, shell: &mut Shell<'_, Message>) {
         self.wheel_lines += match delta {
-            ScrollDelta::Lines { y, .. } => y * LINES_PER_NOTCH,
+            ScrollDelta::Lines { y, .. } => y * wheel_lines(grid),
             ScrollDelta::Pixels { y, .. } => y / grid.metrics.cell_h,
         };
         if !self.wheel_lines.is_finite() {
@@ -319,7 +338,7 @@ impl MouseState {
         }
         self.report_wheel += match delta {
             ScrollDelta::Lines { y, .. } => y,
-            ScrollDelta::Pixels { y, .. } => y / (grid.metrics.cell_h * LINES_PER_NOTCH),
+            ScrollDelta::Pixels { y, .. } => y / (grid.metrics.cell_h * wheel_lines(grid)),
         };
         if !self.report_wheel.is_finite() {
             self.report_wheel = 0.0;
@@ -338,12 +357,7 @@ impl MouseState {
             Direction::Down
         };
         let bytes = if disposition == Disposition::AlternateScroll {
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "3.0"
-            )]
-            let lines = notches * LINES_PER_NOTCH as usize;
+            let lines = notches * grid.config.wheel_lines as usize;
             input::alternate_scroll(direction, lines, grid.mode)
         } else {
             let action = MouseAction::Wheel(direction);

@@ -1,9 +1,9 @@
 //! Headless tests of scrollback and selection through `TermHandle`.
 
-use fogu_term::{Column, Line, Point, Scroll, SelectionType, Side, TermHandle};
+use fogu_term::{Column, Line, Point, Scroll, SelectionType, Side, TermHandle, WORD_SEPARATORS};
 
 fn fed(cols: u16, rows: u16, bytes: &[u8]) -> TermHandle {
-    let mut t = TermHandle::new(cols, rows, 200);
+    let mut t = TermHandle::new(cols, rows, 200, WORD_SEPARATORS);
     t.feed(bytes);
     t
 }

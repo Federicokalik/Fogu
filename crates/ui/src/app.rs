@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use fogu_core::{ColorScheme, LocalProfile, Size};
+use fogu_core::{ColorScheme, Config, Profile, Size};
 use fogu_session::{SessionInput, SessionOutput, SessionRuntime};
 use fogu_term::{RenderSnapshot, Scroll, TermHandle, TermMode, input};
 use iced::{Element, Subscription, Task, clipboard, event, window};
@@ -14,27 +14,18 @@ use tokio::sync::mpsc::error::TrySendError;
 use crate::message::{Message, PasteSource, SelectEvent};
 use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
 use crate::modal::{Modal, ModalButton, overlay};
+use crate::mouse::MouseConfig;
 use crate::palette::Colors;
 use crate::subscription::{EventSlot, session_events};
 use crate::terminal_view::TerminalView;
 
-/// Initial grid before the first layout, and scrollback length (fixed for now).
+/// Initial grid before the first layout; the PTY is resized to the real grid on the first
+/// `GridResized` message.
 const INITIAL_COLS: u16 = 80;
 const INITIAL_ROWS: u16 = 24;
-const SCROLLBACK_LINES: usize = 10_000;
 /// Transport resize debounce during window drags.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(50);
 const DEFAULT_TITLE: &str = "Fogu";
-/// Alt sends an ESC prefix ("Alt is Meta"); fixed for now.
-const ALT_IS_META: bool = true;
-/// Finishing a mouse selection copies it to PRIMARY.
-const COPY_ON_SELECT: bool = true;
-/// Ask before pasting text that spans several lines.
-const WARN_ON_MULTILINE_PASTE: bool = true;
-/// Trim whitespace around pasted text.
-const TRIM_WHITESPACE_ON_PASTE: bool = true;
-/// Replace newlines in pasted text with spaces.
-const REPLACE_NEWLINES_WITH_SPACES_ON_PASTE: bool = false;
 /// Smallest font size zoom allows, in points.
 const MIN_FONT_PT: f32 = 6.0;
 /// Largest font size zoom allows, in points.
@@ -73,8 +64,12 @@ struct PendingPaste {
 #[derive(Debug)]
 pub struct App {
     runtime: Arc<SessionRuntime>,
+    config: Arc<Config>,
     pane: Pane,
     font: FontSpec,
+    /// `config.appearance.font_size` at boot, in points; `ZoomReset`'s target (not
+    /// `FontSpec::default()`, which is only a fallback for callers with no config, e.g. tests).
+    default_font_size_pt: f32,
     resolved: ResolvedFont,
     metrics: CellMetrics,
     scale: f32,
@@ -88,13 +83,22 @@ pub struct App {
 
 impl App {
     /// Opens the default shell in one pane and asks for the window's scale factor.
-    pub fn boot(runtime: Arc<SessionRuntime>) -> (Self, Task<Message>) {
-        let font = FontSpec::default();
+    pub fn boot(runtime: Arc<SessionRuntime>, config: Arc<Config>) -> (Self, Task<Message>) {
+        let font = FontSpec {
+            family: config.appearance.font_family.clone(),
+            size_pt: config.appearance.font_size,
+        };
         let resolved = metrics::resolve(&font.family);
         let metrics = CellMetrics::new(resolved.units, font.size_px(), 1.0);
-        let colors = Colors::new(&ColorScheme::default());
+        let scheme = ColorScheme::by_name(&config.appearance.color_scheme).unwrap_or_default();
+        let colors = Colors::new(&scheme);
 
-        let mut term = TermHandle::new(INITIAL_COLS, INITIAL_ROWS, SCROLLBACK_LINES);
+        let mut term = TermHandle::new(
+            INITIAL_COLS,
+            INITIAL_ROWS,
+            config.terminal.scrollback_lines,
+            &config.terminal.word_separators,
+        );
         term.set_palette(colors.palette());
         term.set_cell_size_px(metrics.cell_w_px, metrics.cell_h_px);
         let size = Size {
@@ -103,13 +107,13 @@ impl App {
             ..Size::default()
         };
         let session_term = term.share();
-        // The profile is fixed for now.
-        let handle = fogu_session::open(
-            runtime.handle(),
-            &LocalProfile::default(),
-            size,
-            session_term,
-        );
+        let profile = Profile::default_shell();
+        let fogu_core::EffectiveProfile::Local(local_profile) =
+            fogu_core::resolve(&profile, &config.profile_defaults)
+        else {
+            unreachable!("Profile::default_shell is always a Local profile")
+        };
+        let handle = fogu_session::open(runtime.handle(), &local_profile, size, session_term);
         let pane = Pane {
             dirty: term.dirty(),
             snapshot: term.snapshot(),
@@ -118,10 +122,13 @@ impl App {
             events: EventSlot::new(0, handle.events),
             state: PaneState::Running,
         };
+        let default_font_size_pt = font.size_pt;
         let app = Self {
             runtime,
+            config,
             pane,
             font,
+            default_font_size_pt,
             resolved,
             metrics,
             scale: 1.0,
@@ -166,7 +173,8 @@ impl App {
             }
             Message::Key(key) => {
                 let mode = self.pane.term.mode();
-                if let Some(bytes) = input::encode_key(&key, mode, ALT_IS_META) {
+                if let Some(bytes) = input::encode_key(&key, mode, self.config.terminal.alt_is_meta)
+                {
                     self.send_input(bytes);
                 }
             }
@@ -202,7 +210,7 @@ impl App {
             Message::CancelPaste => self.pending_paste = None,
             Message::ZoomIn => self.set_font_size(self.font.size_pt + 1.0),
             Message::ZoomOut => self.set_font_size(self.font.size_pt - 1.0),
-            Message::ZoomReset => self.set_font_size(FontSpec::default().size_pt),
+            Message::ZoomReset => self.set_font_size(self.default_font_size_pt),
             Message::Clear => {
                 self.pane.term.clear();
                 self.refresh();
@@ -217,7 +225,10 @@ impl App {
         let Some(text) = text.filter(|t| !t.is_empty()) else {
             return;
         };
-        let warning = WARN_ON_MULTILINE_PASTE
+        let warning = self
+            .config
+            .terminal
+            .warn_on_multiline_paste
             .then(|| input::needs_confirmation(&text))
             .flatten();
         match warning {
@@ -226,12 +237,14 @@ impl App {
         }
     }
 
-    /// Sanitises and sends `text` to the session..
+    /// Sanitises and sends `text` to the session. `terminal.bracketed_paste = false` forces
+    /// plain paste even if the application asked for it.
     fn paste_now(&mut self, text: &str) {
         let opts = input::PasteOpts {
-            bracketed_requested: self.pane.term.mode().contains(TermMode::BRACKETED_PASTE),
-            trim_whitespace: TRIM_WHITESPACE_ON_PASTE,
-            newlines_to_spaces: REPLACE_NEWLINES_WITH_SPACES_ON_PASTE,
+            bracketed_requested: self.config.terminal.bracketed_paste
+                && self.pane.term.mode().contains(TermMode::BRACKETED_PASTE),
+            trim_whitespace: self.config.terminal.trim_whitespace_on_paste,
+            newlines_to_spaces: self.config.terminal.replace_newlines_on_paste,
         };
         self.send_input(input::encode_paste(text, opts));
     }
@@ -316,7 +329,9 @@ impl App {
             SelectEvent::Clear => term.clear_selection(),
             SelectEvent::Finish => {
                 return match term.selection_text() {
-                    Some(text) if COPY_ON_SELECT => clipboard::write_primary(text),
+                    Some(text) if self.config.terminal.copy_on_select => {
+                        clipboard::write_primary(text)
+                    }
                     _ => Task::none(),
                 };
             }
@@ -419,6 +434,10 @@ impl App {
             self.resolved.font,
             self.focused,
             status,
+            MouseConfig {
+                wheel_lines: self.config.terminal.wheel_lines,
+                paste_on_middle_click: self.config.terminal.paste_on_middle_click,
+            },
         )
         .into();
         overlay(term_view, self.paste_modal())

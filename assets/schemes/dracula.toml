@@ -1,0 +1,16 @@
+# Dracula — the official palette (https://draculatheme.com/, github.com/dracula/dracula-theme,
+# MIT-licensed), values from the official iTerm2/terminal ANSI profile
+# (github.com/dracula/iterm). See THIRD_PARTY_LICENSES.
+name = "Dracula"
+fg = "#f8f8f2"
+bg = "#282a36"
+cursor = "#f8f8f2"
+cursor_text = "#282a36"
+selection_bg = "#44475a"
+selection_fg = "#f8f8f2"
+ansi = [
+    "#21222c", "#ff5555", "#50fa7b", "#f1fa8c",
+    "#bd93f9", "#ff79c6", "#8be9fd", "#f8f8f2",
+    "#6272a4", "#ff6e6e", "#69ff94", "#ffffa5",
+    "#d6acff", "#ff92df", "#a4ffff", "#ffffff",
+]

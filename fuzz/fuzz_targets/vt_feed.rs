@@ -3,11 +3,11 @@
 
 #![no_main]
 
-use fogu_term::TermHandle;
+use fogu_term::{TermHandle, WORD_SEPARATORS};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let mut term = TermHandle::new(80, 24, 200);
+    let mut term = TermHandle::new(80, 24, 200, WORD_SEPARATORS);
     term.feed(data);
     let _ = term.snapshot();
     let _ = term.drain_events();
