@@ -5,6 +5,7 @@
 
 mod event_proxy;
 mod handle;
+pub mod input;
 mod snapshot;
 
 pub use alacritty_terminal::grid::Scroll;

@@ -1,6 +1,7 @@
 //! Application messages.
 
 use fogu_session::SessionOutput;
+use fogu_term::input::KeyInput;
 
 /// Everything `update` reacts to.
 #[derive(Clone, Debug)]
@@ -18,6 +19,10 @@ pub enum Message {
     ResizeTimer(u64),
     /// The window's scale factor (device px per logical px).
     ScaleFactor(f32),
-    /// Window focus gained (`true`) or lost.
+    /// Pane focus gained (`true`: window focused or pane clicked) or lost (window unfocused).
     Focused(bool),
+    /// A key press for the focused pane.
+    Key(KeyInput),
+    /// Text committed by the input method for the focused pane.
+    Text(String),
 }

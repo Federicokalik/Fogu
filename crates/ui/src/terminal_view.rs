@@ -5,14 +5,18 @@
 //! `x = col * cell_w`, never at the shaped advance.
 
 use fogu_term::{CellFlags, CursorShape, RenderSnapshot, Rgb};
+use iced::advanced::input_method::{self, InputMethod};
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Quad};
 use iced::advanced::text::{self, LineHeight, Shaping, Text, Wrapping};
 use iced::advanced::widget::{Tree, Widget};
 use iced::advanced::{Clipboard, Shell, mouse};
 use iced::alignment::Vertical;
-use iced::{Border, Element, Event, Font, Length, Pixels, Point, Rectangle, Size, font};
+use iced::{
+    Border, Element, Event, Font, Length, Pixels, Point, Rectangle, Size, font, keyboard, window,
+};
 
+use crate::keys;
 use crate::message::Message;
 use crate::metrics::CellMetrics;
 use crate::palette::{Colors, to_iced};
@@ -269,19 +273,55 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
     fn update(
         &mut self,
         _tree: &mut Tree,
-        _event: &Event,
+        event: &Event,
         layout: Layout<'_>,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
         _renderer: &iced::Renderer,
         _clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
+        let bounds = layout.bounds();
         // Any event (incl. the RedrawRequested sent before every frame) checks whether the
         // widget's size now holds a different grid.
-        let (cols, rows) = grid_size(layout.bounds().size(), &self.metrics);
+        let (cols, rows) = grid_size(bounds.size(), &self.metrics);
         if (usize::from(cols), usize::from(rows)) != (self.snapshot.cols, self.snapshot.rows) {
             shell.publish(Message::GridResized { cols, rows });
+        }
+        match event {
+            Event::Mouse(mouse::Event::ButtonPressed(_)) if cursor.is_over(bounds) => {
+                if !self.focused {
+                    shell.publish(Message::Focused(true));
+                }
+            }
+            _ if !self.focused => {}
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                modified_key,
+                location,
+                modifiers,
+                text,
+                ..
+            }) => {
+                if let Some(key) =
+                    keys::key_input(modified_key, *location, *modifiers, text.as_deref())
+                {
+                    shell.publish(Message::Key(key));
+                    shell.capture_event();
+                }
+            }
+            Event::InputMethod(input_method::Event::Commit(text)) => {
+                shell.publish(Message::Text(text.clone()));
+                shell.capture_event();
+            }
+            Event::Window(window::Event::RedrawRequested(_)) => {
+                let c = &self.snapshot.cursor;
+                shell.request_input_method::<&str>(&InputMethod::Enabled {
+                    cursor: self.cell_rect(bounds.position(), c.col, c.row, 1),
+                    purpose: input_method::Purpose::Terminal,
+                    preedit: None,
+                });
+            }
+            _ => {}
         }
     }
 

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use fogu_core::{ColorScheme, LocalProfile, Size};
 use fogu_session::{SessionInput, SessionOutput, SessionRuntime};
-use fogu_term::{RenderSnapshot, TermHandle};
+use fogu_term::{RenderSnapshot, Scroll, TermHandle, input};
 use iced::{Element, Subscription, Task, event, window};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
@@ -24,6 +24,8 @@ const SCROLLBACK_LINES: usize = 10_000;
 /// Transport resize debounce during window drags.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(50);
 const DEFAULT_TITLE: &str = "Fogu";
+/// Alt sends an ESC prefix ("Alt is Meta"); fixed for now.
+const ALT_IS_META: bool = true;
 
 /// Lifecycle of a pane's session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,8 +135,39 @@ impl App {
                     .set_cell_size_px(self.metrics.cell_w_px, self.metrics.cell_h_px);
             }
             Message::Focused(focused) => self.focused = focused,
+            Message::Key(key) => {
+                let mode = self.pane.term.mode();
+                if let Some(bytes) = input::encode_key(&key, mode, ALT_IS_META) {
+                    self.send_input(bytes);
+                }
+            }
+            Message::Text(text) => {
+                if let Some(bytes) = input::encode_text(&text) {
+                    self.send_input(bytes);
+                }
+            }
         }
         Task::none()
+    }
+
+    /// Sends encoded keys to the session without ever blocking the UI, then scrolls to the
+    /// bottom.
+    fn send_input(&mut self, bytes: Vec<u8>) {
+        if self.pane.state != PaneState::Running {
+            return;
+        }
+        match self
+            .pane
+            .session_input
+            .try_send(SessionInput::Data(bytes.into()))
+        {
+            Ok(()) | Err(TrySendError::Closed(_)) => {}
+            Err(TrySendError::Full(_)) => tracing::warn!("session input full; key dropped"),
+        }
+        if self.pane.snapshot.display_offset != 0 {
+            self.pane.term.scroll_display(Scroll::Bottom);
+            self.refresh();
+        }
     }
 
     fn on_session(&mut self, event: SessionOutput) {
