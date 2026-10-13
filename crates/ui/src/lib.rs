@@ -1,11 +1,13 @@
 //! `fogu-ui`: the iced application (tabs, split container, terminal widget, settings,
 //! palette, prompts).
 //!
-//! One window with one pane running a live local shell, with keyboard input, scrollback, mouse
-//! selection + copy, sanitized/bracketed paste (CLIPBOARD, PRIMARY via middle-click), zoom and
-//! clear.
+//! One window with tabs (one pane each) running local shells: keyboard input through the keymap,
+//! scrollback, mouse selection + copy, sanitized/bracketed paste, zoom, clear, tab rename/colour
+//! and a tab context menu.
 
+mod actions;
 mod app;
+mod context_menu;
 mod keys;
 mod message;
 mod metrics;
@@ -14,19 +16,20 @@ mod mouse;
 mod palette;
 mod runs;
 mod subscription;
+mod tab;
+mod tab_bar;
 mod terminal_view;
 
 use std::sync::Arc;
 
 use fogu_core::Config;
 use fogu_session::SessionRuntime;
-use iced::Size;
 
 // Re-exported so callers of `run()` (the `fogu` binary) don't need their own `iced`
 // dependency — `iced` stays an implementation detail of this crate.
 pub use iced::Result;
 
-/// Runs the Fogu GUI: a window with one pane running the user's default shell, configured by
+/// Runs the Fogu GUI: a window whose first tab runs the default profile, configured by
 /// `config` (loaded by the `fogu` binary via `fogu_core::config::load`).
 ///
 /// # Errors
@@ -42,6 +45,6 @@ pub fn run(config: Arc<Config>) -> Result {
     )
     .title(app::App::title)
     .subscription(app::App::subscription)
-    .window_size(Size::new(1000.0, 650.0))
+    .window_size(app::WINDOW_SIZE)
     .run()
 }

@@ -1,60 +1,103 @@
-//! iced key events → GUI-agnostic [`KeyInput`] for `fogu_term::input::encode_key`.
+//! iced key events → [`KeyChord`]s for the keymap, or GUI-agnostic [`KeyInput`]s for
+//! `fogu_term::input::encode_key`.
 
-use fogu_term::Scroll;
+use fogu_core::{Action, Hotkeys, KeyChord, KeyName, Mods as ChordMods, NamedKey};
 use fogu_term::input::{KeyCode, KeyInput, Mods};
 use iced::keyboard::key::Named;
 use iced::keyboard::{Key, Location, Modifiers};
 
-use crate::message::PasteSource;
-
-/// A key chord the terminal handles itself instead of sending it to the shell.
-#[derive(Clone, Copy, Debug)]
-pub enum LocalKey {
-    /// Scroll the view through history.
-    Scroll(Scroll),
-    /// Copy the selection to CLIPBOARD.
-    Copy,
-    /// Paste from `source`.
-    Paste(PasteSource),
-    /// Grow the font by 1 pt.
-    ZoomIn,
-    /// Shrink the font by 1 pt.
-    ZoomOut,
-    /// Reset the font to its default size.
-    ZoomReset,
-    /// Clear the screen and scrollback.
-    Clear,
+/// The action `hotkeys` binds to a key press, if any.
+///
+/// Looks up the chord of the layout key without modifiers first (`Ctrl-Shift-T` is `t` + Ctrl +
+/// Shift), then the Shift-applied key, so a chord whose character needs Shift on the user's layout
+/// (e.g. `Ctrl-Shift-=` on layouts where `=` is Shift+0) still matches.
+pub fn hotkey(
+    hotkeys: &Hotkeys,
+    key: &Key,
+    modified_key: &Key,
+    modifiers: Modifiers,
+) -> Option<Action> {
+    let lookup = |k: &Key| chord(k, modifiers).and_then(|c| hotkeys.lookup(c));
+    lookup(key).or_else(|| {
+        (modified_key != key)
+            .then(|| lookup(modified_key))
+            .flatten()
+    })
 }
 
-/// Hardcoded chords until a keymap exists: Shift+PageUp/PageDown/Home/End scroll,
-/// Ctrl+Shift+C copies, Ctrl+Shift+V / Shift+Insert pastes CLIPBOARD, Ctrl+Shift+L clears,
-/// Ctrl+=/Ctrl+-/Ctrl+0 zoom in/out/reset.
-pub fn local_key(key: &Key, modifiers: Modifiers) -> Option<LocalKey> {
-    if modifiers.alt() || modifiers.logo() {
-        return None;
-    }
-    let (shift, ctrl) = (modifiers.shift(), modifiers.control());
-    match key {
-        Key::Character(c) if ctrl && shift && c.eq_ignore_ascii_case("c") => Some(LocalKey::Copy),
-        Key::Character(c) if ctrl && shift && c.eq_ignore_ascii_case("v") => {
-            Some(LocalKey::Paste(PasteSource::Clipboard))
+/// An iced key + modifiers as a [`KeyChord`]; `None` for keys a chord cannot name.
+pub fn chord(key: &Key, modifiers: Modifiers) -> Option<KeyChord> {
+    let key = match key {
+        Key::Character(s) => {
+            let mut chars = s.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => KeyName::Char(c.to_ascii_uppercase()),
+                _ => return None,
+            }
         }
-        Key::Character(c) if ctrl && shift && c.eq_ignore_ascii_case("l") => Some(LocalKey::Clear),
-        Key::Character(c) if ctrl && !shift && c.as_str() == "=" => Some(LocalKey::ZoomIn),
-        Key::Character(c) if ctrl && !shift && c.as_str() == "-" => Some(LocalKey::ZoomOut),
-        Key::Character(c) if ctrl && !shift && c.as_str() == "0" => Some(LocalKey::ZoomReset),
-        Key::Named(Named::Insert) if shift && !ctrl => {
-            Some(LocalKey::Paste(PasteSource::Clipboard))
-        }
-        Key::Named(named) if shift && !ctrl => Some(LocalKey::Scroll(match named {
-            Named::PageUp => Scroll::PageUp,
-            Named::PageDown => Scroll::PageDown,
-            Named::Home => Scroll::Top,
-            Named::End => Scroll::Bottom,
-            _ => return None,
-        })),
-        _ => None,
+        Key::Named(named) => chord_key(*named)?,
+        Key::Unidentified => return None,
+    };
+    let mods = ChordMods {
+        ctrl: modifiers.control(),
+        alt: modifiers.alt(),
+        shift: modifiers.shift(),
+        meta: modifiers.logo(),
+    };
+    Some(KeyChord { mods, key })
+}
+
+fn chord_key(named: Named) -> Option<KeyName> {
+    let n = |k| Some(KeyName::Named(k));
+    match named {
+        Named::Tab => n(NamedKey::Tab),
+        Named::Enter => n(NamedKey::Enter),
+        Named::Escape => n(NamedKey::Escape),
+        Named::Backspace => n(NamedKey::Backspace),
+        Named::Delete => n(NamedKey::Delete),
+        Named::Insert => n(NamedKey::Insert),
+        Named::Space => n(NamedKey::Space),
+        Named::ArrowLeft => n(NamedKey::Left),
+        Named::ArrowRight => n(NamedKey::Right),
+        Named::ArrowUp => n(NamedKey::Up),
+        Named::ArrowDown => n(NamedKey::Down),
+        Named::Home => n(NamedKey::Home),
+        Named::End => n(NamedKey::End),
+        Named::PageUp => n(NamedKey::PageUp),
+        Named::PageDown => n(NamedKey::PageDown),
+        _ => function_key(named).map(KeyName::Function),
     }
+}
+
+/// `F1`..`F24` as their number.
+const fn function_key(named: Named) -> Option<u8> {
+    Some(match named {
+        Named::F1 => 1,
+        Named::F2 => 2,
+        Named::F3 => 3,
+        Named::F4 => 4,
+        Named::F5 => 5,
+        Named::F6 => 6,
+        Named::F7 => 7,
+        Named::F8 => 8,
+        Named::F9 => 9,
+        Named::F10 => 10,
+        Named::F11 => 11,
+        Named::F12 => 12,
+        Named::F13 => 13,
+        Named::F14 => 14,
+        Named::F15 => 15,
+        Named::F16 => 16,
+        Named::F17 => 17,
+        Named::F18 => 18,
+        Named::F19 => 19,
+        Named::F20 => 20,
+        Named::F21 => 21,
+        Named::F22 => 22,
+        Named::F23 => 23,
+        Named::F24 => 24,
+        _ => return None,
+    })
 }
 
 /// Converts a key press. `modified_key` is the layout's key with Shift applied (iced's
@@ -132,6 +175,8 @@ fn named_key(named: Named, numpad: bool) -> Option<KeyCode> {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, reason = "tests")]
+
     use super::*;
 
     #[test]
@@ -177,53 +222,50 @@ mod tests {
     }
 
     #[test]
-    fn local_chords() {
-        let shift = Modifiers::SHIFT;
+    fn chord_from_iced_table() {
+        let ch = |c: &str| Key::Character(c.into());
+        let nk = Key::Named;
         let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
-        let named = |n| Key::Named(n);
-        assert!(matches!(
-            local_key(&named(Named::PageUp), shift),
-            Some(LocalKey::Scroll(Scroll::PageUp))
-        ));
-        assert!(matches!(
-            local_key(&named(Named::End), shift),
-            Some(LocalKey::Scroll(Scroll::Bottom))
-        ));
-        assert!(matches!(
-            local_key(&Key::Character("C".into()), ctrl_shift),
-            Some(LocalKey::Copy)
-        ));
-        assert!(matches!(
-            local_key(&Key::Character("V".into()), ctrl_shift),
-            Some(LocalKey::Paste(PasteSource::Clipboard))
-        ));
-        assert!(matches!(
-            local_key(&named(Named::Insert), shift),
-            Some(LocalKey::Paste(PasteSource::Clipboard))
-        ));
-        assert!(matches!(
-            local_key(&Key::Character("L".into()), ctrl_shift),
-            Some(LocalKey::Clear)
-        ));
-        let ctrl = Modifiers::CTRL;
-        assert!(matches!(
-            local_key(&Key::Character("=".into()), ctrl),
-            Some(LocalKey::ZoomIn)
-        ));
-        assert!(matches!(
-            local_key(&Key::Character("-".into()), ctrl),
-            Some(LocalKey::ZoomOut)
-        ));
-        assert!(matches!(
-            local_key(&Key::Character("0".into()), ctrl),
-            Some(LocalKey::ZoomReset)
-        ));
-        // Plain PageUp and Ctrl+C go to the shell; zoom chords need Ctrl without Shift; a plain
-        // Insert (no Shift) is not a local paste.
-        assert!(local_key(&named(Named::PageUp), Modifiers::empty()).is_none());
-        assert!(local_key(&Key::Character("c".into()), Modifiers::CTRL).is_none());
-        assert!(local_key(&named(Named::PageUp), ctrl_shift).is_none());
-        assert!(local_key(&Key::Character("=".into()), ctrl_shift).is_none());
-        assert!(local_key(&named(Named::Insert), Modifiers::empty()).is_none());
+        let rows: [(Key, Modifiers, Option<&str>); 13] = [
+            (ch("t"), ctrl_shift, Some("Ctrl-Shift-T")),
+            (ch("T"), ctrl_shift, Some("Ctrl-Shift-T")),
+            (ch("2"), Modifiers::ALT, Some("Alt-2")),
+            (ch("="), Modifiers::CTRL, Some("Ctrl-=")),
+            (ch("-"), Modifiers::CTRL, Some("Ctrl--")),
+            (nk(Named::PageDown), Modifiers::CTRL, Some("Ctrl-PageDown")),
+            (nk(Named::Tab), ctrl_shift, Some("Ctrl-Shift-Tab")),
+            (nk(Named::Insert), Modifiers::SHIFT, Some("Shift-Insert")),
+            (nk(Named::F11), Modifiers::empty(), Some("F11")),
+            (nk(Named::Space), Modifiers::LOGO, Some("Meta-Space")),
+            (nk(Named::Shift), Modifiers::SHIFT, None),
+            (ch("ab"), Modifiers::CTRL, None),
+            (Key::Unidentified, Modifiers::CTRL, None),
+        ];
+        for (key, mods, want) in rows {
+            let want = want.map(|s| KeyChord::parse(s).unwrap());
+            assert_eq!(chord(&key, mods), want, "{key:?} {mods:?}");
+        }
+    }
+
+    #[test]
+    fn hotkey_lookup_falls_back_to_the_shifted_key() {
+        let hotkeys = Hotkeys::default_keymap();
+        let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
+        let ch = |c: &str| Key::Character(c.into());
+        assert_eq!(
+            hotkey(&hotkeys, &ch("t"), &ch("T"), ctrl_shift),
+            Some(Action::NewTab)
+        );
+        // `=` typed as Shift+0 (e.g. Italian layout): unmodified `0` is unbound with Ctrl+Shift.
+        assert_eq!(
+            hotkey(&hotkeys, &ch("0"), &ch("="), ctrl_shift),
+            Some(Action::ZoomIn)
+        );
+        // Plain typing and Ctrl+C go to the shell.
+        assert_eq!(hotkey(&hotkeys, &ch("c"), &ch("c"), Modifiers::CTRL), None);
+        assert_eq!(
+            hotkey(&hotkeys, &ch("a"), &ch("a"), Modifiers::empty()),
+            None
+        );
     }
 }

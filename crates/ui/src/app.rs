@@ -1,57 +1,36 @@
-//! Application state, `update`, `view` and subscriptions: one pane running the default shell.
+//! Application state, `update` dispatch, `view` and subscriptions. Tab lifecycle and actions live
+//! in `actions.rs`; pane-level input (keys, paste, selection, resize) here.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use fogu_core::{ColorScheme, Config, Profile, Size};
-use fogu_session::{SessionInput, SessionOutput, SessionRuntime};
-use fogu_term::{RenderSnapshot, Scroll, TermHandle, TermMode, input};
-use iced::{Element, Subscription, Task, clipboard, event, window};
-use tokio::sync::mpsc::Sender;
-use tokio::sync::mpsc::error::TrySendError;
+use fogu_core::{ColorScheme, Config, Size};
+use fogu_session::{SessionInput, SessionRuntime};
+use fogu_term::{TermMode, input};
+use iced::keyboard::{self, key::Named};
+use iced::widget::{column, container};
+use iced::{Element, Length, Point, Subscription, Task, clipboard, event, window};
 
+use crate::context_menu::{self, ContextMenu};
 use crate::message::{Message, PasteSource, SelectEvent};
 use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
 use crate::modal::{Modal, ModalButton, overlay};
 use crate::mouse::MouseConfig;
 use crate::palette::Colors;
-use crate::subscription::{EventSlot, session_events};
+use crate::subscription::session_events;
+use crate::tab::{PaneId, PaneState, Tab, TabId};
+use crate::tab_bar::{Rename, TabBar};
 use crate::terminal_view::TerminalView;
 
-/// Initial grid before the first layout; the PTY is resized to the real grid on the first
-/// `GridResized` message.
-const INITIAL_COLS: u16 = 80;
-const INITIAL_ROWS: u16 = 24;
 /// Transport resize debounce during window drags.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(50);
-const DEFAULT_TITLE: &str = "Fogu";
+pub(crate) const DEFAULT_TITLE: &str = "Fogu";
 /// Smallest font size zoom allows, in points.
 const MIN_FONT_PT: f32 = 6.0;
 /// Largest font size zoom allows, in points.
 const MAX_FONT_PT: f32 = 40.0;
-
-/// Lifecycle of a pane's session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PaneState {
-    /// The session is running.
-    Running,
-    /// The process ended.
-    Exited,
-    /// The session failed or its task panicked.
-    Crashed,
-}
-
-/// One terminal pane: its grid, the session's input side and the last drawn snapshot.
-#[derive(Debug)]
-pub struct Pane {
-    term: TermHandle,
-    dirty: Arc<AtomicBool>,
-    session_input: Sender<SessionInput>,
-    events: EventSlot,
-    state: PaneState,
-    snapshot: RenderSnapshot,
-}
+/// Initial window size (also the menu-clamping size until the first resize event).
+pub(crate) const WINDOW_SIZE: iced::Size = iced::Size::new(1000.0, 650.0);
 
 /// A multi-line/large paste waiting on the user's "Paste"/"Cancel" choice in the modal.
 #[derive(Debug)]
@@ -63,136 +42,148 @@ struct PendingPaste {
 /// The whole application state.
 #[derive(Debug)]
 pub struct App {
-    runtime: Arc<SessionRuntime>,
-    config: Arc<Config>,
-    pane: Pane,
-    font: FontSpec,
-    /// `config.appearance.font_size` at boot, in points; `ZoomReset`'s target (not
-    /// `FontSpec::default()`, which is only a fallback for callers with no config, e.g. tests).
+    pub(crate) runtime: Arc<SessionRuntime>,
+    pub(crate) config: Arc<Config>,
+    pub(crate) tabs: Vec<Tab>,
+    /// The visible tab; meaningless only while `tabs` is empty (the app is exiting).
+    pub(crate) active: TabId,
+    pub(crate) menu: Option<ContextMenu>,
+    pub(crate) renaming: Option<Rename>,
+    pub(crate) hovered_tab: Option<TabId>,
+    /// Last pointer position over the tab bar: the tab menu's anchor.
+    pub(crate) tab_bar_cursor: Point,
+    pub(crate) window_size: iced::Size,
+    pub(crate) fullscreen: bool,
+    /// `NewTabHere` asked pane `.0` for its cwd at `.1`.
+    pub(crate) pending_here: Option<(PaneId, Instant)>,
+    /// Source of every `TabId`/`PaneId`.
+    pub(crate) next_id: u64,
+    pub(crate) font: FontSpec,
+    /// `config.appearance.font_size` at boot, in points; `ZoomReset`'s target.
     default_font_size_pt: f32,
     resolved: ResolvedFont,
-    metrics: CellMetrics,
+    pub(crate) metrics: CellMetrics,
     scale: f32,
-    colors: Colors,
-    title: String,
-    focused: bool,
-    resize_generation: u64,
-    pending_resize: Option<Size>,
+    pub(crate) colors: Colors,
+    pub(crate) focused: bool,
     pending_paste: Option<PendingPaste>,
+    /// Test builds: input ends of the stub sessions, to inspect what the UI sent.
+    #[cfg(test)]
+    pub(crate) stub_inputs: Vec<tokio::sync::mpsc::Receiver<SessionInput>>,
 }
 
 impl App {
-    /// Opens the default shell in one pane and asks for the window's scale factor.
-    pub fn boot(runtime: Arc<SessionRuntime>, config: Arc<Config>) -> (Self, Task<Message>) {
+    /// State with no tabs yet.
+    pub(crate) fn new(
+        runtime: Arc<SessionRuntime>,
+        config: Arc<Config>,
+        resolved: ResolvedFont,
+    ) -> Self {
         let font = FontSpec {
             family: config.appearance.font_family.clone(),
             size_pt: config.appearance.font_size,
         };
-        let resolved = metrics::resolve(&font.family);
         let metrics = CellMetrics::new(resolved.units, font.size_px(), 1.0);
         let scheme = ColorScheme::by_name(&config.appearance.color_scheme).unwrap_or_default();
-        let colors = Colors::new(&scheme);
-
-        let mut term = TermHandle::new(
-            INITIAL_COLS,
-            INITIAL_ROWS,
-            config.terminal.scrollback_lines,
-            &config.terminal.word_separators,
-        );
-        term.set_palette(colors.palette());
-        term.set_cell_size_px(metrics.cell_w_px, metrics.cell_h_px);
-        let size = Size {
-            cols: INITIAL_COLS,
-            rows: INITIAL_ROWS,
-            ..Size::default()
-        };
-        let session_term = term.share();
-        let profile = Profile::default_shell();
-        let fogu_core::EffectiveProfile::Local(local_profile) =
-            fogu_core::resolve(&profile, &config.profile_defaults)
-        else {
-            unreachable!("Profile::default_shell is always a Local profile")
-        };
-        let handle = fogu_session::open(runtime.handle(), &local_profile, size, session_term);
-        let pane = Pane {
-            dirty: term.dirty(),
-            snapshot: term.snapshot(),
-            term,
-            session_input: handle.input,
-            events: EventSlot::new(0, handle.events),
-            state: PaneState::Running,
-        };
-        let default_font_size_pt = font.size_pt;
-        let app = Self {
+        Self {
             runtime,
-            config,
-            pane,
+            tabs: Vec::new(),
+            active: TabId(0),
+            menu: None,
+            renaming: None,
+            hovered_tab: None,
+            tab_bar_cursor: Point::ORIGIN,
+            window_size: WINDOW_SIZE,
+            fullscreen: false,
+            pending_here: None,
+            next_id: 1,
+            default_font_size_pt: font.size_pt,
             font,
-            default_font_size_pt,
             resolved,
             metrics,
             scale: 1.0,
-            colors,
-            title: DEFAULT_TITLE.to_owned(),
+            colors: Colors::new(&scheme),
             focused: true,
-            resize_generation: 0,
-            pending_resize: None,
             pending_paste: None,
-        };
+            config,
+            #[cfg(test)]
+            stub_inputs: Vec::new(),
+        }
+    }
+
+    /// Opens the default profile in the first tab and asks for the window's scale factor.
+    pub fn boot(runtime: Arc<SessionRuntime>, config: Arc<Config>) -> (Self, Task<Message>) {
+        let resolved = metrics::resolve(&config.appearance.font_family);
+        let mut app = Self::new(runtime, config, resolved);
+        let profile = app.default_profile();
+        app.open_tab(profile, None);
         let scale = window::oldest()
             .and_then(window::scale_factor)
             .map(Message::ScaleFactor);
         (app, scale)
     }
 
-    /// Window title (the shell's OSC title, or "Fogu").
+    /// Window title = the active tab's title.
     pub fn title(&self) -> String {
-        self.title.clone()
+        match self.active_tab().map(Tab::title) {
+            Some(title) if !title.is_empty() => title.to_owned(),
+            _ => DEFAULT_TITLE.to_owned(),
+        }
     }
 
     /// Handles one message.
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Session(event) => self.on_session(event),
-            Message::GridResized { cols, rows } => return self.on_grid_resized(cols, rows),
-            Message::ResizeTimer(generation) => return self.on_resize_timer(generation),
+            Message::Session(pane, event) => self.on_session(pane, event),
+            Message::Action(action) => self.on_action(action),
+            Message::GridResized { cols, rows } => self.on_grid_resized(cols, rows),
+            Message::ResizeTimer(pane, generation) => self.on_resize_timer(pane, generation),
+            Message::CloseTimeout(pane) => self.on_close_timeout(pane),
             Message::ScaleFactor(scale) => {
                 self.scale = scale;
-                self.metrics = CellMetrics::new(self.resolved.units, self.font.size_px(), scale);
-                self.pane
-                    .term
-                    .set_cell_size_px(self.metrics.cell_w_px, self.metrics.cell_h_px);
+                self.apply_metrics();
+                Task::none()
             }
-            Message::Focused(focused) => {
-                if focused != self.focused
-                    && let Some(bytes) = input::encode_focus(focused, self.pane.term.mode())
-                {
-                    self.write_input(bytes);
-                }
-                self.focused = focused;
+            Message::WindowResized(size) => {
+                self.window_size = size;
+                Task::none()
             }
+            Message::Focused(focused) => self.on_focused(focused),
+            Message::Key(_)
+            | Message::Text(_)
+            | Message::MouseInput(_)
+            | Message::Select(_)
+            | Message::Scroll(_)
+            | Message::Paste(_)
+            | Message::PasteReady(_)
+            | Message::ConfirmPaste
+            | Message::CancelPaste => self.on_pane_input(message),
+            other => self.on_tab_ui(other),
+        }
+    }
+
+    /// Keys, mouse and paste for the active pane.
+    fn on_pane_input(&mut self, message: Message) -> Task<Message> {
+        let alt_is_meta = self.config.terminal.alt_is_meta;
+        let Some(pane) = self.active_pane_mut() else {
+            return Task::none();
+        };
+        match message {
             Message::Key(key) => {
-                let mode = self.pane.term.mode();
-                if let Some(bytes) = input::encode_key(&key, mode, self.config.terminal.alt_is_meta)
-                {
-                    self.send_input(bytes);
+                if let Some(bytes) = input::encode_key(&key, pane.term.mode(), alt_is_meta) {
+                    pane.send_input(bytes);
                 }
             }
             Message::Text(text) => {
                 if let Some(bytes) = input::encode_text(&text) {
-                    self.send_input(bytes);
+                    pane.send_input(bytes);
                 }
             }
-            Message::MouseInput(bytes) => self.write_input(bytes),
+            Message::MouseInput(bytes) => pane.write_input(bytes),
             Message::Select(event) => return self.on_select(event),
             Message::Scroll(scroll) => {
-                self.pane.term.scroll_display(scroll);
-                self.refresh();
-            }
-            Message::Copy => {
-                if let Some(text) = self.pane.term.selection_text() {
-                    return clipboard::write(text);
-                }
+                pane.term.scroll_display(scroll);
+                pane.refresh();
             }
             Message::Paste(source) => {
                 return match source {
@@ -208,14 +199,23 @@ impl App {
                 }
             }
             Message::CancelPaste => self.pending_paste = None,
-            Message::ZoomIn => self.set_font_size(self.font.size_pt + 1.0),
-            Message::ZoomOut => self.set_font_size(self.font.size_pt - 1.0),
-            Message::ZoomReset => self.set_font_size(self.default_font_size_pt),
-            Message::Clear => {
-                self.pane.term.clear();
-                self.refresh();
-            }
+            _ => {}
         }
+        Task::none()
+    }
+
+    /// Window focus, or a click into the pane (which also commits an inline rename).
+    fn on_focused(&mut self, focused: bool) -> Task<Message> {
+        if focused && self.renaming.is_some() {
+            self.commit_rename();
+        }
+        if focused != self.focused
+            && let Some(pane) = self.active_pane()
+            && let Some(bytes) = input::encode_focus(focused, pane.term.mode())
+        {
+            pane.write_input(bytes);
+        }
+        self.focused = focused;
         Task::none()
     }
 
@@ -240,24 +240,42 @@ impl App {
     /// Sanitises and sends `text` to the session. `terminal.bracketed_paste = false` forces
     /// plain paste even if the application asked for it.
     fn paste_now(&mut self, text: &str) {
-        let opts = input::PasteOpts {
-            bracketed_requested: self.config.terminal.bracketed_paste
-                && self.pane.term.mode().contains(TermMode::BRACKETED_PASTE),
-            trim_whitespace: self.config.terminal.trim_whitespace_on_paste,
-            newlines_to_spaces: self.config.terminal.replace_newlines_on_paste,
+        let terminal = &self.config.terminal;
+        let (bracketed, trim, newlines) = (
+            terminal.bracketed_paste,
+            terminal.trim_whitespace_on_paste,
+            terminal.replace_newlines_on_paste,
+        );
+        let Some(pane) = self.active_pane_mut() else {
+            return;
         };
-        self.send_input(input::encode_paste(text, opts));
+        let opts = input::PasteOpts {
+            bracketed_requested: bracketed && pane.term.mode().contains(TermMode::BRACKETED_PASTE),
+            trim_whitespace: trim,
+            newlines_to_spaces: newlines,
+        };
+        pane.send_input(input::encode_paste(text, opts));
     }
 
     /// Clamps to [`MIN_FONT_PT`]..=[`MAX_FONT_PT`] and recomputes cell metrics; the next frame's
     /// `GridResized` picks up the new grid size and resizes the
     /// PTY, same as a window resize.
-    fn set_font_size(&mut self, size_pt: f32) {
+    pub(crate) fn set_font_size(&mut self, size_pt: f32) {
         self.font.size_pt = size_pt.clamp(MIN_FONT_PT, MAX_FONT_PT);
+        self.apply_metrics();
+    }
+
+    pub(crate) fn zoom_reset(&mut self) {
+        self.set_font_size(self.default_font_size_pt);
+    }
+
+    /// Recomputes cell metrics from font + scale and tells every pane's terminal.
+    fn apply_metrics(&mut self) {
         self.metrics = CellMetrics::new(self.resolved.units, self.font.size_px(), self.scale);
-        self.pane
-            .term
-            .set_cell_size_px(self.metrics.cell_w_px, self.metrics.cell_h_px);
+        for tab in &mut self.tabs {
+            let m = &self.metrics;
+            tab.pane.term.set_cell_size_px(m.cell_w_px, m.cell_h_px);
+        }
     }
 
     /// The pending paste's confirmation modal, if any.
@@ -287,38 +305,14 @@ impl App {
         })
     }
 
-    /// Sends encoded keys to the session without ever blocking the UI, then scrolls to the
-    /// bottom.
-    fn send_input(&mut self, bytes: Vec<u8>) {
-        if self.pane.state != PaneState::Running {
-            return;
-        }
-        self.write_input(bytes);
-        if self.pane.snapshot.display_offset != 0 {
-            self.pane.term.scroll_display(Scroll::Bottom);
-            self.refresh();
-        }
-    }
-
-    /// Writes `bytes` to a running session without blocking the UI (drops them when full).
-    fn write_input(&mut self, bytes: Vec<u8>) {
-        if self.pane.state != PaneState::Running {
-            return;
-        }
-        match self
-            .pane
-            .session_input
-            .try_send(SessionInput::Data(bytes.into()))
-        {
-            Ok(()) | Err(TrySendError::Closed(_)) => {}
-            Err(TrySendError::Full(_)) => tracing::warn!("session input full; input dropped"),
-        }
-    }
-
     /// Applies a selection gesture; viewport cells map to grid lines with the current scroll.
     fn on_select(&mut self, event: SelectEvent) -> Task<Message> {
-        let offset = self.pane.snapshot.display_offset;
-        let term = &mut self.pane.term;
+        let copy_on_select = self.config.terminal.copy_on_select;
+        let Some(pane) = self.active_pane_mut() else {
+            return Task::none();
+        };
+        let offset = pane.snapshot.display_offset;
+        let term = &mut pane.term;
         match event {
             SelectEvent::Start { kind, at } => {
                 term.start_selection(kind, viewport_to_point(at, offset), at.side);
@@ -329,132 +323,127 @@ impl App {
             SelectEvent::Clear => term.clear_selection(),
             SelectEvent::Finish => {
                 return match term.selection_text() {
-                    Some(text) if self.config.terminal.copy_on_select => {
-                        clipboard::write_primary(text)
-                    }
+                    Some(text) if copy_on_select => clipboard::write_primary(text),
                     _ => Task::none(),
                 };
             }
         }
-        self.refresh();
+        pane.refresh();
         Task::none()
     }
 
-    fn on_session(&mut self, event: SessionOutput) {
-        match event {
-            SessionOutput::Wakeup => self.refresh(),
-            SessionOutput::Title(title) => {
-                self.title = if title.is_empty() {
-                    DEFAULT_TITLE.to_owned()
-                } else {
-                    title
-                };
-            }
-            SessionOutput::Exited(info) => {
-                tracing::info!(?info, "shell exited");
-                self.pane.state = PaneState::Exited;
-                self.refresh();
-            }
-            SessionOutput::Error(err) => {
-                tracing::error!(error = %err, "session failed");
-                self.pane.state = PaneState::Crashed;
-                self.refresh();
-            }
-            SessionOutput::Prompt(_, kind) => match kind {},
-            // Not handled yet: bell and OSC 52. Cwd, progress, notifications and prompt marks
-            // are logged by the session and ignored here.
-            SessionOutput::Bell
-            | SessionOutput::ClipboardStore(_)
-            | SessionOutput::Cwd { .. }
-            | SessionOutput::Progress(_)
-            | SessionOutput::Notify { .. }
-            | SessionOutput::PromptMark(_) => {}
-        }
-    }
-
-    /// Clears `dirty` *before* snapshotting, so output arriving meanwhile sends a new wakeup.
-    fn refresh(&mut self) {
-        self.pane.dirty.store(false, Ordering::SeqCst);
-        self.pane.snapshot = self.pane.term.snapshot();
-    }
-
-    /// Resizes the grid now (correct rendering) and the PTY after a 50 ms quiet period.
+    /// Resizes the active grid now (correct rendering) and its PTY after a 50 ms quiet period.
     fn on_grid_resized(&mut self, cols: u16, rows: u16) -> Task<Message> {
-        self.pane.term.resize(cols, rows);
-        self.refresh();
-        let m = &self.metrics;
-        self.pending_resize = Some(Size {
-            cols,
-            rows,
-            px_w: cols.saturating_mul(m.cell_w_px),
-            px_h: rows.saturating_mul(m.cell_h_px),
-        });
-        self.resize_timer()
-    }
-
-    /// Starts a new debounce period; older timers become stale.
-    fn resize_timer(&mut self) -> Task<Message> {
-        self.resize_generation += 1;
-        let generation = self.resize_generation;
-        let timer = self.runtime.handle().spawn(async {
-            tokio::time::sleep(RESIZE_DEBOUNCE).await;
-        });
-        Task::perform(timer, move |_| Message::ResizeTimer(generation))
-    }
-
-    fn on_resize_timer(&mut self, generation: u64) -> Task<Message> {
-        if generation != self.resize_generation {
-            return Task::none();
-        }
-        let Some(size) = self.pending_resize.take() else {
+        let (cell_w, cell_h) = (self.metrics.cell_w_px, self.metrics.cell_h_px);
+        let Some(pane) = self.active_pane_mut() else {
             return Task::none();
         };
-        match self.pane.session_input.try_send(SessionInput::Resize(size)) {
-            Ok(()) | Err(TrySendError::Closed(_)) => Task::none(),
-            Err(TrySendError::Full(_)) => {
-                // The session is busy; retry after another debounce period.
-                tracing::debug!("session input full; PTY resize deferred");
-                self.pending_resize = Some(size);
-                self.resize_timer()
-            }
-        }
+        pane.term.resize(cols, rows);
+        pane.refresh();
+        pane.pending_resize = Some(Size {
+            cols,
+            rows,
+            px_w: cols.saturating_mul(cell_w),
+            px_h: rows.saturating_mul(cell_h),
+        });
+        pane.resize_generation += 1;
+        let message = Message::ResizeTimer(pane.id, pane.resize_generation);
+        self.after(RESIZE_DEBOUNCE, message)
     }
 
-    /// The single pane.
+    fn on_resize_timer(&mut self, pane_id: PaneId, generation: u64) -> Task<Message> {
+        let Some(pane) = self.pane_mut(pane_id) else {
+            return Task::none();
+        };
+        if generation != pane.resize_generation {
+            return Task::none();
+        }
+        let Some(size) = pane.pending_resize.take() else {
+            return Task::none();
+        };
+        if pane.control(SessionInput::Resize(size)) || pane.state != PaneState::Running {
+            return Task::none();
+        }
+        // The session is busy; retry after another debounce period.
+        tracing::debug!("PTY resize deferred");
+        pane.pending_resize = Some(size);
+        pane.resize_generation += 1;
+        let message = Message::ResizeTimer(pane.id, pane.resize_generation);
+        self.after(RESIZE_DEBOUNCE, message)
+    }
+
+    /// `message` after `delay` (timer on the session runtime).
+    pub(crate) fn after(&self, delay: Duration, message: Message) -> Task<Message> {
+        // The sleep is created inside the task: it needs the runtime's timer.
+        let timer = self
+            .runtime
+            .handle()
+            .spawn(async move { tokio::time::sleep(delay).await });
+        Task::perform(timer, move |_| message.clone())
+    }
+
+    /// Tab bar above the active pane (bordered in the tab colour), plus modal / menu overlays.
     pub fn view(&self) -> Element<'_, Message> {
-        let status = match self.pane.state {
+        let Some(tab) = self.active_tab() else {
+            return column![].into();
+        };
+        let status = match tab.pane.state {
             PaneState::Running => None,
             PaneState::Exited => Some("[process exited]"),
             PaneState::Crashed => Some("[crashed — see log]"),
         };
-        let term_view = TerminalView::new(
-            &self.pane.snapshot,
+        let typing_elsewhere = self.renaming.is_some() || self.menu.is_some();
+        let term_view: Element<'_, Message> = TerminalView::new(
+            &tab.pane.snapshot,
             &self.colors,
             self.metrics,
             self.resolved.font,
-            self.focused,
+            self.focused && !typing_elsewhere,
             status,
             MouseConfig {
                 wheel_lines: self.config.terminal.wheel_lines,
                 paste_on_middle_click: self.config.terminal.paste_on_middle_click,
             },
         )
+        .hotkeys(&self.config.hotkeys)
         .into();
-        overlay(term_view, self.paste_modal())
+        let border = tab.color.map(context_menu::to_iced);
+        let pane = container(term_view)
+            .padding(u16::from(border.is_some()))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: border.map(Into::into),
+                ..container::Style::default()
+            });
+        let bar = TabBar {
+            tabs: &self.tabs,
+            active: self.active,
+            hovered: self.hovered_tab,
+            renaming: self.renaming.as_ref(),
+            colors: &self.colors,
+        }
+        .view();
+        let base = overlay(column![bar, pane].into(), self.paste_modal());
+        context_menu::overlay(base, self.menu.as_ref(), self.window_size)
     }
 
-    /// Session events plus window focus/scale changes.
+    /// Every pane's session events plus window focus/scale/size changes and Escape.
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
-            session_events(&self.pane.events),
-            event::listen_with(|event, _status, _window| match event {
-                iced::Event::Window(window::Event::Focused) => Some(Message::Focused(true)),
-                iced::Event::Window(window::Event::Unfocused) => Some(Message::Focused(false)),
-                iced::Event::Window(window::Event::Rescaled(scale)) => {
-                    Some(Message::ScaleFactor(scale))
-                }
-                _ => None,
-            }),
-        ])
+        let sessions = self.tabs.iter().map(|tab| session_events(&tab.pane.events));
+        let window_events = event::listen_with(|event, _status, _window| match event {
+            iced::Event::Window(window::Event::Focused) => Some(Message::Focused(true)),
+            iced::Event::Window(window::Event::Unfocused) => Some(Message::Focused(false)),
+            iced::Event::Window(window::Event::Rescaled(scale)) => {
+                Some(Message::ScaleFactor(scale))
+            }
+            iced::Event::Window(window::Event::Resized(size)) => Some(Message::WindowResized(size)),
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(Named::Escape),
+                ..
+            }) => Some(Message::Escape),
+            _ => None,
+        });
+        Subscription::batch(sessions.chain([window_events]))
     }
 }

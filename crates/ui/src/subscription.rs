@@ -12,6 +12,7 @@ use iced::futures::stream::{self, Stream};
 use tokio::sync::mpsc::Receiver;
 
 use crate::message::Message;
+use crate::tab::PaneId;
 
 /// Holds a pane's session receiver until the subscription takes it.
 #[derive(Clone, Debug)]
@@ -36,7 +37,8 @@ impl Hash for EventSlot {
     }
 }
 
-/// Streams the pane's `SessionOutput`s as [`Message::Session`] until the session ends.
+/// Streams the pane's `SessionOutput`s as [`Message::Session`] (tagged with the pane id) until
+/// the session ends.
 pub fn session_events(slot: &EventSlot) -> Subscription<Message> {
     Subscription::run_with(slot.clone(), stream_of)
 }
@@ -47,9 +49,10 @@ fn stream_of(slot: &EventSlot) -> impl Stream<Item = Message> + use<> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take();
-    stream::unfold(receiver, |receiver| async move {
+    let pane = PaneId(slot.id);
+    stream::unfold(receiver, move |receiver| async move {
         let mut receiver = receiver?;
         let event = receiver.recv().await?;
-        Some((Message::Session(event), Some(receiver)))
+        Some((Message::Session(pane, event), Some(receiver)))
     })
 }

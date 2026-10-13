@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use bytes::Bytes;
-use fogu_core::{LocalProfile, Size};
+use fogu_core::{EffectiveProfile, LocalProfile, Size};
 use fogu_session::{
     ExitInfo, SessionError, SessionHandle, SessionInput, SessionOutput, SessionRuntime, build_env,
     open, supervise,
@@ -34,7 +34,8 @@ fn profile(program: &str, args: &[&str]) -> LocalProfile {
 fn start(rt: &SessionRuntime, profile: &LocalProfile) -> (SessionHandle, TermHandle) {
     let term = TermHandle::new(SIZE.cols, SIZE.rows, 1000, WORD_SEPARATORS);
     let view = term.share();
-    (open(rt.handle(), profile, SIZE, term), view)
+    let profile = EffectiveProfile::Local(profile.clone());
+    (open(rt.handle(), &profile, SIZE, term), view)
 }
 
 /// Receives events (clearing `dirty` like the UI does) until `done` returns true or 5 s pass.
@@ -198,4 +199,23 @@ fn supervise_maps_panic_to_crashed() {
         matches!(event, SessionOutput::Error(SessionError::Crashed)),
         "{event:?}"
     );
+}
+
+#[test]
+fn ssh_profiles_fail_until_s18() {
+    let rt = SessionRuntime::new().unwrap();
+    let term = TermHandle::new(SIZE.cols, SIZE.rows, 1000, WORD_SEPARATORS);
+    let profile = EffectiveProfile::Ssh(fogu_core::EffectiveSsh {
+        host: "example.org".into(),
+        port: 22,
+        user: None,
+    });
+    let mut handle = open(rt.handle(), &profile, SIZE, term);
+    let event = rt.handle().block_on(async {
+        tokio::time::timeout(Duration::from_secs(5), handle.events.recv()).await
+    });
+    let Ok(Some(SessionOutput::Error(SessionError::Spawn { program, .. }))) = event else {
+        panic!("expected a spawn error, got {event:?}");
+    };
+    assert_eq!(program, "ssh example.org");
 }

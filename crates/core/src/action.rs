@@ -228,10 +228,11 @@ impl Hotkeys {
         Self { bindings, reverse }
     }
 
-    /// The default keymap. Actions that are rarely used or easy to trigger by accident
-    /// (`close-pane`, `clear`, `reconnect-tab`, `restart-tab`) default unbound;
-    /// `PastePrimary`/`NewTabHere` are reached with the mouse/context menu, so they default
-    /// unbound as well.
+    /// The default keymap. Actions that are rarely used or easy to trigger by accident (close pane,
+    /// clear, reconnect, restart) default unbound; `PastePrimary`/`NewTabHere` are reached with the
+    /// mouse/context menu, so they default unbound as well. Ctrl-PageUp/PageDown switch tabs like
+    /// most Linux terminals; scrolling uses Shift with `PageUp`, `PageDown`, `Home` and `End` (plus
+    /// Alt-PageUp/PageDown).
     #[must_use]
     #[expect(
         clippy::expect_used,
@@ -245,10 +246,13 @@ impl Hotkeys {
         let mut bindings = BTreeMap::new();
         bindings.insert(Action::NewTab, chords(&["Ctrl-Shift-T"]));
         bindings.insert(Action::CloseTab, chords(&["Ctrl-Shift-W"]));
-        bindings.insert(Action::NextTab, chords(&["Ctrl-Shift-Right", "Ctrl-Tab"]));
+        bindings.insert(
+            Action::NextTab,
+            chords(&["Ctrl-Shift-Right", "Ctrl-Tab", "Ctrl-PageDown"]),
+        );
         bindings.insert(
             Action::PrevTab,
-            chords(&["Ctrl-Shift-Left", "Ctrl-Shift-Tab"]),
+            chords(&["Ctrl-Shift-Left", "Ctrl-Shift-Tab", "Ctrl-PageUp"]),
         );
         for n in 1..=9u8 {
             bindings.insert(Action::GoToTab(n), chords(&[&format!("Alt-{n}")]));
@@ -270,10 +274,16 @@ impl Hotkeys {
         bindings.insert(Action::ZoomIn, chords(&["Ctrl-=", "Ctrl-Shift-="]));
         bindings.insert(Action::ZoomOut, chords(&["Ctrl--", "Ctrl-Shift--"]));
         bindings.insert(Action::ZoomReset, chords(&["Ctrl-0"]));
-        bindings.insert(Action::ScrollPageUp, chords(&["Alt-PageUp"]));
-        bindings.insert(Action::ScrollPageDown, chords(&["Alt-PageDown"]));
-        bindings.insert(Action::ScrollTop, chords(&["Ctrl-PageUp"]));
-        bindings.insert(Action::ScrollBottom, chords(&["Ctrl-PageDown"]));
+        bindings.insert(
+            Action::ScrollPageUp,
+            chords(&["Alt-PageUp", "Shift-PageUp"]),
+        );
+        bindings.insert(
+            Action::ScrollPageDown,
+            chords(&["Alt-PageDown", "Shift-PageDown"]),
+        );
+        bindings.insert(Action::ScrollTop, chords(&["Shift-Home"]));
+        bindings.insert(Action::ScrollBottom, chords(&["Shift-End"]));
         bindings.insert(Action::ToggleFullscreen, chords(&["F11"]));
         bindings.insert(Action::NewTabHere, chords(&[]));
         bindings.insert(Action::Reconnect, chords(&[]));

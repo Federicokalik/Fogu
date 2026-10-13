@@ -1,10 +1,13 @@
 //! Application messages.
 
+use fogu_core::{Action, RgbColor};
 use fogu_session::SessionOutput;
 use fogu_term::input::KeyInput;
 use fogu_term::{Scroll, SelectionType};
+use iced::Point;
 
 use crate::metrics::CellPos;
+use crate::tab::{PaneId, TabId};
 
 /// A step of a mouse selection gesture, in viewport cells.
 #[derive(Clone, Copy, Debug)]
@@ -27,17 +30,18 @@ pub enum SelectEvent {
 /// Which clipboard a paste reads from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PasteSource {
-    /// Ctrl+Shift+V / Shift+Insert.
+    /// The `paste` action (Ctrl+Shift+V / Shift+Insert by default).
     Clipboard,
     /// Middle-click.
     Primary,
 }
 
-/// Everything `update` reacts to.
+/// Everything `update` reacts to. Pane-level messages without a [`PaneId`] target the active
+/// tab's pane (the only one on screen).
 #[derive(Clone, Debug)]
 pub enum Message {
-    /// An event from the pane's session.
-    Session(SessionOutput),
+    /// An event from pane `.0`'s session.
+    Session(PaneId, SessionOutput),
     /// The terminal widget now fits a different grid.
     GridResized {
         /// Columns that fit.
@@ -45,13 +49,15 @@ pub enum Message {
         /// Rows that fit.
         rows: u16,
     },
-    /// The 50 ms resize debounce for generation `.0` expired.
-    ResizeTimer(u64),
+    /// Pane `.0`'s 50 ms resize debounce for generation `.1` expired.
+    ResizeTimer(PaneId, u64),
     /// The window's scale factor (device px per logical px).
     ScaleFactor(f32),
+    /// The window's new logical size (keeps context menus inside it).
+    WindowResized(iced::Size),
     /// Pane focus gained (`true`: window focused or pane clicked) or lost (window unfocused).
     Focused(bool),
-    /// A key press for the focused pane.
+    /// A key press for the focused pane (no hotkey matched).
     Key(KeyInput),
     /// Text committed by the input method for the focused pane.
     Text(String),
@@ -62,9 +68,7 @@ pub enum Message {
     Select(SelectEvent),
     /// Scroll the view through history.
     Scroll(Scroll),
-    /// Copy the selection to CLIPBOARD (Ctrl+Shift+C).
-    Copy,
-    /// Read `source`'s current text and maybe paste it (Ctrl+Shift+V, Shift+Insert, middle-click).
+    /// Read `source`'s current text and maybe paste it (paste action, middle-click).
     Paste(PasteSource),
     /// The clipboard read for a [`Message::Paste`] completed.
     PasteReady(Option<String>),
@@ -72,12 +76,36 @@ pub enum Message {
     ConfirmPaste,
     /// The user cancelled it.
     CancelPaste,
-    /// Grow the font by 1 pt (Ctrl+=).
-    ZoomIn,
-    /// Shrink the font by 1 pt (Ctrl+-).
-    ZoomOut,
-    /// Reset the font to its default size (Ctrl+0).
-    ZoomReset,
-    /// Clear the screen and scrollback (Ctrl+Shift+L).
-    Clear,
+    /// A keymap/menu action.
+    Action(Action),
+    /// Left-click on a tab header.
+    ActivateTab(TabId),
+    /// Middle-click or `×` on a tab header.
+    CloseTab(TabId),
+    /// The 2 s grace period for closing pane `.0` expired.
+    CloseTimeout(PaneId),
+    /// The pointer entered (`Some`) or left (`None`) a tab header.
+    HoverTab(Option<TabId>),
+    /// The pointer moved over the tab bar (window coordinates); anchors the tab menu.
+    TabBarCursor(Point),
+    /// Double-click on a tab title: start inline rename.
+    StartRename(TabId),
+    /// The inline rename field changed.
+    RenameInput(String),
+    /// Enter in the rename field: commit (empty clears the override).
+    CommitRename,
+    /// Right-click on a tab header: open its context menu.
+    OpenTabMenu(TabId),
+    /// Click-away / Esc / an item was chosen: close the context menu.
+    CloseMenu,
+    /// "Color ▸": swap the tab menu for the colour palette.
+    MenuColors,
+    /// The menu's text field changed.
+    MenuInput(String),
+    /// Enter in the menu's text field ("Custom hex…").
+    MenuSubmit,
+    /// Set (or clear) the active tab's colour.
+    SetTabColor(Option<RgbColor>),
+    /// Escape pressed anywhere: cancel rename / close the menu.
+    Escape,
 }

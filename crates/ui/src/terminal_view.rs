@@ -4,6 +4,7 @@
 //! Cells are grouped into style runs per row (`runs.rs`); every run is placed at
 //! `x = col * cell_w`, never at the shaped advance.
 
+use fogu_core::Hotkeys;
 use fogu_term::{CellFlags, CursorShape, RenderSnapshot, Rgb};
 use iced::advanced::input_method::{self, InputMethod};
 use iced::advanced::layout::{self, Layout};
@@ -17,7 +18,6 @@ use iced::{
 };
 
 use crate::keys;
-use crate::keys::LocalKey;
 use crate::message::Message;
 use crate::metrics::{CellMetrics, cells_f32 as cells};
 use crate::mouse::{Grid, MouseConfig, MouseState};
@@ -48,6 +48,7 @@ pub struct TerminalView<'a> {
     focused: bool,
     overlay: Option<&'static str>,
     mouse_config: MouseConfig,
+    hotkeys: Option<&'a Hotkeys>,
 }
 
 impl<'a> TerminalView<'a> {
@@ -69,7 +70,15 @@ impl<'a> TerminalView<'a> {
             focused,
             overlay,
             mouse_config,
+            hotkeys: None,
         }
+    }
+
+    /// Key presses matching `hotkeys` publish [`Message::Action`] instead of reaching the shell.
+    #[must_use]
+    pub fn hotkeys(mut self, hotkeys: &'a Hotkeys) -> Self {
+        self.hotkeys = Some(hotkeys);
+        self
     }
 
     fn cell_rect(&self, origin: Point, col: usize, row: usize, cols: usize) -> Rectangle {
@@ -341,6 +350,22 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
         {
             shell.publish(Message::Focused(true));
         }
+        // Order: hotkeys → mouse → encoder (one dispatch path for keys).
+        if self.focused
+            && let Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
+                modified_key,
+                modifiers,
+                ..
+            }) = event
+            && let Some(action) = self
+                .hotkeys
+                .and_then(|h| keys::hotkey(h, key, modified_key, *modifiers))
+        {
+            shell.publish(Message::Action(action));
+            shell.capture_event();
+            return;
+        }
         let grid = Grid {
             bounds,
             metrics: self.metrics,
@@ -360,26 +385,16 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
         match event {
             _ if !self.focused => {}
             Event::Keyboard(keyboard::Event::KeyPressed {
-                key,
                 modified_key,
                 location,
                 modifiers,
                 text,
                 ..
             }) => {
-                let message = match keys::local_key(key, *modifiers) {
-                    Some(LocalKey::Scroll(scroll)) => Some(Message::Scroll(scroll)),
-                    Some(LocalKey::Copy) => Some(Message::Copy),
-                    Some(LocalKey::Paste(source)) => Some(Message::Paste(source)),
-                    Some(LocalKey::ZoomIn) => Some(Message::ZoomIn),
-                    Some(LocalKey::ZoomOut) => Some(Message::ZoomOut),
-                    Some(LocalKey::ZoomReset) => Some(Message::ZoomReset),
-                    Some(LocalKey::Clear) => Some(Message::Clear),
-                    None => keys::key_input(modified_key, *location, *modifiers, text.as_deref())
-                        .map(Message::Key),
-                };
-                if let Some(message) = message {
-                    shell.publish(message);
+                if let Some(key) =
+                    keys::key_input(modified_key, *location, *modifiers, text.as_deref())
+                {
+                    shell.publish(Message::Key(key));
                     shell.capture_event();
                 }
             }

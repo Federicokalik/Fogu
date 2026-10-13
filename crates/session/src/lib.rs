@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use fogu_core::{LocalProfile, Size};
+use fogu_core::{EffectiveProfile, Size};
 use fogu_term::{ClipboardType, PromptMark, TermHandle};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -162,14 +162,37 @@ pub enum SessionError {
     Crashed,
 }
 
-/// Starts a session task on `rt` that feeds `term` and returns the UI's side of it.
-pub fn open(rt: &Handle, profile: &LocalProfile, size: Size, term: TermHandle) -> SessionHandle {
+/// Starts a session task on `rt` for `profile` that feeds `term` and returns the UI's side of it.
+/// SSH profiles have no transport yet: their session fails at once with
+/// [`SessionError::Spawn`] (`ErrorKind::Unsupported`), so the pane shows the crashed state.
+pub fn open(
+    rt: &Handle,
+    profile: &EffectiveProfile,
+    size: Size,
+    term: TermHandle,
+) -> SessionHandle {
     let (in_tx, in_rx) = mpsc::channel(INPUT_CAPACITY);
     let (out_tx, out_rx) = mpsc::channel(OUTPUT_CAPACITY);
-    let span = tracing::info_span!("session", kind = "local");
-    let task = rt.spawn(
-        local::run_local(profile.clone(), size, term, in_rx, out_tx.clone()).instrument(span),
-    );
+    let task = match profile {
+        EffectiveProfile::Local(local) => {
+            let span = tracing::info_span!("session", kind = "local");
+            rt.spawn(
+                local::run_local(local.clone(), size, term, in_rx, out_tx.clone()).instrument(span),
+            )
+        }
+        EffectiveProfile::Ssh(ssh) => {
+            let program = format!("ssh {}", ssh.host);
+            let out = out_tx.clone();
+            rt.spawn(async move {
+                let source = Arc::new(io::Error::from(io::ErrorKind::Unsupported));
+                let err = SessionError::Spawn { program, source };
+                drop(in_rx);
+                if out.send(SessionOutput::Error(err)).await.is_err() {
+                    tracing::debug!("SSH stub error not reported: UI receiver dropped");
+                }
+            })
+        }
+    };
     rt.spawn(supervise(task, out_tx));
     SessionHandle {
         input: in_tx,

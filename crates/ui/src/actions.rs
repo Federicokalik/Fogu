@@ -1,0 +1,460 @@
+//! Tab lifecycle and keymap actions: new / close / switch / rename / colour / restart / new tab
+//! here, and session events routed to their tab.
+
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use fogu_core::{Action, EffectiveProfile, Profile, ProfileKind, Size, resolve};
+use fogu_session::{SessionHandle, SessionInput, SessionOutput};
+use fogu_term::{Scroll, TermHandle, input, sanitize_title};
+use iced::widget::operation;
+use iced::{Task, clipboard, window};
+
+use crate::app::App;
+use crate::context_menu::{ContextMenu, MENU_INPUT, parse_color};
+use crate::message::{Message, PasteSource};
+use crate::tab::{Pane, PaneId, PaneState, Tab, TabId};
+use crate::tab_bar::{RENAME_INPUT, Rename};
+
+/// Grid of the first tab, before the first layout resizes it.
+const INITIAL_SIZE: Size = Size {
+    cols: 80,
+    rows: 24,
+    px_w: 0,
+    px_h: 0,
+};
+/// How long `CloseTab` waits for `Exited` before dropping the tab anyway.
+const CLOSE_GRACE: Duration = Duration::from_secs(2);
+/// How long a `NewTabHere` cwd query stays valid.
+const CWD_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+
+impl App {
+    pub(crate) fn active_index(&self) -> Option<usize> {
+        self.tabs.iter().position(|t| t.id == self.active)
+    }
+
+    pub(crate) fn active_tab(&self) -> Option<&Tab> {
+        self.tabs.iter().find(|t| t.id == self.active)
+    }
+
+    pub(crate) fn active_pane(&self) -> Option<&Pane> {
+        self.active_tab().map(|t| &t.pane)
+    }
+
+    pub(crate) fn active_pane_mut(&mut self) -> Option<&mut Pane> {
+        let active = self.active;
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == active)
+            .map(|t| &mut t.pane)
+    }
+
+    pub(crate) fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+        self.tabs
+            .iter_mut()
+            .map(|t| &mut t.pane)
+            .find(|p| p.id == id)
+    }
+
+    fn take_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    /// `config.default_profile`, or the built-in default shell.
+    pub(crate) fn default_profile(&self) -> Profile {
+        let config = &self.config;
+        config
+            .default_profile
+            .as_ref()
+            .and_then(|id| config.profiles.iter().find(|p| &p.id == id))
+            .cloned()
+            .unwrap_or_else(Profile::default_shell)
+    }
+
+    /// Opens `profile` (local `cwd` override for "new tab here") in a new last tab and
+    /// activates it.
+    pub(crate) fn open_tab(&mut self, profile: Profile, cwd: Option<PathBuf>) -> TabId {
+        let pane = self.open_pane(&profile, cwd);
+        let id = TabId(self.take_id());
+        self.tabs.push(Tab::new(id, profile, pane));
+        self.activate(id);
+        id
+    }
+
+    /// A new pane running `profile`, sized like the active pane.
+    fn open_pane(&mut self, profile: &Profile, cwd: Option<PathBuf>) -> Pane {
+        let size = self.active_pane().map_or(INITIAL_SIZE, Pane::size);
+        let terminal = &self.config.terminal;
+        let mut term = TermHandle::new(
+            size.cols,
+            size.rows,
+            terminal.scrollback_lines,
+            &terminal.word_separators,
+        );
+        term.set_palette(self.colors.palette());
+        term.set_cell_size_px(self.metrics.cell_w_px, self.metrics.cell_h_px);
+        let mut effective = resolve(profile, &self.config.profile_defaults);
+        if let (Some(cwd), EffectiveProfile::Local(local)) = (cwd, &mut effective) {
+            local.cwd = Some(cwd);
+        }
+        let size = Size {
+            px_w: size.cols.saturating_mul(self.metrics.cell_w_px),
+            px_h: size.rows.saturating_mul(self.metrics.cell_h_px),
+            ..size
+        };
+        let handle = self.open_session(&effective, size, term.share());
+        Pane::new(PaneId(self.take_id()), term, handle)
+    }
+
+    #[cfg(not(test))]
+    fn open_session(
+        &mut self,
+        profile: &EffectiveProfile,
+        size: Size,
+        term: TermHandle,
+    ) -> SessionHandle {
+        fogu_session::open(self.runtime.handle(), profile, size, term)
+    }
+
+    /// Test builds: an inert session (no process). Its input end is kept in `stub_inputs`; its
+    /// event sender is dropped, so the event stream is empty.
+    #[cfg(test)]
+    fn open_session(&mut self, _: &EffectiveProfile, _: Size, _: TermHandle) -> SessionHandle {
+        let (input, input_rx) = tokio::sync::mpsc::channel(8);
+        let (_, events) = tokio::sync::mpsc::channel(8);
+        self.stub_inputs.push(input_rx);
+        SessionHandle { input, events }
+    }
+
+    /// Makes `id` the visible tab: focus out/in reports, fresh snapshot (inactive panes skip
+    /// wakeup refreshes).
+    pub(crate) fn activate(&mut self, id: TabId) {
+        if id == self.active && self.active_pane().is_some() {
+            return;
+        }
+        self.focus_report(false);
+        self.active = id;
+        self.focus_report(true);
+        if let Some(pane) = self.active_pane_mut() {
+            pane.refresh();
+        }
+    }
+
+    /// Sends a focus in/out report to the active pane, if the app asked for them and the
+    /// window is focused.
+    fn focus_report(&self, focused: bool) {
+        if let Some(pane) = self.active_pane().filter(|_| self.focused)
+            && let Some(bytes) = input::encode_focus(focused, pane.term.mode())
+        {
+            pane.write_input(bytes);
+        }
+    }
+
+    /// Handles a keymap / menu action.
+    pub(crate) fn on_action(&mut self, action: Action) -> Task<Message> {
+        self.menu = None;
+        match action {
+            Action::NewTab => {
+                let profile = self.default_profile();
+                self.open_tab(profile, None);
+            }
+            Action::NewTabHere => self.query_cwd(),
+            Action::CloseTab => return self.close_tab(self.active),
+            Action::NextTab | Action::PrevTab | Action::GoToTab(_) => self.switch(action),
+            Action::RenameTab => return self.start_rename(self.active),
+            Action::RestartTab => self.restart_active(),
+            Action::Copy => {
+                if let Some(text) = self.active_pane().and_then(|p| p.term.selection_text()) {
+                    return clipboard::write(text);
+                }
+            }
+            Action::Paste => return self.update(Message::Paste(PasteSource::Clipboard)),
+            Action::PastePrimary => return self.update(Message::Paste(PasteSource::Primary)),
+            Action::ZoomIn => self.set_font_size(self.font.size_pt + 1.0),
+            Action::ZoomOut => self.set_font_size(self.font.size_pt - 1.0),
+            Action::ZoomReset => self.zoom_reset(),
+            Action::Clear => {
+                if let Some(pane) = self.active_pane_mut() {
+                    pane.term.clear();
+                    pane.refresh();
+                }
+            }
+            Action::ScrollPageUp => return self.update(Message::Scroll(Scroll::PageUp)),
+            Action::ScrollPageDown => return self.update(Message::Scroll(Scroll::PageDown)),
+            Action::ScrollTop => return self.update(Message::Scroll(Scroll::Top)),
+            Action::ScrollBottom => return self.update(Message::Scroll(Scroll::Bottom)),
+            Action::ToggleFullscreen => {
+                self.fullscreen = !self.fullscreen;
+                let mode = if self.fullscreen {
+                    window::Mode::Fullscreen
+                } else {
+                    window::Mode::Windowed
+                };
+                return window::oldest().and_then(move |id| window::set_mode(id, mode));
+            }
+            Action::SplitRight
+            | Action::SplitDown
+            | Action::ClosePane
+            | Action::PaneNav(_)
+            | Action::SelectAll
+            | Action::Reconnect
+            | Action::OpenProfilePicker => {
+                tracing::debug!(%action, "action not implemented yet");
+            }
+        }
+        Task::none()
+    }
+
+    /// `NextTab` / `PrevTab` (wrapping) / `GoToTab(n)` (1-based; out of range is ignored).
+    fn switch(&mut self, action: Action) {
+        let (Some(index), len) = (self.active_index(), self.tabs.len()) else {
+            return;
+        };
+        let target = match action {
+            Action::NextTab => (index + 1) % len,
+            Action::PrevTab => (index + len - 1) % len,
+            Action::GoToTab(n) => usize::from(n).saturating_sub(1),
+            _ => return,
+        };
+        if let Some(id) = self.tabs.get(target).map(|t| t.id) {
+            self.activate(id);
+        }
+    }
+
+    /// Asks the active local pane for its cwd; the reply (`Cwd`, `remote: false`) opens the tab.
+    fn query_cwd(&mut self) {
+        let Some(pane) = self.active_pane() else {
+            return;
+        };
+        if pane.control(SessionInput::QueryCwd) {
+            self.pending_here = Some((pane.id, Instant::now()));
+        }
+    }
+
+    /// Replaces the active tab's pane with a fresh session of the same profile.
+    fn restart_active(&mut self) {
+        let Some(index) = self.active_index() else {
+            return;
+        };
+        let Some(profile) = self.tabs.get(index).map(|t| t.profile.clone()) else {
+            return;
+        };
+        let pane = self.open_pane(&profile, None);
+        if let Some(tab) = self.tabs.get_mut(index) {
+            // Dropping the old pane closes its input channel: the old session ends itself.
+            tab.pane = pane;
+            tab.title_from_osc = None;
+            tab.closing = false;
+        }
+    }
+
+    /// Asks the tab's session to close; the tab goes on `Exited` or after [`CLOSE_GRACE`].
+    /// A tab whose session is already gone is removed at once.
+    pub(crate) fn close_tab(&mut self, id: TabId) -> Task<Message> {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) else {
+            return Task::none();
+        };
+        if tab.closing {
+            return Task::none();
+        }
+        if tab.pane.state == PaneState::Running && tab.pane.control(SessionInput::Close) {
+            tab.closing = true;
+            let pane = tab.pane.id;
+            return self.after(CLOSE_GRACE, Message::CloseTimeout(pane));
+        }
+        self.remove_tab(id)
+    }
+
+    /// Drops tab `id` (its pane closes its session); exits the app after the last tab.
+    fn remove_tab(&mut self, id: TabId) -> Task<Message> {
+        let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
+            return Task::none();
+        };
+        self.tabs.remove(index);
+        if self.renaming.as_ref().is_some_and(|r| r.tab == id) {
+            self.renaming = None;
+        }
+        if self.hovered_tab == Some(id) {
+            self.hovered_tab = None;
+        }
+        if self.tabs.is_empty() {
+            return iced::exit();
+        }
+        if self.active == id {
+            self.menu = None;
+            let next = index.min(self.tabs.len() - 1);
+            if let Some(next) = self.tabs.get(next).map(|t| t.id) {
+                self.activate(next);
+            }
+        }
+        Task::none()
+    }
+
+    pub(crate) fn on_close_timeout(&mut self, pane: PaneId) -> Task<Message> {
+        match self.tabs.iter().find(|t| t.pane.id == pane && t.closing) {
+            Some(tab) => self.remove_tab(tab.id),
+            None => Task::none(),
+        }
+    }
+
+    fn start_rename(&mut self, id: TabId) -> Task<Message> {
+        let Some(tab) = self.tabs.iter().find(|t| t.id == id) else {
+            return Task::none();
+        };
+        let value = tab.title().to_owned();
+        self.activate(id);
+        self.menu = None;
+        self.renaming = Some(Rename { tab: id, value });
+        Task::batch([
+            operation::focus(RENAME_INPUT),
+            operation::select_all(RENAME_INPUT),
+        ])
+    }
+
+    /// Applies the inline rename: sanitized, empty clears the override.
+    pub(crate) fn commit_rename(&mut self) {
+        let Some(rename) = self.renaming.take() else {
+            return;
+        };
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == rename.tab) {
+            let title = sanitize_title(rename.value.trim());
+            tab.title_override = (!title.is_empty()).then_some(title);
+        }
+    }
+
+    /// Tab bar, rename and context-menu messages.
+    pub(crate) fn on_tab_ui(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::ActivateTab(id) => self.activate(id),
+            Message::CloseTab(id) => return self.close_tab(id),
+            Message::HoverTab(id) => self.hovered_tab = id,
+            Message::TabBarCursor(at) => self.tab_bar_cursor = at,
+            Message::StartRename(id) => return self.start_rename(id),
+            Message::RenameInput(value) => {
+                if let Some(rename) = &mut self.renaming {
+                    rename.value = value;
+                }
+            }
+            Message::CommitRename => self.commit_rename(),
+            Message::OpenTabMenu(id) => {
+                self.commit_rename();
+                self.activate(id);
+                self.menu = Some(ContextMenu::tab(self.tab_bar_cursor));
+            }
+            Message::MenuColors => {
+                let anchor = self.menu.as_ref().map_or(self.tab_bar_cursor, |m| m.anchor);
+                self.menu = Some(ContextMenu::tab_colors(anchor));
+                return operation::focus(MENU_INPUT);
+            }
+            Message::MenuInput(value) => {
+                if let Some(input) = self.menu.as_mut().and_then(|m| m.input.as_mut()) {
+                    input.value = value;
+                    input.invalid = false;
+                }
+            }
+            Message::MenuSubmit => return self.submit_menu_input(),
+            Message::SetTabColor(color) => {
+                self.menu = None;
+                let active = self.active;
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == active) {
+                    tab.color = color;
+                }
+            }
+            Message::CloseMenu => self.menu = None,
+            Message::Escape if self.menu.take().is_none() => self.renaming = None,
+            _ => {}
+        }
+        Task::none()
+    }
+
+    /// "Custom hex…": a valid colour applies to the active tab, anything else marks the field.
+    fn submit_menu_input(&mut self) -> Task<Message> {
+        let Some(input) = self.menu.as_mut().and_then(|m| m.input.as_mut()) else {
+            return Task::none();
+        };
+        if let Some(color) = parse_color(&input.value) {
+            return self.update(Message::SetTabColor(Some(color)));
+        }
+        input.invalid = true;
+        Task::none()
+    }
+
+    /// Routes a session event to its pane; events from panes that no longer exist are dropped.
+    pub(crate) fn on_session(&mut self, pane_id: PaneId, event: SessionOutput) -> Task<Message> {
+        let active = self.active;
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.pane.id == pane_id) else {
+            return Task::none();
+        };
+        match event {
+            // Inactive panes keep `dirty` set (no further wakeups) until activated.
+            SessionOutput::Wakeup if tab.id == active => tab.pane.refresh(),
+            SessionOutput::Title(title) => {
+                tab.title_from_osc = (!title.is_empty()).then_some(title);
+            }
+            SessionOutput::Exited(info) => {
+                tracing::info!(?info, "session exited");
+                return self.on_pane_ended(pane_id, PaneState::Exited);
+            }
+            SessionOutput::Error(err) => {
+                tracing::error!(error = %err, "session failed");
+                return self.on_pane_ended(pane_id, PaneState::Crashed);
+            }
+            SessionOutput::Cwd { path, remote } => self.on_cwd(pane_id, path, remote),
+            SessionOutput::Prompt(_, kind) => match kind {},
+            // Not handled yet: bell and OSC 52. Progress, notifications and prompt marks are
+            // logged by the session and ignored here.
+            SessionOutput::Wakeup
+            | SessionOutput::Bell
+            | SessionOutput::ClipboardStore(_)
+            | SessionOutput::Progress(_)
+            | SessionOutput::Notify { .. }
+            | SessionOutput::PromptMark(_) => {}
+        }
+        Task::none()
+    }
+
+    /// Marks the pane ended; a tab that was closing goes away now.
+    fn on_pane_ended(&mut self, pane_id: PaneId, state: PaneState) -> Task<Message> {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.pane.id == pane_id) else {
+            return Task::none();
+        };
+        tab.pane.state = state;
+        tab.pane.refresh();
+        if tab.closing {
+            let id = tab.id;
+            return self.remove_tab(id);
+        }
+        Task::none()
+    }
+
+    /// A cwd report. Attacker-controlled text: only logged sanitized, and only a local
+    /// (`remote: false`) path answering a fresh `NewTabHere` query opens a tab.
+    fn on_cwd(&mut self, pane_id: PaneId, path: PathBuf, remote: bool) {
+        tracing::debug!(
+            cwd = %sanitize_title(&path.to_string_lossy()),
+            remote,
+            "cwd reported"
+        );
+        let Some((pending, asked)) = self.pending_here else {
+            return;
+        };
+        if pending != pane_id || remote || asked.elapsed() > CWD_QUERY_TIMEOUT {
+            return;
+        }
+        self.pending_here = None;
+        let profile = self
+            .tabs
+            .iter()
+            .find(|t| t.pane.id == pane_id)
+            .map(|t| t.profile.clone())
+            .filter(|p| matches!(p.kind, ProfileKind::Local(_)))
+            .unwrap_or_else(Profile::default_shell);
+        self.open_tab(profile, Some(path));
+    }
+}
+
+#[cfg(test)]
+#[path = "actions_tests.rs"]
+mod tests;
