@@ -2,6 +2,27 @@
 
 use fogu_session::SessionOutput;
 use fogu_term::input::KeyInput;
+use fogu_term::{Scroll, SelectionType};
+
+use crate::metrics::CellPos;
+
+/// A step of a mouse selection gesture, in viewport cells.
+#[derive(Clone, Copy, Debug)]
+pub enum SelectEvent {
+    /// Start a new selection of `kind` anchored at `at`.
+    Start {
+        /// Simple / semantic (word) / lines / block.
+        kind: SelectionType,
+        /// Anchor cell.
+        at: CellPos,
+    },
+    /// Move the free end of the selection.
+    Update(CellPos),
+    /// The button was released: copy-on-select.
+    Finish,
+    /// A plain click: drop the selection.
+    Clear,
+}
 
 /// Everything `update` reacts to.
 #[derive(Clone, Debug)]
@@ -25,4 +46,10 @@ pub enum Message {
     Key(KeyInput),
     /// Text committed by the input method for the focused pane.
     Text(String),
+    /// Mouse selection gesture.
+    Select(SelectEvent),
+    /// Scroll the view through history.
+    Scroll(Scroll),
+    /// Copy the selection to CLIPBOARD (Ctrl+Shift+C).
+    Copy,
 }

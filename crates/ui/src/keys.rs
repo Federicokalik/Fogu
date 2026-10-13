@@ -1,8 +1,38 @@
 //! iced key events → GUI-agnostic [`KeyInput`] for `fogu_term::input::encode_key`.
 
+use fogu_term::Scroll;
 use fogu_term::input::{KeyCode, KeyInput, Mods};
 use iced::keyboard::key::Named;
 use iced::keyboard::{Key, Location, Modifiers};
+
+/// A key chord the terminal handles itself instead of sending it to the shell.
+#[derive(Clone, Copy, Debug)]
+pub enum LocalKey {
+    /// Scroll the view through history.
+    Scroll(Scroll),
+    /// Copy the selection to CLIPBOARD.
+    Copy,
+}
+
+/// Hardcoded chords until a keymap exists: Shift+PageUp/PageDown/Home/End scroll,
+/// Ctrl+Shift+C copies.
+pub fn local_key(key: &Key, modifiers: Modifiers) -> Option<LocalKey> {
+    let (shift, ctrl) = (modifiers.shift(), modifiers.control());
+    if !shift || modifiers.alt() || modifiers.logo() {
+        return None;
+    }
+    match key {
+        Key::Character(c) if ctrl && c.eq_ignore_ascii_case("c") => Some(LocalKey::Copy),
+        Key::Named(named) if !ctrl => Some(LocalKey::Scroll(match named {
+            Named::PageUp => Scroll::PageUp,
+            Named::PageDown => Scroll::PageDown,
+            Named::Home => Scroll::Top,
+            Named::End => Scroll::Bottom,
+            _ => return None,
+        })),
+        _ => None,
+    }
+}
 
 /// Converts a key press. `modified_key` is the layout's key with Shift applied (iced's
 /// `KeyPressed::modified_key`); keys the terminal has no encoding for give `None`.
@@ -116,5 +146,28 @@ mod tests {
             None,
         );
         assert_eq!(none, None);
+    }
+
+    #[test]
+    fn local_chords() {
+        let shift = Modifiers::SHIFT;
+        let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
+        let named = |n| Key::Named(n);
+        assert!(matches!(
+            local_key(&named(Named::PageUp), shift),
+            Some(LocalKey::Scroll(Scroll::PageUp))
+        ));
+        assert!(matches!(
+            local_key(&named(Named::End), shift),
+            Some(LocalKey::Scroll(Scroll::Bottom))
+        ));
+        assert!(matches!(
+            local_key(&Key::Character("C".into()), ctrl_shift),
+            Some(LocalKey::Copy)
+        ));
+        // Plain PageUp and Ctrl+C go to the shell.
+        assert!(local_key(&named(Named::PageUp), Modifiers::empty()).is_none());
+        assert!(local_key(&Key::Character("c".into()), Modifiers::CTRL).is_none());
+        assert!(local_key(&named(Named::PageUp), ctrl_shift).is_none());
     }
 }

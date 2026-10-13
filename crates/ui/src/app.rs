@@ -7,12 +7,12 @@ use std::time::Duration;
 use fogu_core::{ColorScheme, LocalProfile, Size};
 use fogu_session::{SessionInput, SessionOutput, SessionRuntime};
 use fogu_term::{RenderSnapshot, Scroll, TermHandle, input};
-use iced::{Element, Subscription, Task, event, window};
+use iced::{Element, Subscription, Task, clipboard, event, window};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
 
-use crate::message::Message;
-use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont};
+use crate::message::{Message, SelectEvent};
+use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
 use crate::palette::Colors;
 use crate::subscription::{EventSlot, session_events};
 use crate::terminal_view::TerminalView;
@@ -26,6 +26,8 @@ const RESIZE_DEBOUNCE: Duration = Duration::from_millis(50);
 const DEFAULT_TITLE: &str = "Fogu";
 /// Alt sends an ESC prefix ("Alt is Meta"); fixed for now.
 const ALT_IS_META: bool = true;
+/// Finishing a mouse selection copies it to PRIMARY.
+const COPY_ON_SELECT: bool = true;
 
 /// Lifecycle of a pane's session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +148,16 @@ impl App {
                     self.send_input(bytes);
                 }
             }
+            Message::Select(event) => return self.on_select(event),
+            Message::Scroll(scroll) => {
+                self.pane.term.scroll_display(scroll);
+                self.refresh();
+            }
+            Message::Copy => {
+                if let Some(text) = self.pane.term.selection_text() {
+                    return clipboard::write(text);
+                }
+            }
         }
         Task::none()
     }
@@ -168,6 +180,29 @@ impl App {
             self.pane.term.scroll_display(Scroll::Bottom);
             self.refresh();
         }
+    }
+
+    /// Applies a selection gesture; viewport cells map to grid lines with the current scroll.
+    fn on_select(&mut self, event: SelectEvent) -> Task<Message> {
+        let offset = self.pane.snapshot.display_offset;
+        let term = &mut self.pane.term;
+        match event {
+            SelectEvent::Start { kind, at } => {
+                term.start_selection(kind, viewport_to_point(at, offset), at.side);
+            }
+            SelectEvent::Update(at) => {
+                term.update_selection(viewport_to_point(at, offset), at.side);
+            }
+            SelectEvent::Clear => term.clear_selection(),
+            SelectEvent::Finish => {
+                return match term.selection_text() {
+                    Some(text) if COPY_ON_SELECT => clipboard::write_primary(text),
+                    _ => Task::none(),
+                };
+            }
+        }
+        self.refresh();
+        Task::none()
     }
 
     fn on_session(&mut self, event: SessionOutput) {

@@ -9,12 +9,13 @@ pub mod input;
 mod snapshot;
 
 pub use alacritty_terminal::grid::Scroll;
-pub use alacritty_terminal::selection::SelectionRange;
+pub use alacritty_terminal::index::{Column, Line, Point, Side};
+pub use alacritty_terminal::selection::{SelectionRange, SelectionType};
 pub use alacritty_terminal::term::{ClipboardType, TermMode};
 pub use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 pub use event_proxy::{
     CLIPBOARD_STORE_MAX_BYTES, EventProxy, Palette, TITLE_MAX_CHARS, TermEvent, default_palette,
     sanitize_title,
 };
-pub use handle::TermHandle;
+pub use handle::{TermHandle, WORD_SEPARATORS};
 pub use snapshot::{Cell, CellFlags, Cursor, RenderSnapshot};

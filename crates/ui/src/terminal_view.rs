@@ -9,7 +9,7 @@ use iced::advanced::input_method::{self, InputMethod};
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Quad};
 use iced::advanced::text::{self, LineHeight, Shaping, Text, Wrapping};
-use iced::advanced::widget::{Tree, Widget};
+use iced::advanced::widget::{Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell, mouse};
 use iced::alignment::Vertical;
 use iced::{
@@ -17,8 +17,10 @@ use iced::{
 };
 
 use crate::keys;
+use crate::keys::LocalKey;
 use crate::message::Message;
 use crate::metrics::CellMetrics;
+use crate::mouse::{Grid, MouseState};
 use crate::palette::{Colors, to_iced};
 use crate::runs::{Style, Underline, cell_style, row_runs};
 
@@ -222,6 +224,45 @@ impl<'a> TerminalView<'a> {
         }
     }
 
+    /// Translucent quads over the selected cells; drawn after the cell backgrounds, so they sit
+    /// under the text (iced draws a layer's quads before its text).
+    fn draw_selection(&self, renderer: &mut iced::Renderer, origin: Point) {
+        let mut color = to_iced(self.colors.foreground());
+        color.a = 0.3;
+        for (row, first, last) in self.snapshot.selection_spans() {
+            let rect = self.cell_rect(origin, first, row, last + 1 - first);
+            let quad = Quad {
+                bounds: rect,
+                ..Quad::default()
+            };
+            renderer::Renderer::fill_quad(renderer, quad, color);
+        }
+    }
+
+    /// A 2 px bar at the right edge showing the viewport's place in history; only drawn while
+    /// scrolled back.
+    fn draw_scroll_indicator(&self, renderer: &mut iced::Renderer, bounds: Rectangle) {
+        let snap = self.snapshot;
+        if snap.display_offset == 0 {
+            return;
+        }
+        let total = cells(snap.history_len + snap.rows).max(1.0);
+        let top = cells(snap.history_len.saturating_sub(snap.display_offset)) / total;
+        let height = (cells(snap.rows) / total * bounds.height).max(4.0);
+        let mut color = to_iced(self.colors.foreground());
+        color.a = 0.5;
+        let quad = Quad {
+            bounds: Rectangle {
+                x: bounds.x + bounds.width - 2.0,
+                y: bounds.y + top * bounds.height,
+                width: 2.0,
+                height,
+            },
+            ..Quad::default()
+        };
+        renderer::Renderer::fill_quad(renderer, quad, color);
+    }
+
     fn draw_overlay(&self, renderer: &mut iced::Renderer, bounds: Rectangle) {
         let Some(label) = self.overlay else { return };
         let row = (self.snapshot.cursor.row + 1).min(self.snapshot.rows.saturating_sub(1));
@@ -257,6 +298,14 @@ fn fill(renderer: &mut iced::Renderer, bounds: Rectangle, color: Rgb) {
 }
 
 impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<MouseState>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(MouseState::default())
+    }
+
     fn size(&self) -> Size<Length> {
         Size::new(Length::Fill, Length::Fill)
     }
@@ -272,7 +321,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
 
     fn update(
         &mut self,
-        _tree: &mut Tree,
+        tree: &mut Tree,
         event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
@@ -288,24 +337,44 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
         if (usize::from(cols), usize::from(rows)) != (self.snapshot.cols, self.snapshot.rows) {
             shell.publish(Message::GridResized { cols, rows });
         }
+        if let Event::Mouse(mouse::Event::ButtonPressed(_)) = event
+            && cursor.is_over(bounds)
+            && !self.focused
+        {
+            shell.publish(Message::Focused(true));
+        }
+        let grid = Grid {
+            bounds,
+            metrics: self.metrics,
+            cols: self.snapshot.cols,
+            rows: self.snapshot.rows,
+        };
+        if tree
+            .state
+            .downcast_mut::<MouseState>()
+            .update(event, cursor, &grid, shell)
+        {
+            shell.capture_event();
+            return;
+        }
         match event {
-            Event::Mouse(mouse::Event::ButtonPressed(_)) if cursor.is_over(bounds) => {
-                if !self.focused {
-                    shell.publish(Message::Focused(true));
-                }
-            }
             _ if !self.focused => {}
             Event::Keyboard(keyboard::Event::KeyPressed {
+                key,
                 modified_key,
                 location,
                 modifiers,
                 text,
                 ..
             }) => {
-                if let Some(key) =
-                    keys::key_input(modified_key, *location, *modifiers, text.as_deref())
-                {
-                    shell.publish(Message::Key(key));
+                let message = match keys::local_key(key, *modifiers) {
+                    Some(LocalKey::Scroll(scroll)) => Some(Message::Scroll(scroll)),
+                    Some(LocalKey::Copy) => Some(Message::Copy),
+                    None => keys::key_input(modified_key, *location, *modifiers, text.as_deref())
+                        .map(Message::Key),
+                };
+                if let Some(message) = message {
+                    shell.publish(message);
                     shell.capture_event();
                 }
             }
@@ -339,7 +408,9 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
         fill(renderer, bounds, self.colors.background());
         let origin = bounds.position();
         self.draw_runs(renderer, origin, bounds);
+        self.draw_selection(renderer, origin);
         self.draw_cursor(renderer, origin, bounds);
+        self.draw_scroll_indicator(renderer, bounds);
         self.draw_overlay(renderer, bounds);
     }
 }

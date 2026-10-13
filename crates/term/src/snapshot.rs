@@ -59,7 +59,7 @@ pub struct RenderSnapshot {
     pub display_offset: usize,
     /// Lines currently stored in scrollback history.
     pub history_len: usize,
-    /// Active selection in grid coordinates.
+    /// Active selection in grid coordinates (see [`selection_spans`](Self::selection_spans)).
     pub selection: Option<SelectionRange>,
     /// Terminal modes at snapshot time.
     pub mode: TermMode,
@@ -116,6 +116,45 @@ impl RenderSnapshot {
     /// Iterates over the visible rows.
     pub fn rows(&self) -> impl Iterator<Item = &[Cell]> {
         self.cells.chunks(self.cols.max(1))
+    }
+
+    /// Selected cells of the visible rows as `(row, first_col, last_col)`, both columns
+    /// inclusive, top row first.
+    pub fn selection_spans(&self) -> Vec<(usize, usize, usize)> {
+        let Some(range) = self.selection else {
+            return Vec::new();
+        };
+        let last = self.cols.saturating_sub(1);
+        let (left, right) = (
+            range.start.column.0.min(range.end.column.0),
+            range.start.column.0.max(range.end.column.0),
+        );
+        let offset = i64::try_from(self.display_offset).unwrap_or(i64::MAX);
+        (0..self.rows)
+            .filter_map(|row| {
+                let line = i64::try_from(row).ok()? - offset;
+                let (start, end) = (i64::from(range.start.line.0), i64::from(range.end.line.0));
+                if line < start || line > end {
+                    return None;
+                }
+                let span = if range.is_block {
+                    (left, right)
+                } else {
+                    let first = if line == start {
+                        range.start.column.0
+                    } else {
+                        0
+                    };
+                    let end_col = if line == end {
+                        range.end.column.0
+                    } else {
+                        last
+                    };
+                    (first, end_col)
+                };
+                Some((row, span.0.min(last), span.1.min(last)))
+            })
+            .collect()
     }
 
     /// Visible rows as plain text, one line per row, trailing spaces trimmed. Wide-char spacers

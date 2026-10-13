@@ -1,12 +1,14 @@
 //! `fogu-ui`: the iced application (tabs, split container, terminal widget, settings,
 //! palette, prompts).
 //!
-//! One window with one pane running a live local shell, with keyboard input.
+//! One window with one pane running a live local shell, with keyboard input, scrollback and
+//! mouse selection + copy.
 
 mod app;
 mod keys;
 mod message;
 mod metrics;
+mod mouse;
 mod palette;
 mod runs;
 mod subscription;

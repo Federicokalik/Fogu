@@ -9,6 +9,8 @@ use std::time::Instant;
 use alacritty_terminal::Term;
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Boundary, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
@@ -18,6 +20,9 @@ use crate::snapshot::RenderSnapshot;
 
 /// Maximum bytes parsed per `Term` lock, so the renderer can always grab it within a frame.
 const MAX_BYTES_PER_LOCK: usize = 64 * 1024;
+
+/// The default word separators: the characters that end a double-click (semantic) selection.
+pub const WORD_SEPARATORS: &str = " ()[]{}'\"";
 
 /// Grid size in cells.
 #[derive(Clone, Copy, Debug)]
@@ -79,6 +84,7 @@ impl TermHandle {
         // OSC 52 read is also disabled here (`OnlyCopy`); the proxy drops it regardless.
         let config = Config {
             scrolling_history: scrollback_lines,
+            semantic_escape_chars: WORD_SEPARATORS.to_owned(),
             ..Config::default()
         };
         let size = Size {
@@ -155,6 +161,40 @@ impl TermHandle {
     /// Scrolls the viewport through history.
     pub fn scroll_display(&mut self, scroll: Scroll) {
         self.term.lock().scroll_display(scroll);
+    }
+
+    /// Starts a new selection of `kind` at grid `point` (clamped to the grid; line 0 is the top
+    /// of the live screen, negative lines are history).
+    pub fn start_selection(&mut self, kind: SelectionType, point: Point, side: Side) {
+        let mut term = self.term.lock();
+        let point = point.grid_clamp(&*term, Boundary::Grid);
+        term.selection = Some(Selection::new(kind, point, side));
+    }
+
+    /// Moves the free end of the current selection to grid `point` (clamped); no-op without one.
+    pub fn update_selection(&mut self, point: Point, side: Side) {
+        let mut term = self.term.lock();
+        let point = point.grid_clamp(&*term, Boundary::Grid);
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side);
+        }
+    }
+
+    /// Drops the current selection.
+    pub fn clear_selection(&mut self) {
+        self.term.lock().selection = None;
+    }
+
+    /// Selected text with trailing whitespace trimmed on every line; `None` when nothing is
+    /// selected.
+    pub fn selection_text(&self) -> Option<String> {
+        let text = self.term.lock().selection_to_string()?;
+        let trimmed = text
+            .split('\n')
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!trimmed.trim().is_empty()).then_some(trimmed)
     }
 
     /// Copies the visible rows under a short lock.

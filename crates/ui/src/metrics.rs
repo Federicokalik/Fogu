@@ -4,11 +4,12 @@
 //! aliases), falling back to the first monospace face; `cell_w = advance('0')`,
 //! `cell_h = ascent + descent + line_gap`, both rounded to whole device pixels.
 
-use iced::Font;
+use fogu_term::{Column, Line, Point, Side};
 use iced::advanced::graphics::text::cosmic_text::fontdb::{self, Database, Query};
 use iced::advanced::graphics::text::cosmic_text::skrifa::instance::{LocationRef, Size};
 use iced::advanced::graphics::text::cosmic_text::skrifa::{FontRef, MetadataProvider as _};
 use iced::advanced::graphics::text::font_system;
+use iced::{Font, Vector};
 
 /// Requested terminal font (fixed default).
 #[derive(Clone, Debug, PartialEq)]
@@ -104,6 +105,57 @@ pub fn round_to_device(logical: f32, scale: f32) -> (f32, u16) {
     #[expect(clippy::cast_sign_loss, reason = "clamped to 1..=u16::MAX above")]
     let px_u = px as u16;
     (px / scale, px_u)
+}
+
+/// A viewport cell under the mouse (row 0 = top visible row) and which half of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellPos {
+    /// Column, 0-based.
+    pub col: usize,
+    /// Viewport row, 0-based.
+    pub row: usize,
+    /// Left or right half of the cell (selection anchoring).
+    pub side: Side,
+}
+
+/// Maps `offset` (px from the grid's top-left corner) to the cell under it, clamped to the
+/// `cols` × `rows` grid: left of the grid is column 0's left half, right of it the last column's
+/// right half, above/below it the first/last row.
+pub fn pixel_to_cell(offset: Vector, m: &CellMetrics, cols: usize, rows: usize) -> CellPos {
+    let index = |len: f32, cell: f32, count: usize| {
+        let last = count.saturating_sub(1);
+        if len.is_nan() || len < 0.0 {
+            return (0, false);
+        }
+        let n = (len / cell).floor();
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "non-negative; `as` saturates huge values"
+        )]
+        let n = n as usize;
+        if n > last { (last, true) } else { (n, false) }
+    };
+    let (col, past_right) = index(offset.x, m.cell_w, cols);
+    let (row, _) = index(offset.y, m.cell_h, rows);
+    let in_cell = offset.x - cells_f32(col) * m.cell_w;
+    let side = if past_right || in_cell > m.cell_w / 2.0 {
+        Side::Right
+    } else {
+        Side::Left
+    };
+    CellPos { col, row, side }
+}
+
+/// Grid point of a viewport cell while the view is scrolled `display_offset` lines back
+/// (grid line 0 is the top of the live screen, history lines are negative).
+pub fn viewport_to_point(pos: CellPos, display_offset: usize) -> Point {
+    let row = i32::try_from(pos.row).unwrap_or(i32::MAX);
+    let offset = i32::try_from(display_offset).unwrap_or(i32::MAX);
+    Point::new(Line(row.saturating_sub(offset)), Column(pos.col))
+}
+
+fn cells_f32(n: usize) -> f32 {
+    f32::from(u16::try_from(n).unwrap_or(u16::MAX))
 }
 
 /// Resolves `family` in iced's global font database and reads its metrics.
@@ -227,6 +279,45 @@ mod tests {
         assert_eq!((hidpi.cell_w_px, hidpi.cell_h_px), (19, 37));
         // A broken scale factor falls back to 1.0.
         assert_eq!(CellMetrics::new(units, 16.0, 0.0), m);
+    }
+
+    #[test]
+    fn pixel_to_cell_table() {
+        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0);
+        // cell 10 × 19, grid 80 × 24
+        let (l, r) = (Side::Left, Side::Right);
+        let cases = [
+            ((0.0, 0.0), (0, 0, l)),
+            ((4.9, 18.9), (0, 0, l)),
+            ((5.1, 19.0), (0, 1, r)),
+            ((10.0, 0.0), (1, 0, l)),
+            ((799.0, 455.0), (79, 23, r)),
+            ((5000.0, 5000.0), (79, 23, r)),
+            ((-30.0, -30.0), (0, 0, l)),
+            ((f32::NAN, 40.0), (0, 2, l)),
+        ];
+        for ((x, y), (col, row, side)) in cases {
+            let got = pixel_to_cell(Vector::new(x, y), &m, 80, 24);
+            assert_eq!(got, CellPos { col, row, side }, "({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn viewport_rows_map_to_grid_lines() {
+        let pos = |row| CellPos {
+            col: 3,
+            row,
+            side: Side::Left,
+        };
+        let cases = [(0, 0, 0), (5, 0, 5), (0, 50, -50), (23, 50, -27)];
+        for (row, offset, line) in cases {
+            let p = viewport_to_point(pos(row), offset);
+            assert_eq!(
+                (p.line, p.column),
+                (Line(line), Column(3)),
+                "{row} @ {offset}"
+            );
+        }
     }
 
     #[test]

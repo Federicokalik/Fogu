@@ -1,0 +1,9 @@
+---
+source: crates/term/tests/selection.rs
+expression: t.dump_grid()
+---
+47
+48
+49
+50
+51
