@@ -6,13 +6,14 @@ use std::time::Duration;
 
 use fogu_core::{ColorScheme, LocalProfile, Size};
 use fogu_session::{SessionInput, SessionOutput, SessionRuntime};
-use fogu_term::{RenderSnapshot, Scroll, TermHandle, input};
+use fogu_term::{RenderSnapshot, Scroll, TermHandle, TermMode, input};
 use iced::{Element, Subscription, Task, clipboard, event, window};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
 
-use crate::message::{Message, SelectEvent};
+use crate::message::{Message, PasteSource, SelectEvent};
 use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
+use crate::modal::{Modal, ModalButton, overlay};
 use crate::palette::Colors;
 use crate::subscription::{EventSlot, session_events};
 use crate::terminal_view::TerminalView;
@@ -28,6 +29,16 @@ const DEFAULT_TITLE: &str = "Fogu";
 const ALT_IS_META: bool = true;
 /// Finishing a mouse selection copies it to PRIMARY.
 const COPY_ON_SELECT: bool = true;
+/// Ask before pasting text that spans several lines.
+const WARN_ON_MULTILINE_PASTE: bool = true;
+/// Trim whitespace around pasted text.
+const TRIM_WHITESPACE_ON_PASTE: bool = true;
+/// Replace newlines in pasted text with spaces.
+const REPLACE_NEWLINES_WITH_SPACES_ON_PASTE: bool = false;
+/// Smallest font size zoom allows, in points.
+const MIN_FONT_PT: f32 = 6.0;
+/// Largest font size zoom allows, in points.
+const MAX_FONT_PT: f32 = 40.0;
 
 /// Lifecycle of a pane's session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +62,13 @@ pub struct Pane {
     snapshot: RenderSnapshot,
 }
 
+/// A multi-line/large paste waiting on the user's "Paste"/"Cancel" choice in the modal.
+#[derive(Debug)]
+struct PendingPaste {
+    text: String,
+    warning: input::PasteWarning,
+}
+
 /// The whole application state.
 #[derive(Debug)]
 pub struct App {
@@ -65,6 +83,7 @@ pub struct App {
     focused: bool,
     resize_generation: u64,
     pending_resize: Option<Size>,
+    pending_paste: Option<PendingPaste>,
 }
 
 impl App {
@@ -111,6 +130,7 @@ impl App {
             focused: true,
             resize_generation: 0,
             pending_resize: None,
+            pending_paste: None,
         };
         let scale = window::oldest()
             .and_then(window::scale_factor)
@@ -158,8 +178,92 @@ impl App {
                     return clipboard::write(text);
                 }
             }
+            Message::Paste(source) => {
+                return match source {
+                    PasteSource::Clipboard => clipboard::read(),
+                    PasteSource::Primary => clipboard::read_primary(),
+                }
+                .map(Message::PasteReady);
+            }
+            Message::PasteReady(text) => self.on_paste_ready(text),
+            Message::ConfirmPaste => {
+                if let Some(pending) = self.pending_paste.take() {
+                    self.paste_now(&pending.text);
+                }
+            }
+            Message::CancelPaste => self.pending_paste = None,
+            Message::ZoomIn => self.set_font_size(self.font.size_pt + 1.0),
+            Message::ZoomOut => self.set_font_size(self.font.size_pt - 1.0),
+            Message::ZoomReset => self.set_font_size(FontSpec::default().size_pt),
+            Message::Clear => {
+                self.pane.term.clear();
+                self.refresh();
+            }
         }
         Task::none()
+    }
+
+    /// A clipboard read for [`Message::Paste`] completed: confirm multi-line/large pastes,
+    /// otherwise send it straight away. `None`/empty means nothing to paste.
+    fn on_paste_ready(&mut self, text: Option<String>) {
+        let Some(text) = text.filter(|t| !t.is_empty()) else {
+            return;
+        };
+        let warning = WARN_ON_MULTILINE_PASTE
+            .then(|| input::needs_confirmation(&text))
+            .flatten();
+        match warning {
+            Some(warning) => self.pending_paste = Some(PendingPaste { text, warning }),
+            None => self.paste_now(&text),
+        }
+    }
+
+    /// Sanitises and sends `text` to the session..
+    fn paste_now(&mut self, text: &str) {
+        let opts = input::PasteOpts {
+            bracketed_requested: self.pane.term.mode().contains(TermMode::BRACKETED_PASTE),
+            trim_whitespace: TRIM_WHITESPACE_ON_PASTE,
+            newlines_to_spaces: REPLACE_NEWLINES_WITH_SPACES_ON_PASTE,
+        };
+        self.send_input(input::encode_paste(text, opts));
+    }
+
+    /// Clamps to [`MIN_FONT_PT`]..=[`MAX_FONT_PT`] and recomputes cell metrics; the next frame's
+    /// `GridResized` picks up the new grid size and resizes the
+    /// PTY, same as a window resize.
+    fn set_font_size(&mut self, size_pt: f32) {
+        self.font.size_pt = size_pt.clamp(MIN_FONT_PT, MAX_FONT_PT);
+        self.metrics = CellMetrics::new(self.resolved.units, self.font.size_px(), self.scale);
+        self.pane
+            .term
+            .set_cell_size_px(self.metrics.cell_w_px, self.metrics.cell_h_px);
+    }
+
+    /// The pending paste's confirmation modal, if any.
+    fn paste_modal(&self) -> Option<Modal> {
+        let pending = self.pending_paste.as_ref()?;
+        let body = if pending.warning.lines > 1 {
+            format!(
+                "Paste {} lines ({} bytes)?",
+                pending.warning.lines, pending.warning.bytes
+            )
+        } else {
+            format!("Paste {} bytes with no line breaks?", pending.warning.bytes)
+        };
+        Some(Modal {
+            title: "Paste",
+            body,
+            buttons: vec![
+                ModalButton {
+                    label: "Paste",
+                    on_press: Message::ConfirmPaste,
+                },
+                ModalButton {
+                    label: "Cancel",
+                    on_press: Message::CancelPaste,
+                },
+            ],
+        })
     }
 
     /// Sends encoded keys to the session without ever blocking the UI, then scrolls to the
@@ -284,20 +388,21 @@ impl App {
 
     /// The single pane.
     pub fn view(&self) -> Element<'_, Message> {
-        let overlay = match self.pane.state {
+        let status = match self.pane.state {
             PaneState::Running => None,
             PaneState::Exited => Some("[process exited]"),
             PaneState::Crashed => Some("[crashed — see log]"),
         };
-        TerminalView::new(
+        let term_view = TerminalView::new(
             &self.pane.snapshot,
             &self.colors,
             self.metrics,
             self.resolved.font,
             self.focused,
-            overlay,
+            status,
         )
-        .into()
+        .into();
+        overlay(term_view, self.paste_modal())
     }
 
     /// Session events plus window focus/scale changes.

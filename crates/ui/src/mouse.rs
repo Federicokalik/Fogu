@@ -10,13 +10,15 @@ use iced::advanced::mouse::{self, Button, Click, ScrollDelta, click};
 use iced::keyboard::{self, Modifiers};
 use iced::{Event, Point, Rectangle, window};
 
-use crate::message::{Message, SelectEvent};
+use crate::message::{Message, PasteSource, SelectEvent};
 use crate::metrics::{CellMetrics, CellPos, pixel_to_cell};
 
 /// Scrollback lines per wheel notch.
 const LINES_PER_NOTCH: f32 = 3.0;
 /// Auto-scroll pace while drag-selecting past the top/bottom edge.
 const AUTOSCROLL_EVERY: Duration = Duration::from_millis(50);
+/// Middle-click pastes PRIMARY.
+const PASTE_ON_MIDDLE_CLICK: bool = true;
 
 /// Where the grid sits on screen.
 #[derive(Clone, Copy, Debug)]
@@ -98,6 +100,12 @@ impl MouseState {
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(grid.bounds) => {
                 self.wheel(*delta, grid, shell);
+                return true;
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Middle))
+                if PASTE_ON_MIDDLE_CLICK && cursor.is_over(grid.bounds) =>
+            {
+                shell.publish(Message::Paste(PasteSource::Primary));
                 return true;
             }
             Event::Window(window::Event::RedrawRequested(now)) => {

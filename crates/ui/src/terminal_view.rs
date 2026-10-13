@@ -370,6 +370,11 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
                 let message = match keys::local_key(key, *modifiers) {
                     Some(LocalKey::Scroll(scroll)) => Some(Message::Scroll(scroll)),
                     Some(LocalKey::Copy) => Some(Message::Copy),
+                    Some(LocalKey::Paste(source)) => Some(Message::Paste(source)),
+                    Some(LocalKey::ZoomIn) => Some(Message::ZoomIn),
+                    Some(LocalKey::ZoomOut) => Some(Message::ZoomOut),
+                    Some(LocalKey::ZoomReset) => Some(Message::ZoomReset),
+                    Some(LocalKey::Clear) => Some(Message::Clear),
                     None => keys::key_input(modified_key, *location, *modifiers, text.as_deref())
                         .map(Message::Key),
                 };

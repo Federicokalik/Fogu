@@ -24,6 +24,15 @@ pub enum SelectEvent {
     Clear,
 }
 
+/// Which clipboard a paste reads from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasteSource {
+    /// Ctrl+Shift+V / Shift+Insert.
+    Clipboard,
+    /// Middle-click.
+    Primary,
+}
+
 /// Everything `update` reacts to.
 #[derive(Clone, Debug)]
 pub enum Message {
@@ -52,4 +61,20 @@ pub enum Message {
     Scroll(Scroll),
     /// Copy the selection to CLIPBOARD (Ctrl+Shift+C).
     Copy,
+    /// Read `source`'s current text and maybe paste it (Ctrl+Shift+V, Shift+Insert, middle-click).
+    Paste(PasteSource),
+    /// The clipboard read for a [`Message::Paste`] completed.
+    PasteReady(Option<String>),
+    /// The user confirmed the pending multi-line/large paste in the modal.
+    ConfirmPaste,
+    /// The user cancelled it.
+    CancelPaste,
+    /// Grow the font by 1 pt (Ctrl+=).
+    ZoomIn,
+    /// Shrink the font by 1 pt (Ctrl+-).
+    ZoomOut,
+    /// Reset the font to its default size (Ctrl+0).
+    ZoomReset,
+    /// Clear the screen and scrollback (Ctrl+Shift+L).
+    Clear,
 }

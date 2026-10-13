@@ -13,7 +13,7 @@ use alacritty_terminal::index::{Boundary, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, TermMode};
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{ClearMode, Handler as _, Processor};
 
 use crate::event_proxy::{EventProxy, Palette, Shared, TermEvent, default_palette, lock};
 use crate::snapshot::RenderSnapshot;
@@ -161,6 +161,15 @@ impl TermHandle {
     /// Scrolls the viewport through history.
     pub fn scroll_display(&mut self, scroll: Scroll) {
         self.term.lock().scroll_display(scroll);
+    }
+
+    /// Clears the visible screen and the scrollback history (the "Clear terminal" action),
+    /// then scrolls back to the bottom.
+    pub fn clear(&mut self) {
+        let mut term = self.term.lock();
+        term.clear_screen(ClearMode::All);
+        term.clear_screen(ClearMode::Saved);
+        term.scroll_display(Scroll::Bottom);
     }
 
     /// Starts a new selection of `kind` at grid `point` (clamped to the grid; line 0 is the top

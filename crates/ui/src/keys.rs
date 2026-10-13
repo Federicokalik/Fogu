@@ -5,6 +5,8 @@ use fogu_term::input::{KeyCode, KeyInput, Mods};
 use iced::keyboard::key::Named;
 use iced::keyboard::{Key, Location, Modifiers};
 
+use crate::message::PasteSource;
+
 /// A key chord the terminal handles itself instead of sending it to the shell.
 #[derive(Clone, Copy, Debug)]
 pub enum LocalKey {
@@ -12,18 +14,39 @@ pub enum LocalKey {
     Scroll(Scroll),
     /// Copy the selection to CLIPBOARD.
     Copy,
+    /// Paste from `source`.
+    Paste(PasteSource),
+    /// Grow the font by 1 pt.
+    ZoomIn,
+    /// Shrink the font by 1 pt.
+    ZoomOut,
+    /// Reset the font to its default size.
+    ZoomReset,
+    /// Clear the screen and scrollback.
+    Clear,
 }
 
 /// Hardcoded chords until a keymap exists: Shift+PageUp/PageDown/Home/End scroll,
-/// Ctrl+Shift+C copies.
+/// Ctrl+Shift+C copies, Ctrl+Shift+V / Shift+Insert pastes CLIPBOARD, Ctrl+Shift+L clears,
+/// Ctrl+=/Ctrl+-/Ctrl+0 zoom in/out/reset.
 pub fn local_key(key: &Key, modifiers: Modifiers) -> Option<LocalKey> {
-    let (shift, ctrl) = (modifiers.shift(), modifiers.control());
-    if !shift || modifiers.alt() || modifiers.logo() {
+    if modifiers.alt() || modifiers.logo() {
         return None;
     }
+    let (shift, ctrl) = (modifiers.shift(), modifiers.control());
     match key {
-        Key::Character(c) if ctrl && c.eq_ignore_ascii_case("c") => Some(LocalKey::Copy),
-        Key::Named(named) if !ctrl => Some(LocalKey::Scroll(match named {
+        Key::Character(c) if ctrl && shift && c.eq_ignore_ascii_case("c") => Some(LocalKey::Copy),
+        Key::Character(c) if ctrl && shift && c.eq_ignore_ascii_case("v") => {
+            Some(LocalKey::Paste(PasteSource::Clipboard))
+        }
+        Key::Character(c) if ctrl && shift && c.eq_ignore_ascii_case("l") => Some(LocalKey::Clear),
+        Key::Character(c) if ctrl && !shift && c.as_str() == "=" => Some(LocalKey::ZoomIn),
+        Key::Character(c) if ctrl && !shift && c.as_str() == "-" => Some(LocalKey::ZoomOut),
+        Key::Character(c) if ctrl && !shift && c.as_str() == "0" => Some(LocalKey::ZoomReset),
+        Key::Named(Named::Insert) if shift && !ctrl => {
+            Some(LocalKey::Paste(PasteSource::Clipboard))
+        }
+        Key::Named(named) if shift && !ctrl => Some(LocalKey::Scroll(match named {
             Named::PageUp => Scroll::PageUp,
             Named::PageDown => Scroll::PageDown,
             Named::Home => Scroll::Top,
@@ -165,9 +188,37 @@ mod tests {
             local_key(&Key::Character("C".into()), ctrl_shift),
             Some(LocalKey::Copy)
         ));
-        // Plain PageUp and Ctrl+C go to the shell.
+        assert!(matches!(
+            local_key(&Key::Character("V".into()), ctrl_shift),
+            Some(LocalKey::Paste(PasteSource::Clipboard))
+        ));
+        assert!(matches!(
+            local_key(&named(Named::Insert), shift),
+            Some(LocalKey::Paste(PasteSource::Clipboard))
+        ));
+        assert!(matches!(
+            local_key(&Key::Character("L".into()), ctrl_shift),
+            Some(LocalKey::Clear)
+        ));
+        let ctrl = Modifiers::CTRL;
+        assert!(matches!(
+            local_key(&Key::Character("=".into()), ctrl),
+            Some(LocalKey::ZoomIn)
+        ));
+        assert!(matches!(
+            local_key(&Key::Character("-".into()), ctrl),
+            Some(LocalKey::ZoomOut)
+        ));
+        assert!(matches!(
+            local_key(&Key::Character("0".into()), ctrl),
+            Some(LocalKey::ZoomReset)
+        ));
+        // Plain PageUp and Ctrl+C go to the shell; zoom chords need Ctrl without Shift; a plain
+        // Insert (no Shift) is not a local paste.
         assert!(local_key(&named(Named::PageUp), Modifiers::empty()).is_none());
         assert!(local_key(&Key::Character("c".into()), Modifiers::CTRL).is_none());
         assert!(local_key(&named(Named::PageUp), ctrl_shift).is_none());
+        assert!(local_key(&Key::Character("=".into()), ctrl_shift).is_none());
+        assert!(local_key(&named(Named::Insert), Modifiers::empty()).is_none());
     }
 }
