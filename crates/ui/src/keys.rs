@@ -82,13 +82,18 @@ pub fn key_input(
     Some(KeyInput {
         key,
         text: text.map(str::to_owned),
-        mods: Mods {
-            shift: modifiers.shift(),
-            alt: modifiers.alt(),
-            ctrl: modifiers.control(),
-            logo: modifiers.logo(),
-        },
+        mods: mods(modifiers),
     })
+}
+
+/// iced modifiers as the encoder's [`Mods`].
+pub fn mods(modifiers: Modifiers) -> Mods {
+    Mods {
+        shift: modifiers.shift(),
+        alt: modifiers.alt(),
+        ctrl: modifiers.control(),
+        logo: modifiers.logo(),
+    }
 }
 
 fn named_key(named: Named, numpad: bool) -> Option<KeyCode> {

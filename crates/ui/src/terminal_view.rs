@@ -348,6 +348,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
             metrics: self.metrics,
             cols: self.snapshot.cols,
             rows: self.snapshot.rows,
+            mode: self.snapshot.mode,
         };
         if tree
             .state
@@ -396,6 +397,27 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
                 });
             }
             _ => {}
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+        _renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        if !cursor.is_over(layout.bounds()) {
+            mouse::Interaction::None
+        } else if tree
+            .state
+            .downcast_ref::<MouseState>()
+            .reporting(self.snapshot.mode)
+        {
+            mouse::Interaction::Idle
+        } else {
+            mouse::Interaction::Text
         }
     }
 

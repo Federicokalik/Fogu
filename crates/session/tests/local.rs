@@ -89,8 +89,12 @@ fn input_reaches_interactive_shell() {
         .input
         .try_send(SessionInput::Data(Bytes::from_static(b"echo abc\n")))
         .unwrap();
+    // The input may be echoed before the shell prints its prompt, so the output can land after
+    // the prompt ("$ abc") instead of on its own line: match any non-echo line ending in "abc".
     wait_until(&rt, &mut session, &view, |_, v| {
-        v.dump_grid().lines().any(|line| line.trim() == "abc")
+        v.dump_grid()
+            .lines()
+            .any(|line| line.trim_end().ends_with("abc") && !line.contains("echo"))
     });
 }
 

@@ -1,15 +1,17 @@
 //! Local mouse gestures of the terminal widget: selection (simple / word / line / block), wheel
-//! scrollback and auto-scroll while drag-selecting past an edge. Everything stays local;
-//! there is no mouse reporting yet.
+//! scrollback and auto-scroll while drag-selecting past an edge — plus mouse reporting to the
+//! application: every mouse event first goes through `mouse_disposition` (Shift → local).
 
 use std::time::{Duration, Instant};
 
-use fogu_term::{Scroll, SelectionType};
+use fogu_term::input::{self, Direction, Disposition, MouseAction, mouse_disposition};
+use fogu_term::{Scroll, SelectionType, TermMode};
 use iced::advanced::Shell;
 use iced::advanced::mouse::{self, Button, Click, ScrollDelta, click};
 use iced::keyboard::{self, Modifiers};
 use iced::{Event, Point, Rectangle, window};
 
+use crate::keys;
 use crate::message::{Message, PasteSource, SelectEvent};
 use crate::metrics::{CellMetrics, CellPos, pixel_to_cell};
 
@@ -31,6 +33,8 @@ pub struct Grid {
     pub cols: usize,
     /// Visible rows.
     pub rows: usize,
+    /// Terminal modes (mouse tracking, alternate screen, ...).
+    pub mode: TermMode,
 }
 
 impl Grid {
@@ -41,6 +45,12 @@ impl Grid {
             self.cols,
             self.rows,
         )
+    }
+
+    /// `(col, row)` under `p`, clamped to the grid.
+    fn cell(&self, p: Point) -> (usize, usize) {
+        let at = self.cell_at(p);
+        (at.col, at.row)
     }
 }
 
@@ -64,6 +74,12 @@ pub struct MouseState {
     /// Fractional wheel lines not yet scrolled (trackpads send pixels).
     wheel_lines: f32,
     last_autoscroll: Option<Instant>,
+    /// Button whose press was reported; its release and drag motion are reported too.
+    report_held: Option<input::Button>,
+    /// Cell of the last report: motion is reported only when the pointer enters a new cell.
+    report_cell: Option<(usize, usize)>,
+    /// Fractional wheel notches not yet reported / sent as arrow keys.
+    report_wheel: f32,
 }
 
 impl MouseState {
@@ -75,6 +91,11 @@ impl MouseState {
         grid: &Grid,
         shell: &mut Shell<'_, Message>,
     ) -> bool {
+        if let Event::Mouse(mouse_event) = event
+            && self.report(mouse_event, cursor, grid, shell)
+        {
+            return true;
+        }
         match event {
             Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => self.modifiers = *m,
             Event::Mouse(mouse::Event::ButtonPressed(Button::Left)) => {
@@ -205,5 +226,148 @@ impl MouseState {
         }
         let last = self.last_autoscroll.unwrap_or(now);
         shell.request_redraw_at(last + AUTOSCROLL_EVERY);
+    }
+}
+
+fn report_button(button: Button) -> Option<input::Button> {
+    Some(match button {
+        Button::Left => input::Button::Left,
+        Button::Middle => input::Button::Middle,
+        Button::Right => input::Button::Right,
+        Button::Back => input::Button::Back,
+        Button::Forward => input::Button::Forward,
+        Button::Other(_) => return None,
+    })
+}
+
+impl MouseState {
+    /// Whether the pointer belongs to the application right now (arrow cursor) rather than to
+    /// local selection (I-beam).
+    pub fn reporting(&self, mode: TermMode) -> bool {
+        let action = MouseAction::Motion(None);
+        mouse_disposition(action, keys::mods(self.modifiers), mode) == Disposition::Report
+    }
+
+    /// Sends `event` to the application when `mouse_disposition` says so; `false` leaves it to
+    /// the local gestures.
+    fn report(
+        &mut self,
+        event: &mouse::Event,
+        cursor: mouse::Cursor,
+        grid: &Grid,
+        shell: &mut Shell<'_, Message>,
+    ) -> bool {
+        let mods = keys::mods(self.modifiers);
+        match *event {
+            // A local selection drag keeps the mouse until it ends.
+            _ if self.drag.is_some() => false,
+            mouse::Event::ButtonPressed(b) => {
+                let (Some(button), Some(p)) = (report_button(b), cursor.position_over(grid.bounds))
+                else {
+                    return false;
+                };
+                let action = MouseAction::Press(button);
+                if mouse_disposition(action, mods, grid.mode) != Disposition::Report {
+                    return false;
+                }
+                self.report_held = Some(button);
+                self.send(action, grid.cell(p), grid, shell);
+                true
+            }
+            mouse::Event::ButtonReleased(b) => {
+                let Some(button) = report_button(b).filter(|b| self.report_held == Some(*b)) else {
+                    return false;
+                };
+                self.report_held = None;
+                let at = cursor.position().map(|p| grid.cell(p));
+                let at = at.or(self.report_cell).unwrap_or_default();
+                self.send(MouseAction::Release(button), at, grid, shell);
+                true
+            }
+            mouse::Event::CursorMoved { position } => {
+                let held = self.report_held;
+                let action = MouseAction::Motion(held);
+                let ours = held.is_some()
+                    || (cursor.is_over(grid.bounds)
+                        && mouse_disposition(action, mods, grid.mode) == Disposition::Report);
+                let at = grid.cell(position);
+                if ours && self.report_cell != Some(at) {
+                    self.send(action, at, grid, shell);
+                }
+                ours
+            }
+            mouse::Event::WheelScrolled { delta } => match cursor.position_over(grid.bounds) {
+                Some(p) => self.report_wheel(delta, grid.cell(p), grid, shell),
+                None => false,
+            },
+            _ => false,
+        }
+    }
+
+    fn report_wheel(
+        &mut self,
+        delta: ScrollDelta,
+        at: (usize, usize),
+        grid: &Grid,
+        shell: &mut Shell<'_, Message>,
+    ) -> bool {
+        let mods = keys::mods(self.modifiers);
+        let probe = MouseAction::Wheel(Direction::Up);
+        let disposition = mouse_disposition(probe, mods, grid.mode);
+        if disposition == Disposition::Local {
+            return false;
+        }
+        self.report_wheel += match delta {
+            ScrollDelta::Lines { y, .. } => y,
+            ScrollDelta::Pixels { y, .. } => y / (grid.metrics.cell_h * LINES_PER_NOTCH),
+        };
+        if !self.report_wheel.is_finite() {
+            self.report_wheel = 0.0;
+        }
+        let whole = self.report_wheel.trunc();
+        self.report_wheel -= whole;
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "non-negative and clamped to a small count"
+        )]
+        let notches = whole.abs().min(100.0) as usize;
+        let direction = if whole > 0.0 {
+            Direction::Up
+        } else {
+            Direction::Down
+        };
+        let bytes = if disposition == Disposition::AlternateScroll {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "3.0"
+            )]
+            let lines = notches * LINES_PER_NOTCH as usize;
+            input::alternate_scroll(direction, lines, grid.mode)
+        } else {
+            let action = MouseAction::Wheel(direction);
+            input::encode_mouse(action, at.0, at.1, mods, grid.mode)
+                .unwrap_or_default()
+                .repeat(notches)
+        };
+        if !bytes.is_empty() {
+            shell.publish(Message::MouseInput(bytes));
+        }
+        true
+    }
+
+    fn send(
+        &mut self,
+        action: MouseAction,
+        at: (usize, usize),
+        grid: &Grid,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        self.report_cell = Some(at);
+        let mods = keys::mods(self.modifiers);
+        if let Some(bytes) = input::encode_mouse(action, at.0, at.1, mods, grid.mode) {
+            shell.publish(Message::MouseInput(bytes));
+        }
     }
 }

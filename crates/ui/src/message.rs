@@ -55,6 +55,9 @@ pub enum Message {
     Key(KeyInput),
     /// Text committed by the input method for the focused pane.
     Text(String),
+    /// Bytes the widget generated for the application: mouse reports and alternate-scroll arrow
+    /// keys. Written as-is, without scrolling the view to the bottom.
+    MouseInput(Vec<u8>),
     /// Mouse selection gesture.
     Select(SelectEvent),
     /// Scroll the view through history.

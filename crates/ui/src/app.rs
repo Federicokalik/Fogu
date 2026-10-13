@@ -156,7 +156,14 @@ impl App {
                     .term
                     .set_cell_size_px(self.metrics.cell_w_px, self.metrics.cell_h_px);
             }
-            Message::Focused(focused) => self.focused = focused,
+            Message::Focused(focused) => {
+                if focused != self.focused
+                    && let Some(bytes) = input::encode_focus(focused, self.pane.term.mode())
+                {
+                    self.write_input(bytes);
+                }
+                self.focused = focused;
+            }
             Message::Key(key) => {
                 let mode = self.pane.term.mode();
                 if let Some(bytes) = input::encode_key(&key, mode, ALT_IS_META) {
@@ -168,6 +175,7 @@ impl App {
                     self.send_input(bytes);
                 }
             }
+            Message::MouseInput(bytes) => self.write_input(bytes),
             Message::Select(event) => return self.on_select(event),
             Message::Scroll(scroll) => {
                 self.pane.term.scroll_display(scroll);
@@ -272,17 +280,25 @@ impl App {
         if self.pane.state != PaneState::Running {
             return;
         }
+        self.write_input(bytes);
+        if self.pane.snapshot.display_offset != 0 {
+            self.pane.term.scroll_display(Scroll::Bottom);
+            self.refresh();
+        }
+    }
+
+    /// Writes `bytes` to a running session without blocking the UI (drops them when full).
+    fn write_input(&mut self, bytes: Vec<u8>) {
+        if self.pane.state != PaneState::Running {
+            return;
+        }
         match self
             .pane
             .session_input
             .try_send(SessionInput::Data(bytes.into()))
         {
             Ok(()) | Err(TrySendError::Closed(_)) => {}
-            Err(TrySendError::Full(_)) => tracing::warn!("session input full; key dropped"),
-        }
-        if self.pane.snapshot.display_offset != 0 {
-            self.pane.term.scroll_display(Scroll::Bottom);
-            self.refresh();
+            Err(TrySendError::Full(_)) => tracing::warn!("session input full; input dropped"),
         }
     }
 
