@@ -110,6 +110,33 @@ fn close_ends_a_running_process_quickly() {
     assert!(started.elapsed() < Duration::from_secs(3));
 }
 
+/// A shell that ignores SIGHUP (and hands that disposition to `sleep`) must still be gone after
+/// the 2 s grace: the SIGKILL-the-process-group fallback, reported as signal 9.
+#[test]
+fn close_falls_back_to_sigkill_after_the_grace_period() {
+    let rt = SessionRuntime::new().unwrap();
+    let script = "trap '' HUP; echo READY; exec sleep 100";
+    let (mut session, view) = start(&rt, &profile("sh", &["-c", script]));
+    // Close only once the trap is installed, or SIGHUP alone would end the shell.
+    wait_until(&rt, &mut session, &view, |_, v| {
+        v.dump_grid().contains("READY")
+    });
+    session.input.try_send(SessionInput::Close).unwrap();
+    let started = std::time::Instant::now();
+    let event = wait_until(&rt, &mut session, &view, |e, _| {
+        matches!(e, SessionOutput::Exited(_))
+    });
+    let elapsed = started.elapsed();
+    let SessionOutput::Exited(info) = event else {
+        unreachable!()
+    };
+    assert_eq!(info.signal, Some(9), "{info:?}");
+    assert!(
+        elapsed >= Duration::from_secs(2) && elapsed < Duration::from_secs(4),
+        "{elapsed:?}"
+    );
+}
+
 #[test]
 fn build_env_removes_sets_and_expands() {
     let parent: Vec<(OsString, OsString)> = [

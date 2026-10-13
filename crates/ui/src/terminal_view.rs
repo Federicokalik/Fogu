@@ -19,7 +19,7 @@ use iced::{
 use crate::keys;
 use crate::keys::LocalKey;
 use crate::message::Message;
-use crate::metrics::CellMetrics;
+use crate::metrics::{CellMetrics, cells_f32 as cells};
 use crate::mouse::{Grid, MouseState};
 use crate::palette::{Colors, to_iced};
 use crate::runs::{Style, Underline, cell_style, row_runs};
@@ -282,11 +282,6 @@ impl<'a> TerminalView<'a> {
         let bg = self.colors.background();
         self.draw_text(renderer, label.to_owned(), rect, &style, bg, bounds);
     }
-}
-
-/// A cell count as `f32` (grids are at most `u16::MAX` cells wide/high).
-fn cells(n: usize) -> f32 {
-    f32::from(u16::try_from(n).unwrap_or(u16::MAX))
 }
 
 fn fill(renderer: &mut iced::Renderer, bounds: Rectangle, color: Rgb) {

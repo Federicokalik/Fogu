@@ -346,11 +346,14 @@ impl App {
                 self.refresh();
             }
             SessionOutput::Prompt(_, kind) => match kind {},
-            // Bell, OSC 52, cwd and progress are not handled yet.
+            // Not handled yet: bell and OSC 52. Cwd, progress, notifications and prompt marks
+            // are logged by the session and ignored here.
             SessionOutput::Bell
             | SessionOutput::ClipboardStore(_)
-            | SessionOutput::Cwd(_)
-            | SessionOutput::Progress(_) => {}
+            | SessionOutput::Cwd { .. }
+            | SessionOutput::Progress(_)
+            | SessionOutput::Notify { .. }
+            | SessionOutput::PromptMark(_) => {}
         }
     }
 

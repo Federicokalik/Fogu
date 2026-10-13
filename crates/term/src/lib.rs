@@ -6,6 +6,7 @@
 mod event_proxy;
 mod handle;
 pub mod input;
+mod osc;
 mod snapshot;
 
 pub use alacritty_terminal::grid::Scroll;
@@ -18,4 +19,5 @@ pub use event_proxy::{
     sanitize_title,
 };
 pub use handle::{TermHandle, WORD_SEPARATORS};
+pub use osc::{OscEvent, OscScanner, PromptMark};
 pub use snapshot::{Cell, CellFlags, Cursor, RenderSnapshot};

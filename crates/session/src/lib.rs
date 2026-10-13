@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use fogu_core::{LocalProfile, Size};
-use fogu_term::{ClipboardType, TermHandle};
+use fogu_term::{ClipboardType, PromptMark, TermHandle};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::Instrument as _;
@@ -65,6 +65,9 @@ pub enum SessionInput {
     Resize(Size),
     /// Answer to a [`SessionOutput::Prompt`].
     PromptReply(PromptId, PromptReply),
+    /// Ask for the foreground process's current directory (on demand only, for opening a new tab in the same directory);
+    /// the session replies with [`SessionOutput::Cwd`] if it could determine one.
+    QueryCwd,
     /// Close the transport; the session answers with `Exited`.
     Close,
 }
@@ -78,10 +81,25 @@ pub enum SessionOutput {
     Title(String),
     /// Terminal bell.
     Bell,
-    /// Current working directory (OSC 7).
-    Cwd(PathBuf),
+    /// Current working directory (OSC 7/1337, or an on-demand [`SessionInput::QueryCwd`] reply).
+    Cwd {
+        /// The reported directory.
+        path: PathBuf,
+        /// `true` when the reporting host wasn't the local machine (OSC 7 with a foreign host);
+        /// such a path cannot be validated or opened locally.
+        remote: bool,
+    },
     /// Progress (OSC 9;4).
     Progress(Option<u8>),
+    /// Desktop notification (OSC 9 / 777); no title for OSC 9.
+    Notify {
+        /// Present only for OSC 777.
+        title: Option<String>,
+        /// Sanitized, capped body text.
+        body: String,
+    },
+    /// Shell-integration prompt mark (OSC 133); not used by the UI yet.
+    PromptMark(PromptMark),
     /// The session needs an answer from the user (SSH).
     Prompt(PromptId, PromptKind),
     /// OSC 52 clipboard write; the UI applies the policy.

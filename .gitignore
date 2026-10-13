@@ -1,4 +1,8 @@
 /target
+# fuzz/ is not a workspace member (its own Cargo.toml), so its build output and crash/leak
+# artifacts need their own ignore; corpus/ is intentionally tracked (seed inputs).
+/fuzz/target
+/fuzz/artifacts
 
 # local only, never committed
 /wiki/

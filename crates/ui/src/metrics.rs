@@ -154,7 +154,8 @@ pub fn viewport_to_point(pos: CellPos, display_offset: usize) -> Point {
     Point::new(Line(row.saturating_sub(offset)), Column(pos.col))
 }
 
-fn cells_f32(n: usize) -> f32 {
+/// A cell count as `f32` (grids are at most `u16::MAX` cells wide/high).
+pub fn cells_f32(n: usize) -> f32 {
     f32::from(u16::try_from(n).unwrap_or(u16::MAX))
 }
 

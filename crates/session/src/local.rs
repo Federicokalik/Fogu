@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use bytes::{Buf as _, BytesMut};
 use fogu_core::{LocalProfile, Size};
-use fogu_term::{TermEvent, TermHandle};
+use fogu_term::{OscEvent, OscScanner, TermEvent, TermHandle};
 use pty_process::{OwnedReadPty, OwnedWritePty};
 use rustix::process::{Pid, Signal};
 use rustix::termios::Winsize;
@@ -55,11 +55,23 @@ struct Pump {
     out_tx: Sender<SessionOutput>,
     /// Bytes waiting to be written to the PTY (user input + terminal replies).
     pending: BytesMut,
+    /// Side-channel scanner for OSC codes `Term`/`vte` drop.
+    osc: OscScanner,
+    /// This machine's hostname, used to tell an OSC 7 report of a local path from one made on a
+    /// remote host reached by a plain `ssh` inside this shell.
+    local_hostname: String,
 }
 
 impl Pump {
     async fn feed(&mut self, bytes: &[u8]) -> Result<(), Gone> {
+        // Non-consuming: `bytes` is fed to the terminal unchanged below.
+        let osc_events = self.osc.scan(bytes);
         self.term.feed(bytes);
+        for event in osc_events {
+            if let Some(out) = self.map_osc(event) {
+                self.emit(out).await?;
+            }
+        }
         for event in self.term.drain_events() {
             let out = match event {
                 TermEvent::PtyWrite(reply) => {
@@ -93,6 +105,70 @@ impl Pump {
     async fn emit(&self, out: SessionOutput) -> Result<(), Gone> {
         self.out_tx.send(out).await.map_err(|_| Gone)
     }
+
+    /// Maps a scanner event to a `SessionOutput`, logging the ones the UI does not use
+    /// yet.
+    fn map_osc(&self, event: OscEvent) -> Option<SessionOutput> {
+        Some(match event {
+            OscEvent::Cwd { host, path } => {
+                let remote = !is_local_host(&host, &self.local_hostname);
+                let path = if remote {
+                    Some(path)
+                } else {
+                    canonical_dir(&path)
+                }?;
+                tracing::debug!(path = %path.display(), remote, "cwd");
+                SessionOutput::Cwd { path, remote }
+            }
+            OscEvent::Progress(pct) => {
+                tracing::debug!(?pct, "progress");
+                SessionOutput::Progress(pct)
+            }
+            OscEvent::Notify { title, body } => {
+                tracing::debug!(?title, %body, "notify (no UI yet)");
+                SessionOutput::Notify { title, body }
+            }
+            OscEvent::Prompt(mark) => {
+                tracing::debug!(?mark, "prompt mark (unused)");
+                SessionOutput::PromptMark(mark)
+            }
+        })
+    }
+}
+
+/// `true` when `host` (an OSC 7 host field) names this machine: empty (no host given) or
+/// matching `local_hostname` case-insensitively.
+fn is_local_host(host: &str, local_hostname: &str) -> bool {
+    host.is_empty()
+        || host.eq_ignore_ascii_case("localhost")
+        || (!local_hostname.is_empty() && host.eq_ignore_ascii_case(local_hostname))
+}
+
+/// Resolves and validates a reported local path; `None` if it doesn't canonicalize to an
+/// existing directory.
+fn canonical_dir(path: &Path) -> Option<PathBuf> {
+    let canon = path.canonicalize().ok()?;
+    canon.is_dir().then_some(canon)
+}
+
+/// This machine's hostname (`/proc/sys/kernel/hostname`), for [`is_local_host`]. Empty on
+/// failure, which only ever widens what counts as "local" by one fewer alias, never narrows it.
+fn local_hostname() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
+/// On-demand cwd lookup (fallback when the shell reports no OSC 7): the foreground process group's
+/// directory, falling back to the shell's own. `None` if neither resolves to a live directory.
+fn current_cwd(master: &OwnedFd, shell_pid: Option<u32>) -> Option<PathBuf> {
+    let fg_pid = rustix::termios::tcgetpgrp(master)
+        .ok()
+        .and_then(|pgid| u32::try_from(pgid.as_raw_nonzero().get()).ok());
+    fg_pid.into_iter().chain(shell_pid).find_map(|pid| {
+        let cwd = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+        canonical_dir(&cwd)
+    })
 }
 
 /// A spawned shell and our ends of its PTY.
@@ -119,6 +195,8 @@ pub(crate) async fn run_local(
         term,
         out_tx,
         pending: BytesMut::new(),
+        osc: OscScanner::new(),
+        local_hostname: local_hostname(),
     };
     let mut local = match spawn(&profile, size) {
         Ok(local) => local,
@@ -167,6 +245,11 @@ async fn run_loop(
                 Some(SessionInput::Data(data)) => pump.pending.extend_from_slice(&data),
                 Some(SessionInput::Resize(size)) => resize(&local.master, size),
                 Some(SessionInput::PromptReply(_, reply)) => match reply {},
+                Some(SessionInput::QueryCwd) => {
+                    if let Some(path) = current_cwd(&local.master, local.child.id()) {
+                        pump.emit(SessionOutput::Cwd { path, remote: false }).await?;
+                    }
+                }
                 Some(SessionInput::Close) | None => return Ok(End::Close),
             },
             written = local.writer.write(pump.pending.get(..chunk).unwrap_or_default()),

@@ -1,0 +1,30 @@
+[package]
+name = "fogu-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+fogu-term = { path = "../crates/term" }
+
+[[bin]]
+name = "osc_payloads"
+path = "fuzz_targets/osc_payloads.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vt_feed"
+path = "fuzz_targets/vt_feed.rs"
+test = false
+doc = false
+bench = false
+
+# Deliberately not a member of the parent workspace:
+# cargo-fuzz needs nightly + ASan instrumentation that the rest of the crates must never pick up.
+[workspace]
