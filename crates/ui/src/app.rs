@@ -5,25 +5,31 @@
 use std::sync::Arc;
 
 use iced::keyboard::{self, key::Named};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use fogu_core::{ColorScheme, Config};
+use fogu_core::Config;
 use fogu_session::SessionRuntime;
+use fogu_term::input;
 use fogu_term::input::KeyCode;
-use fogu_term::{TermMode, input};
 use iced::widget::column;
 use iced::{Element, Point, Subscription, Task, clipboard, event, window};
 
+use crate::RunOptions;
+use crate::appearance::resolve_scheme;
+use crate::blink::{self, Blink};
 use crate::context_menu::{self, ContextMenu};
+use crate::lifecycle::PendingClipboard;
 use crate::message::{Message, PasteSource, SelectEvent};
 use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
-use crate::modal::{Modal, ModalButton, overlay};
+use crate::modal::overlay;
 use crate::mouse::MouseConfig;
+use crate::notifications::{AUTO_DISMISS, Level, Notification, Toasts};
 use crate::palette::{Colors, to_iced};
 use crate::panes::CwdQuery;
+use crate::paste::PendingPaste;
 use crate::split_container::SplitContainer;
 use crate::subscription::session_events;
-use crate::tab::{PaneId, PaneState, Tab, TabId};
+use crate::tab::{PaneId, Tab, TabId};
 use crate::tab_bar::{Rename, TabBar};
 use crate::terminal_view::TerminalView;
 
@@ -34,14 +40,6 @@ const MIN_FONT_PT: f32 = 6.0;
 const MAX_FONT_PT: f32 = 40.0;
 /// Initial window size (also the menu-clamping size until the first resize event).
 pub(crate) const WINDOW_SIZE: iced::Size = iced::Size::new(1000.0, 650.0);
-
-/// A multi-line/large paste waiting on the user's "Paste"/"Cancel" choice in the modal.
-#[derive(Debug)]
-struct PendingPaste {
-    pane: PaneId,
-    text: String,
-    warning: input::PasteWarning,
-}
 
 /// The whole application state.
 #[derive(Debug)]
@@ -70,7 +68,11 @@ pub struct App {
     scale: f32,
     pub(crate) colors: Colors,
     pub(crate) focused: bool,
-    pending_paste: Option<PendingPaste>,
+    pub(crate) pending_paste: Option<PendingPaste>,
+    pub(crate) toasts: Toasts,
+    pub(crate) pending_clipboard: Vec<PendingClipboard>,
+    pub(crate) blink: Blink,
+    exit_after_first_frame: bool,
     /// Test builds: input ends of the stub sessions, to inspect what the UI sent.
     #[cfg(test)]
     pub(crate) stub_inputs: Vec<tokio::sync::mpsc::Receiver<fogu_session::SessionInput>>,
@@ -88,7 +90,11 @@ impl App {
             size_pt: config.appearance.font_size,
         };
         let metrics = CellMetrics::new(resolved.units, font.size_px(), 1.0);
-        let scheme = ColorScheme::by_name(&config.appearance.color_scheme).unwrap_or_default();
+        let (scheme, scheme_note) = resolve_scheme(&config.appearance.color_scheme);
+        let mut toasts = Toasts::default();
+        if let Some(note) = scheme_note {
+            toasts.push(note);
+        }
         Self {
             runtime,
             tabs: Vec::new(),
@@ -109,22 +115,47 @@ impl App {
             colors: Colors::new(&scheme),
             focused: true,
             pending_paste: None,
+            toasts,
+            pending_clipboard: Vec::new(),
+            blink: Blink::new(Instant::now()),
+            exit_after_first_frame: false,
             config,
             #[cfg(test)]
             stub_inputs: Vec::new(),
         }
     }
 
-    /// Opens the default profile in the first tab and asks for the window's scale factor.
-    pub fn boot(runtime: Arc<SessionRuntime>, config: Arc<Config>) -> (Self, Task<Message>) {
-        let resolved = metrics::resolve(&config.appearance.font_family);
+    /// Opens the default profile in the first tab, queues the startup toasts and asks for the
+    /// window's scale factor.
+    pub fn boot(
+        runtime: Arc<SessionRuntime>,
+        config: Arc<Config>,
+        options: RunOptions,
+    ) -> (Self, Task<Message>) {
+        let (resolved, font_problems) = metrics::resolve(
+            &config.appearance.font_family,
+            &config.appearance.fallback_fonts,
+        );
         let mut app = Self::new(runtime, config, resolved);
+        app.exit_after_first_frame = options.exit_after_first_frame;
+        let mut tasks = Vec::new();
+        let font_notes = font_problems
+            .into_iter()
+            .map(|p| Notification::new(Level::Warn, "Font").detail(p));
+        for note in options.notices.into_iter().chain(font_notes) {
+            tasks.push(app.notify(note));
+        }
+        if !app.toasts.is_empty() {
+            tasks.push(app.after(AUTO_DISMISS, Message::ToastExpire));
+        }
         let profile = app.default_profile();
         app.open_tab(profile, None);
-        let scale = window::oldest()
-            .and_then(window::scale_factor)
-            .map(Message::ScaleFactor);
-        (app, scale)
+        tasks.push(
+            window::oldest()
+                .and_then(window::scale_factor)
+                .map(Message::ScaleFactor),
+        );
+        (app, Task::batch(tasks))
     }
 
     /// Window title = the active tab's title.
@@ -135,9 +166,42 @@ impl App {
         }
     }
 
-    /// Handles one message.
+    /// Handles one message, then (re)starts the cursor blink timer if it is due.
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let now = Instant::now();
+        if matches!(
+            message,
+            Message::Pane(..) | Message::Key(_) | Message::Text(_) | Message::Focused(true)
+        ) {
+            self.blink.activity(now);
+        }
+        let task = self.dispatch(message);
+        let blink = &self.config.appearance;
+        if self.blink.arm(now, blink.cursor_blink, self.focused) {
+            return Task::batch([task, self.after(blink::PERIOD, Message::BlinkTick)]);
+        }
+        task
+    }
+
+    fn dispatch(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::DismissToast(id) => {
+                self.dismiss_toast(id);
+                Task::none()
+            }
+            Message::ToastAccept(id) => self.accept_toast(id),
+            Message::ToastExpire => {
+                self.expire_toasts();
+                Task::none()
+            }
+            Message::BlinkTick => {
+                let (blink, focused) = (self.config.appearance.cursor_blink, self.focused);
+                if self.blink.tick(Instant::now(), blink, focused) {
+                    return self.after(blink::PERIOD, Message::BlinkTick);
+                }
+                Task::none()
+            }
+            Message::Frame => iced::exit(),
             Message::Session(pane, event) => self.on_session(pane, event),
             Message::Action(action) => self.on_action(action),
             Message::GridResized { pane, cols, rows } => self.on_grid_resized(pane, cols, rows),
@@ -176,7 +240,10 @@ impl App {
 
     /// Keys, mouse and paste for pane `target` (default: the active tab's focused pane).
     fn on_pane_input(&mut self, target: Option<PaneId>, message: Message) -> Task<Message> {
-        let alt_is_meta = self.config.terminal.alt_is_meta;
+        let (alt_is_meta, scroll) = (
+            self.config.terminal.alt_is_meta,
+            self.config.terminal.scroll_on_input,
+        );
         let Some(id) = target.or_else(|| self.active_pane().map(|p| p.id)) else {
             return Task::none();
         };
@@ -184,19 +251,19 @@ impl App {
             return Task::none();
         };
         match message {
-            Message::Key(key) if pane.state != PaneState::Running => {
+            Message::Key(key) if !pane.state.is_running() => {
                 if matches!(key.key, KeyCode::Enter | KeyCode::NumpadEnter) && !pane.closing {
                     self.restart_pane(id);
                 }
             }
             Message::Key(key) => {
                 if let Some(bytes) = input::encode_key(&key, pane.term.mode(), alt_is_meta) {
-                    pane.send_input(bytes);
+                    pane.send_input(bytes, scroll);
                 }
             }
             Message::Text(text) => {
                 if let Some(bytes) = input::encode_text(&text) {
-                    pane.send_input(bytes);
+                    pane.send_input(bytes, scroll);
                 }
             }
             Message::MouseInput(bytes) => pane.write_input(bytes),
@@ -238,50 +305,6 @@ impl App {
         self.focused = focused;
     }
 
-    /// A clipboard read for [`Message::Paste`] completed: confirm multi-line/large pastes,
-    /// otherwise send it straight away. `None`/empty means nothing to paste.
-    fn on_paste_ready(&mut self, pane: PaneId, text: Option<String>) {
-        let Some(text) = text.filter(|t| !t.is_empty()) else {
-            return;
-        };
-        let warning = self
-            .config
-            .terminal
-            .warn_on_multiline_paste
-            .then(|| input::needs_confirmation(&text))
-            .flatten();
-        match warning {
-            Some(warning) => {
-                self.pending_paste = Some(PendingPaste {
-                    pane,
-                    text,
-                    warning,
-                });
-            }
-            None => self.paste_now(pane, &text),
-        }
-    }
-
-    /// Sanitises and sends `text` to the session. `terminal.bracketed_paste = false` forces plain
-    /// paste even if the application asked for it.
-    fn paste_now(&mut self, pane: PaneId, text: &str) {
-        let terminal = &self.config.terminal;
-        let (bracketed, trim, newlines) = (
-            terminal.bracketed_paste,
-            terminal.trim_whitespace_on_paste,
-            terminal.replace_newlines_on_paste,
-        );
-        let Some(pane) = self.pane_mut(pane) else {
-            return;
-        };
-        let opts = input::PasteOpts {
-            bracketed_requested: bracketed && pane.term.mode().contains(TermMode::BRACKETED_PASTE),
-            trim_whitespace: trim,
-            newlines_to_spaces: newlines,
-        };
-        pane.send_input(input::encode_paste(text, opts));
-    }
-
     /// Clamps to [`MIN_FONT_PT`]..=[`MAX_FONT_PT`] and recomputes cell metrics; the next frame's
     /// `GridResized` picks up the new grid size and resizes the
     /// PTY, same as a window resize.
@@ -301,33 +324,6 @@ impl App {
         for pane in self.tabs.iter_mut().flat_map(|t| t.panes.values_mut()) {
             pane.term.set_cell_size_px(m.cell_w_px, m.cell_h_px);
         }
-    }
-
-    /// The pending paste's confirmation modal, if any.
-    fn paste_modal(&self) -> Option<Modal> {
-        let pending = self.pending_paste.as_ref()?;
-        let body = if pending.warning.lines > 1 {
-            format!(
-                "Paste {} lines ({} bytes)?",
-                pending.warning.lines, pending.warning.bytes
-            )
-        } else {
-            format!("Paste {} bytes with no line breaks?", pending.warning.bytes)
-        };
-        Some(Modal {
-            title: "Paste",
-            body,
-            buttons: vec![
-                ModalButton {
-                    label: "Paste",
-                    on_press: Message::ConfirmPaste,
-                },
-                ModalButton {
-                    label: "Cancel",
-                    on_press: Message::CancelPaste,
-                },
-            ],
-        })
     }
 
     /// Applies a selection gesture; viewport cells map to grid lines with the current scroll.
@@ -396,6 +392,7 @@ impl App {
                 )
                 .status(pane.status.as_deref())
                 .hotkeys(&self.config.hotkeys)
+                .cursor_on(self.blink.on)
                 .into();
                 (id, view.map(move |message| message.for_pane(id)))
             })
@@ -425,7 +422,12 @@ impl App {
             colors: &self.colors,
         }
         .view();
-        let base = overlay(column![bar, split].into(), self.paste_modal());
+        // Toasts are layered over the panes only, never over the tab bar.
+        let mut panes: Element<'_, Message> = split.into();
+        if let Some(toasts) = self.toasts.view(self.metrics.cell_h) {
+            panes = iced::widget::stack![panes, toasts].into();
+        }
+        let base = overlay(column![bar, panes].into(), self.paste_modal());
         context_menu::overlay(base, self.menu.as_ref(), self.window_size)
     }
 
@@ -449,6 +451,9 @@ impl App {
             }) => Some(Message::Escape),
             _ => None,
         });
-        Subscription::batch(sessions.chain([window_events]))
+        let frame = self
+            .exit_after_first_frame
+            .then(|| window::frames().map(|_| Message::Frame));
+        Subscription::batch(sessions.chain([window_events]).chain(frame))
     }
 }

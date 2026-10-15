@@ -59,6 +59,10 @@ toml = "1.1.8"
 # exactly the XDG Base Directory spec we need.
 xdg = "3.0.0"
 
+# why: command-line flags (`--config-dir`, `--software-render`, `--version`).
+# `derive` keeps the flag definitions declarative; default features (help, usage, errors) only.
+clap = { version = "4.6.7", features = ["derive"] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"

@@ -123,6 +123,15 @@ pub fn sanitize_title(title: &str) -> String {
         .collect()
 }
 
+/// The "dim" variant of `c` (2/3 brightness), used for `Dim*` named colours.
+pub fn dim(c: Rgb) -> Rgb {
+    Rgb {
+        r: c.r / 3 * 2,
+        g: c.g / 3 * 2,
+        b: c.b / 3 * 2,
+    }
+}
+
 /// xterm-like default palette; the UI replaces it with the active color scheme.
 pub fn default_palette() -> Box<Palette> {
     const ANSI: [(u8, u8, u8); 16] = [
@@ -145,11 +154,6 @@ pub fn default_palette() -> Box<Palette> {
     ];
     const CUBE: [u8; 6] = [0, 95, 135, 175, 215, 255];
     let rgb = |(r, g, b): (u8, u8, u8)| Rgb { r, g, b };
-    let dim = |c: Rgb| Rgb {
-        r: c.r / 3 * 2,
-        g: c.g / 3 * 2,
-        b: c.b / 3 * 2,
-    };
 
     let mut palette = Box::new([Rgb::default(); COUNT]);
     for (i, slot) in palette.iter_mut().enumerate() {

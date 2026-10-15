@@ -5,12 +5,14 @@
 //! answer with the colours actually drawn.
 
 use fogu_core::{ColorScheme, RgbColor};
-use fogu_term::{Color, NamedColor, Palette, Rgb, default_palette};
+use fogu_term::{Color, NamedColor, Palette, Rgb, default_palette, dim};
 
 /// The resolved colour table of one scheme.
 #[derive(Clone, Debug)]
 pub struct Colors {
     table: Box<Palette>,
+    /// Text drawn under a filled block cursor (the palette has no slot for it).
+    cursor_text: Rgb,
 }
 
 impl Colors {
@@ -22,11 +24,6 @@ impl Colors {
             r: c.r,
             g: c.g,
             b: c.b,
-        };
-        let dim = |c: Rgb| Rgb {
-            r: c.r / 3 * 2,
-            g: c.g / 3 * 2,
-            b: c.b / 3 * 2,
         };
         for (i, color) in scheme.ansi.iter().enumerate() {
             set(&mut table, i, rgb(*color));
@@ -44,7 +41,10 @@ impl Colors {
         set(&mut table, NamedColor::Cursor as usize, rgb(scheme.cursor));
         set(&mut table, NamedColor::BrightForeground as usize, fg);
         set(&mut table, NamedColor::DimForeground as usize, dim(fg));
-        Self { table }
+        Self {
+            table,
+            cursor_text: rgb(scheme.cursor_text),
+        }
     }
 
     /// The table in the form `TermHandle::set_palette` takes.
@@ -83,6 +83,11 @@ impl Colors {
     /// Cursor colour.
     pub fn cursor(&self) -> Rgb {
         self.get(NamedColor::Cursor as usize)
+    }
+
+    /// Colour of the character under a filled block cursor.
+    pub fn cursor_text(&self) -> Rgb {
+        self.cursor_text
     }
 
     fn get(&self, index: usize) -> Rgb {
@@ -146,6 +151,7 @@ mod tests {
         for (color, bold, want) in cases {
             assert_eq!(colors.resolve(color, bold), want, "{color:?} bold={bold}");
         }
+        assert_eq!(colors.cursor_text(), rgb(0x17_1717));
     }
 
     #[test]

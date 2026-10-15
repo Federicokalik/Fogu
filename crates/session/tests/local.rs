@@ -219,3 +219,28 @@ fn ssh_profiles_fail_until_s18() {
     };
     assert_eq!(program, "ssh example.org");
 }
+
+#[test]
+fn input_backlog_is_bounded_and_reported_once() {
+    let rt = SessionRuntime::new().unwrap();
+    let (mut session, view) = start(&rt, &profile("sh", &["-c", "sleep 100"]));
+    // 10 MiB of "paste" into a program that never reads its tty: the backlog caps at 4 MiB.
+    rt.handle().block_on(async {
+        for _ in 0..10 {
+            session
+                .input
+                .send(SessionInput::Data(Bytes::from(vec![b'x'; 1024 * 1024])))
+                .await
+                .unwrap();
+        }
+    });
+    wait_until(&rt, &mut session, &view, |e, _| {
+        matches!(e, SessionOutput::InputDropped)
+    });
+    // Resize and close still flow while the backlog is full.
+    assert!(session.input.try_send(SessionInput::Resize(SIZE)).is_ok());
+    session.input.try_send(SessionInput::Close).unwrap();
+    wait_until(&rt, &mut session, &view, |e, _| {
+        matches!(e, SessionOutput::Exited(_))
+    });
+}

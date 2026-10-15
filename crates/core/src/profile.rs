@@ -25,9 +25,8 @@ pub struct LocalProfile {
     pub login: bool,
 }
 
-/// What to show the user via OSC 52 (clipboard write) and whether to allow it. The UI does not
-/// apply this yet: `ui/src/app.rs` always drops `SessionOutput::ClipboardStore` (equivalent to
-/// `Deny`).
+/// What to do with an OSC 52 clipboard write (an application could otherwise overwrite the clipboard
+/// silently); applied by the UI (`ui/src/lifecycle.rs`, `on_clipboard_store`): `Ask` shows a Copy / Deny toast.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Osc52Policy {
@@ -86,15 +85,33 @@ pub enum ProfileKind {
     Ssh(SshOpts),
 }
 
-/// What happens to the tab when the session ends. `Auto`/`Reconnect` do not exist yet.
+/// What happens to a pane when its session ends. Config key is `behavior_on_session_end`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum SessionEndBehavior {
-    /// Leave the tab open, showing the exit status.
-    #[default]
+    /// Leave the pane open, showing the exit status.
+    #[serde(rename = "keep")]
     Keep,
-    /// Close the tab immediately.
+    /// Close the pane immediately, whatever the exit status.
+    #[serde(rename = "close")]
     Close,
+    /// Close the pane when the process exited with code 0, else keep it showing the status.
+    #[default]
+    #[serde(rename = "close_if_clean")]
+    CloseIfClean,
+}
+
+impl SessionEndBehavior {
+    /// Whether a pane whose process ended goes away now. `clean` = exit code 0, not killed by a
+    /// signal. A crashed session (spawn failure, I/O error, task panic) is never closed
+    /// automatically: the user has to see why.
+    #[must_use]
+    pub fn closes(self, clean: bool) -> bool {
+        match self {
+            Self::Keep => false,
+            Self::Close => true,
+            Self::CloseIfClean => clean,
+        }
+    }
 }
 
 /// A profile identifier. Newtype so profile/group ids are never confused with plain strings.
@@ -323,6 +340,39 @@ mod tests {
             effective_osc52_write(&unset, Osc52Policy::Deny),
             Osc52Policy::Deny
         );
+    }
+
+    #[test]
+    fn on_exit_policy_table() {
+        use SessionEndBehavior::{Close, CloseIfClean, Keep};
+        // (behavior, clean exit, closes)
+        let rows = [
+            (Keep, true, false),
+            (Keep, false, false),
+            (Close, true, true),
+            (Close, false, true),
+            (CloseIfClean, true, true),
+            (CloseIfClean, false, false),
+        ];
+        for (behavior, clean, want) in rows {
+            assert_eq!(behavior.closes(clean), want, "{behavior:?} clean={clean}");
+        }
+        assert_eq!(SessionEndBehavior::default(), CloseIfClean);
+    }
+
+    #[test]
+    fn on_exit_values_parse_from_toml() {
+        for (text, want) in [
+            ("keep", SessionEndBehavior::Keep),
+            ("close", SessionEndBehavior::Close),
+            ("close_if_clean", SessionEndBehavior::CloseIfClean),
+        ] {
+            let p: Profile = toml::from_str(&format!(
+                "id = \"x\"\nname = \"x\"\ntype = \"local\"\nbehavior_on_session_end = \"{text}\""
+            ))
+            .unwrap();
+            assert_eq!(p.behavior_on_session_end, want);
+        }
     }
 
     #[test]

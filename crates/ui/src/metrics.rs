@@ -11,7 +11,7 @@ use iced::advanced::graphics::text::cosmic_text::skrifa::{FontRef, MetadataProvi
 use iced::advanced::graphics::text::font_system;
 use iced::{Font, Vector};
 
-/// Requested terminal font.
+/// Requested terminal font (`appearance.font_family` / `font_size`, zoom applied).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontSpec {
     /// Family name; `monospace` resolves to fontdb's monospace family.
@@ -97,6 +97,21 @@ impl CellMetrics {
     }
 }
 
+/// Number of whole cells that fit in `bounds`; never below 2×1 (a 0×0 or 1-column PTY confuses
+/// shells).
+pub fn grid_size(bounds: iced::Size, metrics: &CellMetrics) -> (u16, u16) {
+    let fit = |len: f32, cell: f32| {
+        let n = (len / cell).floor().clamp(1.0, f32::from(u16::MAX));
+        #[expect(clippy::cast_sign_loss, reason = "clamped to 1..=u16::MAX above")]
+        let n = n as u16;
+        n
+    };
+    (
+        fit(bounds.width, metrics.cell_w).max(2),
+        fit(bounds.height, metrics.cell_h),
+    )
+}
+
 /// Rounds a logical length to whole device pixels (at least 1). Returns the snapped logical
 /// length and the device-pixel count.
 pub fn round_to_device(logical: f32, scale: f32) -> (f32, u16) {
@@ -159,64 +174,115 @@ pub fn cells_f32(n: usize) -> f32 {
     f32::from(u16::try_from(n).unwrap_or(u16::MAX))
 }
 
-/// Resolves `family` in iced's global font database and reads its metrics.
-pub fn resolve(family: &str) -> ResolvedFont {
+/// A face found by [`find_face`].
+struct Found {
+    id: fontdb::ID,
+    name: String,
+    /// `false` when the requested family was missing and the first monospace face stands in.
+    exact: bool,
+}
+
+/// Resolves `family` (and the `fallbacks`, for diagnostics) in iced's global font database and
+/// reads the primary face's metrics. Returns the font plus human-readable problems (missing
+/// families) for the UI to show as toasts. The chosen faces and their files are logged at info
+/// level so the user can see what `monospace` resolved to.
+pub fn resolve(family: &str, fallbacks: &[String]) -> (ResolvedFont, Vec<String>) {
     let mut system = font_system()
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let db = system.raw().db();
-    let Some((id, name)) = find_face(db, family) else {
+    let mut problems = Vec::new();
+    for fallback in fallbacks {
+        match find_face(db, fallback) {
+            Some(found) if found.exact => log_face("fallback font", fallback, db, &found),
+            _ => {
+                tracing::warn!(family = fallback, "fallback font not found");
+                problems.push(format!("Fallback font \"{fallback}\" not found"));
+            }
+        }
+    }
+    let Some(found) = find_face(db, family) else {
         tracing::warn!(
             family,
             "no monospace font found; using iced's default monospace"
         );
-        return ResolvedFont {
+        problems.push(format!("No monospace font found for \"{family}\""));
+        let resolved = ResolvedFont {
             font: Font::MONOSPACE,
             units: FontUnits::FALLBACK,
         };
+        return (resolved, problems);
     };
+    // The generic family resolving to "some monospace face" is normal, not a user error.
+    if !found.exact && !family.eq_ignore_ascii_case("monospace") {
+        problems.push(format!(
+            "Font \"{family}\" not found; using \"{}\"",
+            found.name
+        ));
+    }
+    log_face("terminal font", family, db, &found);
     let units = db
-        .with_face_data(id, read_units)
+        .with_face_data(found.id, read_units)
         .flatten()
         .unwrap_or_else(|| {
-            tracing::warn!(font = name, "could not read font metrics; using defaults");
+            tracing::warn!(
+                font = found.name,
+                "could not read font metrics; using defaults"
+            );
             FontUnits::FALLBACK
         });
-    tracing::info!(requested = family, font = name, ?units, "terminal font");
     // iced fonts name their family with `&'static str`; one small leak per resolved family.
-    let name: &'static str = Box::leak(name.into_boxed_str());
-    ResolvedFont {
+    let name: &'static str = Box::leak(found.name.into_boxed_str());
+    let resolved = ResolvedFont {
         font: Font::with_name(name),
         units,
-    }
+    };
+    (resolved, problems)
+}
+
+fn log_face(what: &str, requested: &str, db: &Database, found: &Found) {
+    let source = db.face(found.id).map(|face| match &face.source {
+        fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => {
+            path.display().to_string()
+        }
+        fontdb::Source::Binary(_) => "<embedded>".to_owned(),
+    });
+    tracing::info!(requested, font = found.name, ?source, "{what}");
 }
 
 /// Explicit lookup of `family` (or fontdb's monospace family for `monospace`), else the first
 /// monospace face in the database.
-fn find_face(db: &Database, family: &str) -> Option<(fontdb::ID, String)> {
+fn find_face(db: &Database, family: &str) -> Option<Found> {
     let wanted = if family.eq_ignore_ascii_case("monospace") {
         fontdb::Family::Monospace
     } else {
         fontdb::Family::Name(family)
     };
-    let id = db
-        .query(&Query {
-            families: &[wanted],
-            ..Query::default()
-        })
-        .or_else(|| {
-            let first = db
-                .faces()
-                .find(|face| face.monospaced && !face.post_script_name.contains("Emoji"))?;
-            tracing::warn!(
-                requested = family,
-                "font family not found; using first monospace face"
-            );
-            Some(first.id)
-        })?;
+    let query = db.query(&Query {
+        families: &[wanted],
+        ..Query::default()
+    });
+    let exact = query.is_some();
+    let id = query.or_else(|| {
+        // Prefer a regular face: the first monospace entry in database order may be a Bold or
+        // Italic file, whose family would then be drawn regular anyway.
+        let candidates = || {
+            db.faces()
+                .filter(|face| face.monospaced && !face.post_script_name.contains("Emoji"))
+        };
+        let regular = candidates().find(|face| {
+            face.weight == fontdb::Weight::NORMAL && face.style == fontdb::Style::Normal
+        });
+        let first = regular.or_else(|| candidates().next())?;
+        tracing::warn!(
+            requested = family,
+            "font family not found; using first monospace face"
+        );
+        Some(first.id)
+    })?;
     let face = db.face(id)?;
     let name = face.families.first().map(|(name, _)| name.clone())?;
-    Some((id, name))
+    Some(Found { id, name, exact })
 }
 
 fn read_units(data: &[u8], index: u32) -> Option<FontUnits> {
@@ -319,6 +385,14 @@ mod tests {
                 "{row} @ {offset}"
             );
         }
+    }
+
+    #[test]
+    fn grid_size_floors_and_clamps() {
+        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0);
+        // cell 10 × 19
+        assert_eq!(grid_size(iced::Size::new(805.0, 460.0), &m), (80, 24));
+        assert_eq!(grid_size(iced::Size::new(3.0, 0.0), &m), (2, 1));
     }
 
     #[test]

@@ -11,7 +11,7 @@ use iced::Task;
 use crate::actions::CLOSE_GRACE;
 use crate::app::App;
 use crate::message::Message;
-use crate::tab::{PaneId, PaneState};
+use crate::tab::PaneId;
 
 /// Transport resize debounce during drags.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(50);
@@ -45,7 +45,7 @@ impl App {
         let local = matches!(tab.profile.kind, ProfileKind::Local(_));
         let running = tab
             .focused_pane()
-            .is_some_and(|p| p.state == PaneState::Running && !p.closing);
+            .is_some_and(|p| p.state.is_running() && !p.closing);
         if local && running && self.ask_cwd(target, CwdFor::Split(side)) {
             return self.after(SPLIT_CWD_WAIT, Message::CwdTimeout(target));
         }
@@ -98,7 +98,7 @@ impl App {
         if pane.closing {
             return Task::none();
         }
-        if pane.state == PaneState::Running && pane.control(SessionInput::Close) {
+        if pane.state.is_running() && pane.control(SessionInput::Close) {
             pane.closing = true;
             return self.after(CLOSE_GRACE, Message::CloseTimeout(id));
         }
@@ -247,7 +247,7 @@ impl App {
         let Some(size) = pane.pending_resize.take() else {
             return Task::none();
         };
-        if pane.control(SessionInput::Resize(size)) || pane.state != PaneState::Running {
+        if pane.control(SessionInput::Resize(size)) || !pane.state.is_running() {
             return Task::none();
         }
         // The session is busy; retry after another debounce period.

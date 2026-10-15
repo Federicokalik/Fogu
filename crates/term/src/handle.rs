@@ -13,7 +13,7 @@ use alacritty_terminal::index::{Boundary, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, TermMode};
-use alacritty_terminal::vte::ansi::{ClearMode, Handler as _, Processor};
+use alacritty_terminal::vte::ansi::{ClearMode, CursorShape, Handler as _, Processor};
 
 use crate::event_proxy::{EventProxy, Palette, Shared, TermEvent, default_palette, lock};
 use crate::snapshot::RenderSnapshot;
@@ -52,6 +52,8 @@ pub struct TermHandle {
     processor: Processor,
     shared: Arc<Mutex<Shared>>,
     dirty: Arc<AtomicBool>,
+    /// The options `Term` was built with (kept to change one of them later).
+    config: Config,
 }
 
 impl fmt::Debug for TermHandle {
@@ -92,12 +94,13 @@ impl TermHandle {
             cols: cols.into(),
             rows: rows.into(),
         };
-        let term = Term::new(config, &size, proxy);
+        let term = Term::new(config.clone(), &size, proxy);
         Self {
             term: Arc::new(FairMutex::new(term)),
             processor: Processor::new(),
             shared,
             dirty,
+            config,
         }
     }
 
@@ -111,6 +114,7 @@ impl TermHandle {
             processor: Processor::new(),
             shared: Arc::clone(&self.shared),
             dirty: Arc::clone(&self.dirty),
+            config: self.config.clone(),
         }
     }
 
@@ -157,6 +161,13 @@ impl TermHandle {
     /// Replaces the palette used to answer OSC 4/10/11/12 color queries.
     pub fn set_palette(&mut self, palette: Box<Palette>) {
         lock(&self.shared).palette = palette;
+    }
+
+    /// Sets the cursor shape used until the application picks one with DECSCUSR
+    /// (`Config.appearance.cursor_shape`).
+    pub fn set_default_cursor_shape(&mut self, shape: CursorShape) {
+        self.config.default_cursor_style.shape = shape;
+        self.term.lock().set_options(self.config.clone());
     }
 
     /// Scrolls the viewport through history.

@@ -118,6 +118,16 @@ pub enum Message {
     MenuSubmit,
     /// Set (or clear) the active tab's colour.
     SetTabColor(Option<RgbColor>),
+    /// `×` on toast `.0` (or "Deny" on an OSC 52 toast).
+    DismissToast(u64),
+    /// "Copy" on the OSC 52 toast `.0`.
+    ToastAccept(u64),
+    /// A toast's display time may be up: drop the expired ones.
+    ToastExpire,
+    /// The cursor blink timer fired.
+    BlinkTick,
+    /// A frame was presented (`--exit-after-first-frame`).
+    Frame,
     /// Escape pressed anywhere: cancel rename / close the menu.
     Escape,
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fogu_core::{Profile, RgbColor, Size, SplitTree};
-use fogu_session::{SessionHandle, SessionInput};
+use fogu_session::{ExitInfo, SessionHandle, SessionInput};
 use fogu_term::{RenderSnapshot, Scroll, TermHandle};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
@@ -21,15 +21,56 @@ pub struct TabId(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PaneId(pub u64);
 
+/// Longest crash detail shown in a pane's status line, in characters.
+const STATUS_DETAIL_CHARS: usize = 80;
+
 /// Lifecycle of a pane's session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaneState {
     /// The session is running.
     Running,
     /// The process ended.
-    Exited,
-    /// The session failed or its task panicked.
-    Crashed,
+    Exited(ExitInfo),
+    /// The session failed or its task panicked (spawn error, I/O error, panic); the text is the
+    /// sanitized reason. The pane's `TermHandle` is never reused: restart builds a new one.
+    Crashed(String),
+}
+
+impl PaneState {
+    /// `true` while the session is alive.
+    pub fn is_running(&self) -> bool {
+        *self == Self::Running
+    }
+
+    /// `true` for an exit with code 0 (not killed by a signal): what `CloseIfClean` waits for.
+    pub fn is_clean_exit(&self) -> bool {
+        matches!(
+            self,
+            Self::Exited(ExitInfo {
+                code: Some(0),
+                signal: None
+            })
+        )
+    }
+
+    /// The overlay drawn over an ended pane; `None` while running.
+    pub fn status_line(&self) -> Option<String> {
+        let what = match self {
+            Self::Running => return None,
+            Self::Exited(ExitInfo {
+                signal: Some(signal),
+                ..
+            }) => format!("process killed by signal {signal}"),
+            Self::Exited(ExitInfo { code, .. }) => {
+                format!("process exited with code {}", code.unwrap_or(0))
+            }
+            Self::Crashed(why) => {
+                let why: String = why.chars().take(STATUS_DETAIL_CHARS).collect();
+                format!("crashed: {why}")
+            }
+        };
+        Some(format!("[{what}] \u{2014} Enter to restart"))
+    }
 }
 
 /// One terminal pane: its grid, the session's input side and the last drawn snapshot.
@@ -94,18 +135,19 @@ impl Pane {
 
     /// Writes `bytes` to a running session without blocking the UI (drops them when full).
     pub fn write_input(&self, bytes: Vec<u8>) {
-        if self.state == PaneState::Running {
+        if self.state.is_running() {
             self.control(SessionInput::Data(bytes.into()));
         }
     }
 
-    /// Writes encoded keys, then scrolls to the bottom.
-    pub fn send_input(&mut self, bytes: Vec<u8>) {
-        if self.state != PaneState::Running {
+    /// Writes encoded keys, then scrolls to the bottom when `scroll_on_input` is set
+    /// (`terminal.scroll_on_input`).
+    pub fn send_input(&mut self, bytes: Vec<u8>, scroll_on_input: bool) {
+        if !self.state.is_running() {
             return;
         }
         self.write_input(bytes);
-        if self.snapshot.display_offset != 0 {
+        if scroll_on_input && self.snapshot.display_offset != 0 {
             self.term.scroll_display(Scroll::Bottom);
             self.refresh();
         }
@@ -190,7 +232,55 @@ pub fn resolve_title<'a>(
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, reason = "tests")]
+
     use super::*;
+
+    #[test]
+    fn status_lines_and_clean_exit() {
+        let exit = |code, signal| PaneState::Exited(ExitInfo { code, signal });
+        // (state, clean, status text)
+        let rows = [
+            (PaneState::Running, false, None),
+            (
+                exit(Some(0), None),
+                true,
+                Some("[process exited with code 0]"),
+            ),
+            (
+                exit(Some(3), None),
+                false,
+                Some("[process exited with code 3]"),
+            ),
+            (
+                exit(None, Some(9)),
+                false,
+                Some("[process killed by signal 9]"),
+            ),
+            (
+                exit(Some(0), Some(15)),
+                false,
+                Some("[process killed by signal 15]"),
+            ),
+            (
+                PaneState::Crashed("boom".into()),
+                false,
+                Some("[crashed: boom]"),
+            ),
+        ];
+        for (state, clean, want) in rows {
+            assert_eq!(state.is_clean_exit(), clean, "{state:?}");
+            let line = state.status_line();
+            match want {
+                None => assert_eq!(line, None),
+                Some(want) => {
+                    let line = line.unwrap();
+                    assert!(line.starts_with(want), "{line}");
+                    assert!(line.ends_with("Enter to restart"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn title_precedence_table() {

@@ -104,7 +104,7 @@ fn migrate(table: toml::Table) -> toml::Table {
 /// Saves `config` to `dir/config.toml` atomically (temp file, `fsync`, rename), mode `0600`,
 /// keeping the previous file as `config.toml.bak`.
 pub fn save(config: &Config, dir: &Path) -> Result<(), ConfigError> {
-    std::fs::create_dir_all(dir).map_err(|err| ConfigError::io(dir, err))?;
+    crate::fsutil::create_private_dir(dir).map_err(|err| ConfigError::io(dir, err))?;
     let text =
         toml::to_string_pretty(config).map_err(|err| ConfigError::Serialize(err.to_string()))?;
     let dest = dir.join(FILE_NAME);

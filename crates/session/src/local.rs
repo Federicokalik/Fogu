@@ -34,6 +34,9 @@ const WRITE_CHUNK: usize = 4 * 1024;
 /// Terminal replies (`PtyWrite`) are dropped while this much is already waiting to be written,
 /// so a program flooding queries without reading its input cannot grow our memory.
 const MAX_PENDING_FOR_REPLIES: usize = 1024 * 1024;
+/// User input (`SessionInput::Data`) is dropped while this much is already waiting to be
+/// written (the program stopped reading its tty); resizes, close and cwd queries keep flowing.
+const MAX_PENDING_INPUT: usize = 4 * 1024 * 1024;
 /// Time between SIGHUP (closing the master) and SIGKILL of the process group.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
 /// Upper bound for draining output after the child exited (a background job may keep the slave).
@@ -60,9 +63,21 @@ struct Pump {
     /// This machine's hostname, used to tell an OSC 7 report of a local path from one made on a
     /// remote host reached by a plain `ssh` inside this shell.
     local_hostname: String,
+    /// `InputDropped` was already reported for the current backlog.
+    overflow_reported: bool,
 }
 
 impl Pump {
+    /// Queues user input unless the backlog is over [`MAX_PENDING_INPUT`]. Returns `true` the
+    /// first time input is dropped for the current backlog (to report it once).
+    fn queue_input(&mut self, data: &[u8]) -> bool {
+        if self.pending.len().saturating_add(data.len()) <= MAX_PENDING_INPUT {
+            self.pending.extend_from_slice(data);
+            return false;
+        }
+        !std::mem::replace(&mut self.overflow_reported, true)
+    }
+
     async fn feed(&mut self, bytes: &[u8]) -> Result<(), Gone> {
         // Non-consuming: `bytes` is fed to the terminal unchanged below.
         let osc_events = self.osc.scan(bytes);
@@ -195,6 +210,7 @@ pub(crate) async fn run_local(
         term,
         out_tx,
         pending: BytesMut::new(),
+        overflow_reported: false,
         osc: OscScanner::new(),
         local_hostname: local_hostname(),
     };
@@ -242,7 +258,12 @@ async fn run_loop(
         tokio::select! {
             biased;
             input = in_rx.recv() => match input {
-                Some(SessionInput::Data(data)) => pump.pending.extend_from_slice(&data),
+                Some(SessionInput::Data(data)) => {
+                    if pump.queue_input(&data) {
+                        tracing::warn!(len = data.len(), "input backlog full; dropping input");
+                        pump.emit(SessionOutput::InputDropped).await?;
+                    }
+                }
                 Some(SessionInput::Resize(size)) => resize(&local.master, size),
                 Some(SessionInput::PromptReply(_, reply)) => match reply {},
                 Some(SessionInput::QueryCwd) => {
@@ -254,10 +275,16 @@ async fn run_loop(
             },
             written = local.writer.write(pump.pending.get(..chunk).unwrap_or_default()),
                 if chunk > 0 => match written {
-                Ok(n) => pump.pending.advance(n),
+                Ok(n) => {
+                    pump.pending.advance(n);
+                    if pump.pending.is_empty() {
+                        pump.overflow_reported = false;
+                    }
+                }
                 Err(err) => {
                     tracing::debug!(error = %err, "PTY write failed; dropping pending input");
                     pump.pending.clear();
+                    pump.overflow_reported = false;
                 }
             },
             read = local.reader.read(buf), if !local.eof => match read {

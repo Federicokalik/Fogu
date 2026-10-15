@@ -5,6 +5,7 @@ mod env;
 mod local;
 mod supervise;
 
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -100,6 +101,9 @@ pub enum SessionOutput {
     },
     /// Shell-integration prompt mark (OSC 133); not used by the UI yet.
     PromptMark(PromptMark),
+    /// User input was dropped: the program stopped reading and the backlog is full. Sent once
+    /// per backlog.
+    InputDropped,
     /// The session needs an answer from the user (SSH).
     Prompt(PromptId, PromptKind),
     /// OSC 52 clipboard write; the UI applies the policy.
@@ -122,8 +126,9 @@ pub enum PromptKind {}
 #[derive(Debug)]
 pub enum PromptReply {}
 
-/// OSC 52 write request forwarded to the UI.
-#[derive(Clone, Debug)]
+/// OSC 52 write request forwarded to the UI. `Debug` shows only the target and the length: the
+/// payload is attacker-chosen text that must never reach a log.
+#[derive(Clone)]
 pub struct ClipboardRequest {
     /// Clipboard or primary selection.
     pub target: ClipboardType,
@@ -131,6 +136,15 @@ pub struct ClipboardRequest {
     pub payload: String,
     /// Payload length in bytes.
     pub len: usize,
+}
+
+impl fmt::Debug for ClipboardRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClipboardRequest")
+            .field("target", &self.target)
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
 }
 
 /// How the transport ended.

@@ -7,14 +7,19 @@
 
 mod actions;
 mod app;
+mod appearance;
+mod blink;
 mod context_menu;
 mod keys;
+mod lifecycle;
 mod message;
 mod metrics;
 mod modal;
 mod mouse;
+mod notifications;
 mod palette;
 mod panes;
+mod paste;
 mod runs;
 mod split_container;
 mod subscription;
@@ -31,6 +36,20 @@ use fogu_session::SessionRuntime;
 // dependency — `iced` stays an implementation detail of this crate.
 pub use iced::Result;
 
+pub use notifications::{Level, Notification};
+
+/// What the binary hands to [`run`] besides the config.
+#[derive(Clone, Debug, Default)]
+pub struct RunOptions {
+    /// Toasts to show at startup (config load errors, validation issues).
+    pub notices: Vec<Notification>,
+    /// Exit right after the first presented frame (benchmarks).
+    pub exit_after_first_frame: bool,
+}
+
+/// `WM_CLASS` / Wayland app id; matches the `.desktop` file's `StartupWMClass`.
+const APP_ID: &str = "fogu";
+
 /// Runs the Fogu GUI: a window whose first tab runs the default profile, configured by
 /// `config` (loaded by the `fogu` binary via `fogu_core::config::load`).
 ///
@@ -38,15 +57,23 @@ pub use iced::Result;
 ///
 /// Returns an error if the session runtime cannot start or iced fails to initialise the
 /// windowing or graphics backend.
-pub fn run(config: Arc<Config>) -> Result {
+pub fn run(config: Arc<Config>, options: RunOptions) -> Result {
     let runtime = Arc::new(SessionRuntime::new().map_err(iced::Error::ExecutorCreationFailed)?);
+    let window = iced::window::Settings {
+        size: app::WINDOW_SIZE,
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: APP_ID.to_owned(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     iced::application(
-        move || app::App::boot(Arc::clone(&runtime), Arc::clone(&config)),
+        move || app::App::boot(Arc::clone(&runtime), Arc::clone(&config), options.clone()),
         app::App::update,
         app::App::view,
     )
     .title(app::App::title)
     .subscription(app::App::subscription)
-    .window_size(app::WINDOW_SIZE)
+    .window(window)
     .run()
 }

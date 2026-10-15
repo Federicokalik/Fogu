@@ -4,17 +4,17 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use fogu_core::{
-    Action, EffectiveProfile, Profile, ProfileKind, SessionEndBehavior, Side, Size, resolve,
-};
+use fogu_core::{Action, EffectiveProfile, Profile, ProfileKind, Side, Size, resolve};
 use fogu_session::{SessionHandle, SessionInput, SessionOutput};
 use fogu_term::{Scroll, TermHandle, input, sanitize_title};
 use iced::widget::operation;
 use iced::{Task, clipboard, window};
 
 use crate::app::App;
+use crate::appearance::cursor_shape;
 use crate::context_menu::{ContextMenu, MENU_INPUT, parse_color};
 use crate::message::{Message, PasteSource};
+use crate::notifications::{Level, Notification};
 use crate::panes::{CwdFor, CwdQuery};
 use crate::tab::{Pane, PaneId, PaneState, Tab, TabId};
 use crate::tab_bar::{RENAME_INPUT, Rename};
@@ -104,6 +104,7 @@ impl App {
             &terminal.word_separators,
         );
         term.set_palette(self.colors.palette());
+        term.set_default_cursor_shape(cursor_shape(self.config.appearance.cursor_shape));
         term.set_cell_size_px(self.metrics.cell_w_px, self.metrics.cell_h_px);
         let mut effective = resolve(profile, &self.config.profile_defaults);
         if let (Some(cwd), EffectiveProfile::Local(local)) = (cwd, &mut effective) {
@@ -220,8 +221,12 @@ impl App {
                 }
             }
             Action::PaneNav(dir) => self.pane_nav(dir),
+            // Not implemented yet; logged rather than silently dropped.
             Action::SelectAll | Action::Reconnect | Action::OpenProfilePicker => {
                 tracing::debug!(%action, "action not implemented yet");
+                let note = Notification::new(Level::Info, "Not available yet")
+                    .detail(format!("\"{action}\" arrives with SSH / context menus"));
+                return self.notify(note);
             }
         }
         Task::none()
@@ -396,51 +401,26 @@ impl App {
             }
             SessionOutput::Exited(info) => {
                 tracing::info!(?info, "session exited");
-                let status = match (info.code, info.signal) {
-                    (_, Some(signal)) => format!("[process killed by signal {signal}]"),
-                    (code, None) => format!("[process exited with code {}]", code.unwrap_or(0)),
-                };
-                return self.on_pane_ended(pane_id, PaneState::Exited, &status);
+                return self.on_pane_ended(pane_id, PaneState::Exited(info));
             }
-            SessionOutput::Error(err) => {
-                tracing::error!(error = %err, "session failed");
-                let status = "[crashed — see log]";
-                return self.on_pane_ended(pane_id, PaneState::Crashed, status);
+            SessionOutput::Error(err) => return self.on_session_error(pane_id, &err),
+            SessionOutput::ClipboardStore(request) => {
+                return self.on_clipboard_store(pane_id, request);
+            }
+            SessionOutput::InputDropped => {
+                let note = Notification::new(Level::Warn, "Input dropped").detail(
+                    "The program stopped reading its input; further typing or paste was discarded.",
+                );
+                return self.notify(note);
             }
             SessionOutput::Cwd { path, remote } => self.on_cwd(pane_id, path, remote),
             SessionOutput::Prompt(_, kind) => match kind {},
-            // Not handled yet: bell and OSC 52. Progress, notifications and prompt marks are
-            // logged by the session and ignored here.
+            // No UI for these yet; Progress/Notify/PromptMark are logged by the session.
             SessionOutput::Wakeup
             | SessionOutput::Bell
-            | SessionOutput::ClipboardStore(_)
             | SessionOutput::Progress(_)
             | SessionOutput::Notify { .. }
             | SessionOutput::PromptMark(_) => {}
-        }
-        Task::none()
-    }
-
-    /// Marks the pane ended. A pane being closed, or whose profile says `Close`, goes away
-    /// now; otherwise it shows `status` and restarts on Enter.
-    fn on_pane_ended(&mut self, pane_id: PaneId, state: PaneState, status: &str) -> Task<Message> {
-        let Some(tab) = self
-            .tabs
-            .iter_mut()
-            .find(|t| t.panes.contains_key(&pane_id))
-        else {
-            return Task::none();
-        };
-        let close = state == PaneState::Exited
-            && tab.profile.behavior_on_session_end == SessionEndBehavior::Close;
-        let Some(pane) = tab.panes.get_mut(&pane_id) else {
-            return Task::none();
-        };
-        pane.state = state;
-        pane.status = Some(format!("{status} — Enter to restart"));
-        pane.refresh();
-        if pane.closing || close {
-            return self.remove_pane(pane_id);
         }
         Task::none()
     }

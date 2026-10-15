@@ -19,26 +19,11 @@ use iced::{
 
 use crate::keys;
 use crate::message::Message;
-use crate::metrics::{CellMetrics, cells_f32 as cells};
+use crate::metrics::{CellMetrics, cells_f32 as cells, grid_size};
 use crate::mouse::{Grid, MouseConfig, MouseState};
 use crate::palette::{Colors, to_iced};
 use crate::runs::{Style, Underline, cell_style, row_runs};
 use crate::tab::PaneId;
-
-/// Number of whole cells that fit in `bounds`; never below 2×1 (a 0×0 or 1-column PTY confuses
-/// shells).
-pub fn grid_size(bounds: Size, metrics: &CellMetrics) -> (u16, u16) {
-    let fit = |len: f32, cell: f32| {
-        let n = (len / cell).floor().clamp(1.0, f32::from(u16::MAX));
-        #[expect(clippy::cast_sign_loss, reason = "clamped to 1..=u16::MAX above")]
-        let n = n as u16;
-        n
-    };
-    (
-        fit(bounds.width, metrics.cell_w).max(2),
-        fit(bounds.height, metrics.cell_h),
-    )
-}
 
 /// The terminal widget. Borrowed from the pane for one `view`.
 #[derive(Debug)]
@@ -52,6 +37,8 @@ pub struct TerminalView<'a> {
     overlay: Option<&'a str>,
     mouse_config: MouseConfig,
     hotkeys: Option<&'a Hotkeys>,
+    /// Blink phase: `false` hides the focused pane's cursor.
+    cursor_on: bool,
 }
 
 impl<'a> TerminalView<'a> {
@@ -75,6 +62,7 @@ impl<'a> TerminalView<'a> {
             overlay: None,
             mouse_config,
             hotkeys: None,
+            cursor_on: true,
         }
     }
 
@@ -82,6 +70,13 @@ impl<'a> TerminalView<'a> {
     #[must_use]
     pub fn status(mut self, status: Option<&'a str>) -> Self {
         self.overlay = status;
+        self
+    }
+
+    /// Blink phase of the focused pane's cursor (`false` = hidden this phase).
+    #[must_use]
+    pub fn cursor_on(mut self, on: bool) -> Self {
+        self.cursor_on = on;
         self
     }
 
@@ -185,7 +180,7 @@ impl<'a> TerminalView<'a> {
 
     fn draw_cursor(&self, renderer: &mut iced::Renderer, origin: Point, clip: Rectangle) {
         let cursor = self.snapshot.cursor;
-        if !cursor.visible {
+        if !cursor.visible || (self.focused && !self.cursor_on) {
             return;
         }
         let row = self.snapshot.rows().nth(cursor.row);
@@ -202,13 +197,13 @@ impl<'a> TerminalView<'a> {
         match shape {
             CursorShape::Block => {
                 fill(renderer, rect, color);
-                // Redraw the character under the cursor in the background colour.
+                // Redraw the character under the cursor in the scheme's cursor text colour.
                 if let Some(cell) = cell.filter(|c| c.ch != ' ') {
                     let style = cell_style(cell, self.colors);
                     let mut text = String::from(cell.ch);
                     text.extend(cell.zerowidth.iter().flat_map(|z| z.iter()));
-                    let bg = self.colors.background();
-                    self.draw_text(renderer, text, rect, &style, bg, clip);
+                    let fg = self.colors.cursor_text();
+                    self.draw_text(renderer, text, rect, &style, fg, clip);
                 }
             }
             CursorShape::Beam => fill(
@@ -474,19 +469,5 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
 impl<'a> From<TerminalView<'a>> for Element<'a, Message> {
     fn from(view: TerminalView<'a>) -> Self {
         Element::new(view)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::metrics::FontUnits;
-
-    #[test]
-    fn grid_size_floors_and_clamps() {
-        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0);
-        // cell 10 × 19
-        assert_eq!(grid_size(Size::new(805.0, 460.0), &m), (80, 24));
-        assert_eq!(grid_size(Size::new(3.0, 0.0), &m), (2, 1));
     }
 }

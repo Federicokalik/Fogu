@@ -4,6 +4,7 @@
 
 mod action;
 pub mod config;
+pub mod fsutil;
 mod keychord;
 mod profile;
 mod quick_connect;

@@ -14,7 +14,8 @@ use crate::profile::{Group, Osc52Policy, Profile, ProfileDefaults, ProfileId};
 /// The config schema version this binary writes; `migrate` (in `io.rs`) upgrades older files.
 pub const CURRENT_VERSION: u32 = 1;
 
-/// Cursor shape as stored in config; mapped to `fogu_term::CursorShape` by the UI.
+/// Cursor shape as stored in config; mapped to `fogu_term::CursorShape` by the UI
+/// (`ui/src/appearance.rs`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorShapeCfg {
@@ -52,8 +53,8 @@ pub enum RightClickAction {
     Clipboard,
 }
 
-/// Appearance: font, cursor, active colour scheme. `fallback_fonts`/`cursor_blink`/
-/// `tabs_location` are data only for now.
+/// Appearance: font, cursor, active colour scheme. `tabs_location` is data only until a second
+/// placement exists.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Appearance {
