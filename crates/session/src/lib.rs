@@ -1,8 +1,13 @@
-//! `fogu-session`: the one session API: `open()` spawns a transport task per tab that feeds a
-//! [`TermHandle`] and talks to the UI over two bounded channels. Only the local-shell task (`run_local`) exists so far.
+//! `fogu-session`: the one session API: `open()` spawns a transport task per tab that
+//! feeds a [`TermHandle`] and talks to the UI over two bounded channels. Transports: a local
+//! shell (`run_local`) and, behind the default `ssh` feature, an SSH shell channel (`run_ssh`).
 
 mod env;
 mod local;
+mod pipeline;
+mod prompt;
+#[cfg(feature = "ssh")]
+mod ssh;
 mod supervise;
 
 use std::fmt;
@@ -11,13 +16,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use fogu_core::{EffectiveProfile, Size};
+use fogu_core::{EffectiveProfile, EffectiveSsh, Size};
 use fogu_term::{ClipboardType, PromptMark, TermHandle};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::Instrument as _;
 
 pub use env::build_env;
+pub use prompt::{
+    KbdPrompt, PROMPT_INSTRUCTIONS_MAX_CHARS, PROMPT_MAX_COUNT, PROMPT_TEXT_MAX_CHARS, PromptId,
+    PromptKind, PromptReply, sanitize_remote,
+};
+#[cfg(feature = "ssh")]
+pub use ssh::{PROMPT_TIMEOUT, SshPaths};
 pub use supervise::supervise;
 
 /// Capacity of the UI → session input channel.
@@ -104,8 +115,11 @@ pub enum SessionOutput {
     /// User input was dropped: the program stopped reading and the backlog is full. Sent once
     /// per backlog.
     InputDropped,
-    /// The session needs an answer from the user (SSH).
+    /// The session needs an answer from the user (SSH): reply with
+    /// [`SessionInput::PromptReply`] carrying the same id within [`PROMPT_TIMEOUT`].
     Prompt(PromptId, PromptKind),
+    /// Something the user should know about this session (warning badge / toast).
+    Warning(SessionWarning),
     /// OSC 52 clipboard write; the UI applies the policy.
     ClipboardStore(ClipboardRequest),
     /// The transport ended.
@@ -114,17 +128,31 @@ pub enum SessionOutput {
     Error(SessionError),
 }
 
-/// Identifies one prompt within a session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PromptId(pub u64);
+/// Non-fatal conditions a session reports (closed set).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionWarning {
+    /// `verify_host_keys = false`: the server's identity was not checked (persistent badge).
+    HostKeyNotVerified,
+    /// Profile options that are set but not implemented yet (accepted, ignored).
+    Unsupported(Vec<&'static str>),
+}
 
-/// Prompt kinds (host key, password, keyboard-interactive). No kinds yet.
-#[derive(Clone, Debug)]
-pub enum PromptKind {}
-
-/// Replies to prompts. No replies yet.
-#[derive(Debug)]
-pub enum PromptReply {}
+/// Why a server's host key was not accepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum HostKeyFailure {
+    /// The user declined an unknown key (or the prompt was abandoned).
+    #[error("host key not accepted")]
+    Rejected,
+    /// The key differs from the recorded one and was not explicitly replaced.
+    #[error("host key changed (possible man-in-the-middle attack); connection refused")]
+    Changed,
+    /// The key is marked `@revoked` in a `known_hosts` file.
+    #[error("host key is revoked")]
+    Revoked,
+    /// The server presented a certificate; certificates are not supported yet.
+    #[error("host certificates are not supported")]
+    Certificate,
+}
 
 /// OSC 52 write request forwarded to the UI. `Debug` shows only the target and the length: the
 /// payload is attacker-chosen text that must never reach a log.
@@ -174,39 +202,98 @@ pub enum SessionError {
     /// The session task panicked; the pane's `TermHandle` must not be reused.
     #[error("session task crashed")]
     Crashed,
+    /// The SSH profile has no host.
+    #[error("no host configured")]
+    NoHost,
+    /// TCP connection failed.
+    #[error("could not connect to {target}")]
+    Connect {
+        /// `host:port` as configured (sanitized).
+        target: String,
+        /// Underlying OS error.
+        #[source]
+        source: Arc<io::Error>,
+    },
+    /// Connect, handshake or an authentication request exceeded `ready_timeout`.
+    #[error("connection timed out")]
+    Timeout,
+    /// No answer to a prompt within [`PROMPT_TIMEOUT`].
+    #[error("no answer to the prompt in time")]
+    PromptTimeout,
+    /// The server's host key was not accepted.
+    #[error(transparent)]
+    HostKey(HostKeyFailure),
+    /// Every allowed authentication method failed.
+    #[error("authentication failed")]
+    AuthFailed,
+    /// Any other SSH failure; the text is sanitized and capped (it may quote the server).
+    #[error("SSH error: {0}")]
+    Ssh(String),
 }
 
 /// Starts a session task on `rt` for `profile` that feeds `term` and returns the UI's side of it.
-/// SSH profiles have no transport yet: their session fails at once with
-/// [`SessionError::Spawn`] (`ErrorKind::Unsupported`), so the pane shows the crashed state.
+/// SSH profiles use the default [`SshPaths`] (our `known_hosts` under the default config dir);
+/// see [`open_ssh`] to choose them.
 pub fn open(
     rt: &Handle,
     profile: &EffectiveProfile,
     size: Size,
     term: TermHandle,
 ) -> SessionHandle {
+    match profile {
+        EffectiveProfile::Local(local) => spawn(rt, |in_rx, out_tx| {
+            let span = tracing::info_span!("session", kind = "local");
+            rt.spawn(local::run_local(local.clone(), size, term, in_rx, out_tx).instrument(span))
+        }),
+        #[cfg(feature = "ssh")]
+        EffectiveProfile::Ssh(ssh) => open_ssh(rt, ssh, SshPaths::default_for_user(), size, term),
+        #[cfg(not(feature = "ssh"))]
+        EffectiveProfile::Ssh(ssh) => unsupported_ssh(rt, ssh),
+    }
+}
+
+/// [`open`] for an SSH profile with explicit `known_hosts` locations (`--config-dir`, tests).
+#[cfg(feature = "ssh")]
+pub fn open_ssh(
+    rt: &Handle,
+    ssh: &EffectiveSsh,
+    paths: SshPaths,
+    size: Size,
+    term: TermHandle,
+) -> SessionHandle {
+    spawn(rt, |in_rx, out_tx| {
+        let span = tracing::info_span!("session", kind = "ssh");
+        rt.spawn(ssh::run_ssh(ssh.clone(), paths, size, term, in_rx, out_tx).instrument(span))
+    })
+}
+
+/// Without the `ssh` feature an SSH profile fails at once with [`SessionError::Spawn`]
+/// (`ErrorKind::Unsupported`), so the pane shows the crashed state.
+#[cfg(not(feature = "ssh"))]
+fn unsupported_ssh(rt: &Handle, ssh: &EffectiveSsh) -> SessionHandle {
+    let program = format!("ssh {}", ssh.host);
+    spawn(rt, |in_rx, out| {
+        rt.spawn(async move {
+            let source = Arc::new(io::Error::from(io::ErrorKind::Unsupported));
+            drop(in_rx);
+            let _gone = out
+                .send(SessionOutput::Error(SessionError::Spawn {
+                    program,
+                    source,
+                }))
+                .await;
+        })
+    })
+}
+
+/// Creates the channels, starts the task built by `start` and its supervisor.
+fn spawn(
+    rt: &Handle,
+    start: impl FnOnce(Receiver<SessionInput>, Sender<SessionOutput>) -> tokio::task::JoinHandle<()>,
+) -> SessionHandle {
     let (in_tx, in_rx) = mpsc::channel(INPUT_CAPACITY);
     let (out_tx, out_rx) = mpsc::channel(OUTPUT_CAPACITY);
-    let task = match profile {
-        EffectiveProfile::Local(local) => {
-            let span = tracing::info_span!("session", kind = "local");
-            rt.spawn(
-                local::run_local(local.clone(), size, term, in_rx, out_tx.clone()).instrument(span),
-            )
-        }
-        EffectiveProfile::Ssh(ssh) => {
-            let program = format!("ssh {}", ssh.host);
-            let out = out_tx.clone();
-            rt.spawn(async move {
-                let source = Arc::new(io::Error::from(io::ErrorKind::Unsupported));
-                let err = SessionError::Spawn { program, source };
-                drop(in_rx);
-                if out.send(SessionOutput::Error(err)).await.is_err() {
-                    tracing::debug!("SSH stub error not reported: UI receiver dropped");
-                }
-            })
-        }
-    };
+    let task = start(in_rx, out_tx.clone());
     rt.spawn(supervise(task, out_tx));
     SessionHandle {
         input: in_tx,

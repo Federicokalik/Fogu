@@ -9,9 +9,14 @@ workspace = true
 
 [dependencies]
 fogu-core = { path = "../core" }
-fogu-ui = { path = "../ui" }
+fogu-ui = { path = "../ui", default-features = false }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 clap = { workspace = true }
 rustix = { workspace = true }
+
+[features]
+default = ["ssh"]
+# SSH sessions (forwards `fogu-ui/ssh`).
+ssh = ["fogu-ui/ssh"]

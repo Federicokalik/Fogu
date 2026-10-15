@@ -10,12 +10,10 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use bytes::{Buf as _, BytesMut};
 use fogu_core::{LocalProfile, Size};
-use fogu_term::{OscEvent, OscScanner, TermEvent, TermHandle};
+use fogu_term::TermHandle;
 use pty_process::{OwnedReadPty, OwnedWritePty};
 use rustix::process::{Pid, Signal};
 use rustix::termios::Winsize;
@@ -25,153 +23,20 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{Instant, sleep_until, timeout, timeout_at};
 
 use crate::env::build_env;
-use crate::{ClipboardRequest, ExitInfo, SessionError, SessionInput, SessionOutput};
+use crate::pipeline::{Gone, Pump, WRITE_CHUNK, canonical_dir};
+use crate::{ExitInfo, SessionError, SessionInput, SessionOutput};
 
 /// PTY read buffer.
 const READ_CHUNK: usize = 64 * 1024;
-/// Largest single PTY write.
-const WRITE_CHUNK: usize = 4 * 1024;
-/// Terminal replies (`PtyWrite`) are dropped while this much is already waiting to be written,
-/// so a program flooding queries without reading its input cannot grow our memory.
-const MAX_PENDING_FOR_REPLIES: usize = 1024 * 1024;
-/// User input (`SessionInput::Data`) is dropped while this much is already waiting to be
-/// written (the program stopped reading its tty); resizes, close and cwd queries keep flowing.
-const MAX_PENDING_INPUT: usize = 4 * 1024 * 1024;
 /// Time between SIGHUP (closing the master) and SIGKILL of the process group.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
 /// Upper bound for draining output after the child exited (a background job may keep the slave).
 const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// The UI dropped its event receiver; stop quietly.
-struct Gone;
-
 /// Why the main loop stopped.
 enum End {
     Exited(io::Result<ExitStatus>),
     Close,
-}
-
-/// Feeds bytes into the terminal and routes the resulting events.
-struct Pump {
-    term: TermHandle,
-    dirty: Arc<AtomicBool>,
-    out_tx: Sender<SessionOutput>,
-    /// Bytes waiting to be written to the PTY (user input + terminal replies).
-    pending: BytesMut,
-    /// Side-channel scanner for OSC codes `Term`/`vte` drop.
-    osc: OscScanner,
-    /// This machine's hostname, used to tell an OSC 7 report of a local path from one made on a
-    /// remote host reached by a plain `ssh` inside this shell.
-    local_hostname: String,
-    /// `InputDropped` was already reported for the current backlog.
-    overflow_reported: bool,
-}
-
-impl Pump {
-    /// Queues user input unless the backlog is over [`MAX_PENDING_INPUT`]. Returns `true` the
-    /// first time input is dropped for the current backlog (to report it once).
-    fn queue_input(&mut self, data: &[u8]) -> bool {
-        if self.pending.len().saturating_add(data.len()) <= MAX_PENDING_INPUT {
-            self.pending.extend_from_slice(data);
-            return false;
-        }
-        !std::mem::replace(&mut self.overflow_reported, true)
-    }
-
-    async fn feed(&mut self, bytes: &[u8]) -> Result<(), Gone> {
-        // Non-consuming: `bytes` is fed to the terminal unchanged below.
-        let osc_events = self.osc.scan(bytes);
-        self.term.feed(bytes);
-        for event in osc_events {
-            if let Some(out) = self.map_osc(event) {
-                self.emit(out).await?;
-            }
-        }
-        for event in self.term.drain_events() {
-            let out = match event {
-                TermEvent::PtyWrite(reply) => {
-                    if self.pending.len() < MAX_PENDING_FOR_REPLIES {
-                        self.pending.extend_from_slice(&reply);
-                    }
-                    continue;
-                }
-                TermEvent::Title(title) => SessionOutput::Title(title),
-                TermEvent::ResetTitle => SessionOutput::Title(String::new()),
-                TermEvent::Bell => SessionOutput::Bell,
-                TermEvent::ClipboardStore {
-                    target,
-                    payload,
-                    len,
-                } => SessionOutput::ClipboardStore(ClipboardRequest {
-                    target,
-                    payload,
-                    len,
-                }),
-                TermEvent::CursorBlinkingChange => continue,
-            };
-            self.emit(out).await?;
-        }
-        if !self.dirty.swap(true, Ordering::AcqRel) {
-            self.emit(SessionOutput::Wakeup).await?;
-        }
-        Ok(())
-    }
-
-    async fn emit(&self, out: SessionOutput) -> Result<(), Gone> {
-        self.out_tx.send(out).await.map_err(|_| Gone)
-    }
-
-    /// Maps a scanner event to a `SessionOutput`, logging the ones the UI does not use
-    /// yet.
-    fn map_osc(&self, event: OscEvent) -> Option<SessionOutput> {
-        Some(match event {
-            OscEvent::Cwd { host, path } => {
-                let remote = !is_local_host(&host, &self.local_hostname);
-                let path = if remote {
-                    Some(path)
-                } else {
-                    canonical_dir(&path)
-                }?;
-                tracing::debug!(path = %path.display(), remote, "cwd");
-                SessionOutput::Cwd { path, remote }
-            }
-            OscEvent::Progress(pct) => {
-                tracing::debug!(?pct, "progress");
-                SessionOutput::Progress(pct)
-            }
-            OscEvent::Notify { title, body } => {
-                tracing::debug!(?title, %body, "notify (no UI yet)");
-                SessionOutput::Notify { title, body }
-            }
-            OscEvent::Prompt(mark) => {
-                tracing::debug!(?mark, "prompt mark (unused)");
-                SessionOutput::PromptMark(mark)
-            }
-        })
-    }
-}
-
-/// `true` when `host` (an OSC 7 host field) names this machine: empty (no host given) or
-/// matching `local_hostname` case-insensitively.
-fn is_local_host(host: &str, local_hostname: &str) -> bool {
-    host.is_empty()
-        || host.eq_ignore_ascii_case("localhost")
-        || (!local_hostname.is_empty() && host.eq_ignore_ascii_case(local_hostname))
-}
-
-/// Resolves and validates a reported local path; `None` if it doesn't canonicalize to an
-/// existing directory.
-fn canonical_dir(path: &Path) -> Option<PathBuf> {
-    let canon = path.canonicalize().ok()?;
-    canon.is_dir().then_some(canon)
-}
-
-/// This machine's hostname (`/proc/sys/kernel/hostname`), for [`is_local_host`]. Empty on
-/// failure, which only ever widens what counts as "local" by one fewer alias, never narrows it.
-fn local_hostname() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .map(|s| s.trim().to_owned())
-        .unwrap_or_default()
 }
 
 /// On-demand cwd lookup (fallback when the shell reports no OSC 7): the foreground process group's
@@ -205,15 +70,7 @@ pub(crate) async fn run_local(
     mut in_rx: Receiver<SessionInput>,
     out_tx: Sender<SessionOutput>,
 ) {
-    let mut pump = Pump {
-        dirty: term.dirty(),
-        term,
-        out_tx,
-        pending: BytesMut::new(),
-        overflow_reported: false,
-        osc: OscScanner::new(),
-        local_hostname: local_hostname(),
-    };
+    let mut pump = Pump::new(term, out_tx, false);
     let mut local = match spawn(&profile, size) {
         Ok(local) => local,
         Err(err) => {
@@ -265,7 +122,9 @@ async fn run_loop(
                     }
                 }
                 Some(SessionInput::Resize(size)) => resize(&local.master, size),
-                Some(SessionInput::PromptReply(_, reply)) => match reply {},
+                Some(SessionInput::PromptReply(id, _)) => {
+                    tracing::debug!(?id, "prompt reply for a local session ignored");
+                }
                 Some(SessionInput::QueryCwd) => {
                     if let Some(path) = current_cwd(&local.master, local.child.id()) {
                         pump.emit(SessionOutput::Cwd { path, remote: false }).await?;
@@ -275,16 +134,10 @@ async fn run_loop(
             },
             written = local.writer.write(pump.pending.get(..chunk).unwrap_or_default()),
                 if chunk > 0 => match written {
-                Ok(n) => {
-                    pump.pending.advance(n);
-                    if pump.pending.is_empty() {
-                        pump.overflow_reported = false;
-                    }
-                }
+                Ok(n) => pump.written(n),
                 Err(err) => {
                     tracing::debug!(error = %err, "PTY write failed; dropping pending input");
-                    pump.pending.clear();
-                    pump.overflow_reported = false;
+                    pump.write_failed();
                 }
             },
             read = local.reader.read(buf), if !local.eof => match read {

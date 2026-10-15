@@ -414,7 +414,8 @@ impl App {
                 return self.notify(note);
             }
             SessionOutput::Cwd { path, remote } => self.on_cwd(pane_id, path, remote),
-            SessionOutput::Prompt(_, kind) => match kind {},
+            SessionOutput::Prompt(id, kind) => return self.on_prompt(pane_id, id, &kind),
+            SessionOutput::Warning(warning) => return self.on_session_warning(&warning),
             // No UI for these yet; Progress/Notify/PromptMark are logged by the session.
             SessionOutput::Wakeup
             | SessionOutput::Bell

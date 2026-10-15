@@ -202,25 +202,6 @@ fn supervise_maps_panic_to_crashed() {
 }
 
 #[test]
-fn ssh_profiles_fail_until_s18() {
-    let rt = SessionRuntime::new().unwrap();
-    let term = TermHandle::new(SIZE.cols, SIZE.rows, 1000, WORD_SEPARATORS);
-    let profile = EffectiveProfile::Ssh(fogu_core::EffectiveSsh {
-        host: "example.org".into(),
-        port: 22,
-        user: None,
-    });
-    let mut handle = open(rt.handle(), &profile, SIZE, term);
-    let event = rt.handle().block_on(async {
-        tokio::time::timeout(Duration::from_secs(5), handle.events.recv()).await
-    });
-    let Ok(Some(SessionOutput::Error(SessionError::Spawn { program, .. }))) = event else {
-        panic!("expected a spawn error, got {event:?}");
-    };
-    assert_eq!(program, "ssh example.org");
-}
-
-#[test]
 fn input_backlog_is_bounded_and_reported_once() {
     let rt = SessionRuntime::new().unwrap();
     let (mut session, view) = start(&rt, &profile("sh", &["-c", "sleep 100"]));

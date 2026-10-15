@@ -3,6 +3,7 @@
 //! "defaults" file).
 
 mod io;
+pub mod ssh_opts;
 
 pub use io::{ConfigError, ConfigIssue, config_dir, load, save, validate};
 
@@ -272,6 +273,6 @@ mod tests {
         };
         assert_eq!(ssh.host, "example.com");
         assert_eq!(ssh.port, 2222);
-        assert_eq!(ssh.user, Some("alice".to_owned()));
+        assert_eq!(ssh.user, "alice");
     }
 }

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::ssh_opts::{EffectiveSsh, SshOpts, resolve_ssh};
 use crate::scheme::RgbColor;
 
 /// How to start a local shell in a PTY. The concrete, fully-resolved form of a local profile
@@ -59,25 +60,14 @@ pub struct LocalOpts {
     pub osc52_write: Option<Osc52Policy>,
 }
 
-/// Stored (partial) SSH options. Only `host`/`port`/`user` exist so far; connection, auth and
-/// host-key fields are not modelled yet.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SshOpts {
-    /// Hostname or address; required to actually connect (no builtin default).
-    pub host: Option<String>,
-    /// TCP port; defaults to 22.
-    pub port: Option<u16>,
-    /// Remote username; `None` lets the SSH client decide (local user name).
-    pub user: Option<String>,
-    /// Per-profile override of `terminal.osc52_write`.
-    pub osc52_write: Option<Osc52Policy>,
-}
-
 /// Per-kind profile options (an enum, not trait objects — the set of kinds is
 /// closed and known at compile time).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a handful of profiles, cloned only when a tab opens; boxing would only add noise"
+)]
 pub enum ProfileKind {
     /// A local shell/command.
     Local(LocalOpts),
@@ -85,7 +75,8 @@ pub enum ProfileKind {
     Ssh(SshOpts),
 }
 
-/// What happens to a pane when its session ends. Config key is `behavior_on_session_end`.
+/// What happens to a pane when its session ends. `Auto`/`Reconnect` are parsed, but for now `Auto` acts like
+/// `CloseIfClean` and `Reconnect` like `Keep`. Config key is `behavior_on_session_end`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionEndBehavior {
     /// Leave the pane open, showing the exit status.
@@ -98,6 +89,12 @@ pub enum SessionEndBehavior {
     #[default]
     #[serde(rename = "close_if_clean")]
     CloseIfClean,
+    /// Close when the session was ended deliberately.
+    #[serde(rename = "auto")]
+    Auto,
+    /// Reconnect when the connection drops; kept open for now.
+    #[serde(rename = "reconnect")]
+    Reconnect,
 }
 
 impl SessionEndBehavior {
@@ -107,9 +104,9 @@ impl SessionEndBehavior {
     #[must_use]
     pub fn closes(self, clean: bool) -> bool {
         match self {
-            Self::Keep => false,
+            Self::Keep | Self::Reconnect => false,
             Self::Close => true,
-            Self::CloseIfClean => clean,
+            Self::CloseIfClean | Self::Auto => clean,
         }
     }
 }
@@ -188,27 +185,16 @@ pub struct ProfileDefaults {
     pub ssh: SshOpts,
 }
 
-/// A resolved SSH profile. Minimal for now: just enough for a `QuickConnect`-style address;
-/// auth, host keys and jump hosts are not modelled yet.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct EffectiveSsh {
-    /// Hostname or address.
-    pub host: String,
-    /// TCP port (default 22).
-    pub port: u16,
-    /// Remote username, if set.
-    pub user: Option<String>,
-}
-
-/// The default SSH port.
-const DEFAULT_SSH_PORT: u16 = 22;
-
 /// A profile with every option resolved to a concrete value, ready to open a session.
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "built once per opened tab and moved into the session task"
+)]
 pub enum EffectiveProfile {
     /// A local shell/command, ready for `fogu_session::open`.
     Local(LocalProfile),
-    /// An SSH connection (minimal fields).
+    /// An SSH connection, ready for `fogu_session::open`.
     Ssh(EffectiveSsh),
 }
 
@@ -237,18 +223,6 @@ fn resolve_local(opts: &LocalOpts, defaults: &LocalOpts) -> LocalProfile {
             .or_else(|| defaults.env.clone())
             .unwrap_or_default(),
         login: opts.login.or(defaults.login).unwrap_or(false),
-    }
-}
-
-fn resolve_ssh(opts: &SshOpts, defaults: &SshOpts) -> EffectiveSsh {
-    EffectiveSsh {
-        host: opts
-            .host
-            .clone()
-            .or_else(|| defaults.host.clone())
-            .unwrap_or_default(),
-        port: opts.port.or(defaults.port).unwrap_or(DEFAULT_SSH_PORT),
-        user: opts.user.clone().or_else(|| defaults.user.clone()),
     }
 }
 
@@ -321,7 +295,7 @@ mod tests {
         };
         assert_eq!(effective.host, "example.com");
         assert_eq!(effective.port, 22);
-        assert_eq!(effective.user, None);
+        assert_ne!(effective.user, "");
     }
 
     #[test]
@@ -366,6 +340,8 @@ mod tests {
             ("keep", SessionEndBehavior::Keep),
             ("close", SessionEndBehavior::Close),
             ("close_if_clean", SessionEndBehavior::CloseIfClean),
+            ("auto", SessionEndBehavior::Auto),
+            ("reconnect", SessionEndBehavior::Reconnect),
         ] {
             let p: Profile = toml::from_str(&format!(
                 "id = \"x\"\nname = \"x\"\ntype = \"local\"\nbehavior_on_session_end = \"{text}\""
@@ -383,7 +359,7 @@ mod tests {
                 host: Some("example.com".to_owned()),
                 port: Some(2222),
                 user: Some("alice".to_owned()),
-                osc52_write: None,
+                ..SshOpts::default()
             }),
             ..Profile::default_shell()
         };

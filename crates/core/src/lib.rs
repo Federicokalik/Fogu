@@ -14,11 +14,13 @@ mod split;
 
 pub use action::{Action, Dir, Hotkeys};
 pub use config::Config;
+pub use config::ssh_opts::{
+    Algorithms, Backspace, EffectiveSsh, ForwardKind, LoginScript, PortForward, SshAuth, SshOpts,
+};
 pub use keychord::{KeyChord, KeyName, Mods, NamedKey};
 pub use profile::{
-    EffectiveProfile, EffectiveSsh, Group, GroupId, LocalOpts, LocalProfile, Osc52Policy, Profile,
-    ProfileDefaults, ProfileId, ProfileKind, SessionEndBehavior, SshOpts, effective_osc52_write,
-    resolve,
+    EffectiveProfile, Group, GroupId, LocalOpts, LocalProfile, Osc52Policy, Profile,
+    ProfileDefaults, ProfileId, ProfileKind, SessionEndBehavior, effective_osc52_write, resolve,
 };
 pub use quick_connect::{QuickConnect, QuickConnectError};
 pub use scheme::{ColorScheme, RgbColor};

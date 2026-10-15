@@ -8,9 +8,14 @@ version.workspace = true
 workspace = true
 
 [dependencies]
-fogu-session = { path = "../session" }
+fogu-session = { path = "../session", default-features = false }
 iced = { workspace = true }
 fogu-core = { path = "../core" }
 fogu-term = { path = "../term" }
 tokio.workspace = true
 tracing.workspace = true
+
+[features]
+default = ["ssh"]
+# SSH sessions (forwards `fogu-session/ssh`).
+ssh = ["fogu-session/ssh"]

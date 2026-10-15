@@ -22,6 +22,7 @@ mod panes;
 mod paste;
 mod runs;
 mod split_container;
+mod ssh_notices;
 mod subscription;
 mod tab;
 mod tab_bar;

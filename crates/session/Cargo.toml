@@ -16,3 +16,15 @@ rustix.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+russh = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
+secrecy.workspace = true
+
+[features]
+default = ["ssh"]
+# The SSH transport (`run_ssh`). Off = local shells only, no russh in the tree.
+ssh = ["dep:russh", "dep:ring"]
+
+[[example]]
+name = "ssh_probe"
+required-features = ["ssh"]
