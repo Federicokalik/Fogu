@@ -23,7 +23,7 @@ fn app_with(config: Config) -> App {
     };
     let mut app = App::new(runtime, Arc::new(config), resolved);
     let profile = app.default_profile();
-    app.open_tab(profile, None);
+    app.open_tab(&profile, None);
     app
 }
 
@@ -84,7 +84,7 @@ fn default_policy_closes_clean_exits_and_keeps_failures() {
     let keep = focused(&app);
     let second = split(&mut app);
     assert_eq!(
-        app.tabs[0].profile.behavior_on_session_end,
+        app.pane(second).unwrap().profile.behavior_on_session_end,
         SessionEndBehavior::CloseIfClean
     );
     // exit 1 keeps the pane with the code shown.
@@ -103,10 +103,13 @@ fn default_policy_closes_clean_exits_and_keeps_failures() {
 }
 
 #[test]
-fn spawn_failure_crashes_the_pane_with_an_error_toast_and_restarts_fresh() {
+fn spawn_failure_crashes_the_pane_with_an_error_toast_and_restarts() {
     let mut app = app_with(Config::default());
     // Even `Close` must not hide a crash.
-    app.tabs[0].profile.behavior_on_session_end = SessionEndBehavior::Close;
+    app.active_pane_mut()
+        .unwrap()
+        .profile
+        .behavior_on_session_end = SessionEndBehavior::Close;
     let pane = focused(&app);
     send(&mut app, Message::Session(pane, spawn_failure()));
     let shown = app.pane(pane).unwrap();
@@ -116,13 +119,13 @@ fn spawn_failure_crashes_the_pane_with_an_error_toast_and_restarts_fresh() {
             .status
             .as_deref()
             .unwrap()
-            .contains("Enter to restart")
+            .contains("Press any key to restart")
     );
     let toast = app.toasts.iter().next().unwrap();
     assert_eq!(toast.level, Level::Error);
     assert!(!toast.auto_dismisses(), "errors are sticky");
     assert!(toast.detail.contains("failed to start /nonexistent"));
-    // Enter replaces the pane with a new one (new id, new terminal, running).
+    // Enter (any key) replaces the pane with a new one (new id, new session, running).
     send(&mut app, enter());
     let fresh = focused(&app);
     assert_ne!(fresh, pane);

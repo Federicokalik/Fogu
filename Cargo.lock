@@ -1429,6 +1429,7 @@ dependencies = [
  "fogu-session",
  "fogu-term",
  "iced",
+ "secrecy",
  "tokio",
  "tracing",
 ]

@@ -15,7 +15,7 @@ use crate::appearance::cursor_shape;
 use crate::context_menu::{ContextMenu, MENU_INPUT, parse_color};
 use crate::message::{Message, PasteSource};
 use crate::notifications::{Level, Notification};
-use crate::panes::{CwdFor, CwdQuery};
+use crate::panes::{CloseTarget, CwdFor, CwdQuery};
 use crate::tab::{Pane, PaneId, PaneState, Tab, TabId};
 use crate::tab_bar::{RENAME_INPUT, Rename};
 
@@ -85,10 +85,10 @@ impl App {
 
     /// Opens `profile` (local `cwd` override for "new tab here") in a new last tab and
     /// activates it.
-    pub(crate) fn open_tab(&mut self, profile: Profile, cwd: Option<PathBuf>) -> TabId {
-        let pane = self.open_pane(&profile, cwd);
+    pub(crate) fn open_tab(&mut self, profile: &Profile, cwd: Option<PathBuf>) -> TabId {
+        let pane = self.open_pane(profile, cwd);
         let id = TabId(self.take_id());
-        self.tabs.push(Tab::new(id, profile, pane));
+        self.tabs.push(Tab::new(id, pane));
         self.activate(id);
         id
     }
@@ -96,13 +96,20 @@ impl App {
     /// A new pane running `profile`, sized like the active pane.
     pub(crate) fn open_pane(&mut self, profile: &Profile, cwd: Option<PathBuf>) -> Pane {
         let size = self.active_pane().map_or(INITIAL_SIZE, Pane::size);
-        let terminal = &self.config.terminal;
-        let mut term = TermHandle::new(
-            size.cols,
-            size.rows,
-            terminal.scrollback_lines,
-            &terminal.word_separators,
-        );
+        let term = self.new_term(size);
+        self.start_pane(profile, cwd, (term, false), size)
+    }
+
+    /// A new pane running `profile` on `term` of `size` cells: blank, or (`kept_history`) a
+    /// restarted pane's grid already reset with [`TermHandle::reset_for_new_session`], which an
+    /// SSH session's `clear_service_messages_on_connect` must not wipe.
+    pub(crate) fn start_pane(
+        &mut self,
+        profile: &Profile,
+        cwd: Option<PathBuf>,
+        (mut term, kept_history): (TermHandle, bool),
+        size: Size,
+    ) -> Pane {
         term.set_palette(self.colors.palette());
         term.set_default_cursor_shape(cursor_shape(self.config.appearance.cursor_shape));
         term.set_cell_size_px(self.metrics.cell_w_px, self.metrics.cell_h_px);
@@ -110,15 +117,24 @@ impl App {
         if let (Some(cwd), EffectiveProfile::Local(local)) = (cwd, &mut effective) {
             local.cwd = Some(cwd);
         }
+        if let (true, EffectiveProfile::Ssh(ssh)) = (kept_history, &mut effective) {
+            ssh.clear_service_messages_on_connect = false;
+        }
         let size = Size {
             px_w: size.cols.saturating_mul(self.metrics.cell_w_px),
             px_h: size.rows.saturating_mul(self.metrics.cell_h_px),
             ..size
         };
+        let default_title = match &effective {
+            EffectiveProfile::Ssh(ssh) => sanitize_title(&format!("{}@{}", ssh.user, ssh.host)),
+            EffectiveProfile::Local(_) => profile.name.clone(),
+        };
         let handle = self.open_session(&effective, size, term.share());
-        Pane::new(PaneId(self.take_id()), term, handle)
+        let id = PaneId(self.take_id());
+        Pane::new(id, profile.clone(), default_title, term, handle)
     }
 
+    /// SSH sessions keep their `known_hosts` next to the config (`--config-dir`).
     #[cfg(not(test))]
     fn open_session(
         &mut self,
@@ -126,13 +142,20 @@ impl App {
         size: Size,
         term: TermHandle,
     ) -> SessionHandle {
-        fogu_session::open(self.runtime.handle(), profile, size, term)
+        let rt = self.runtime.handle();
+        #[cfg(feature = "ssh")]
+        if let (EffectiveProfile::Ssh(ssh), Some(dir)) = (profile, &self.config_dir) {
+            let paths = fogu_session::SshPaths::in_config_dir(dir);
+            return fogu_session::open_ssh(rt, ssh, paths, size, term);
+        }
+        fogu_session::open(rt, profile, size, term)
     }
 
     /// Test builds: an inert session (no process). Its input end is kept in `stub_inputs`; its
     /// event sender is dropped, so the event stream is empty.
     #[cfg(test)]
-    fn open_session(&mut self, _: &EffectiveProfile, _: Size, _: TermHandle) -> SessionHandle {
+    fn open_session(&mut self, p: &EffectiveProfile, _: Size, _: TermHandle) -> SessionHandle {
+        self.stub_profiles.push(p.clone());
         let (input, input_rx) = tokio::sync::mpsc::channel(8);
         let (_, events) = tokio::sync::mpsc::channel(8);
         self.stub_inputs.push(input_rx);
@@ -169,14 +192,14 @@ impl App {
         match action {
             Action::NewTab => {
                 let profile = self.default_profile();
-                self.open_tab(profile, None);
+                self.open_tab(&profile, None);
             }
             Action::NewTabHere => {
                 if let Some(pane) = self.active_pane().map(|p| p.id) {
                     self.ask_cwd(pane, CwdFor::Tab);
                 }
             }
-            Action::CloseTab => return self.close_tab(self.active),
+            Action::CloseTab => return self.request_close(CloseTarget::Tab(self.active)),
             Action::NextTab | Action::PrevTab | Action::GoToTab(_) => self.switch(action),
             Action::RenameTab => return self.start_rename(self.active),
             Action::RestartTab => {
@@ -217,15 +240,25 @@ impl App {
             Action::SplitDown => return self.split_focused(Side::Bottom),
             Action::ClosePane => {
                 if let Some(pane) = self.active_pane().map(|p| p.id) {
-                    return self.close_pane(pane);
+                    return self.request_close(CloseTarget::Pane(pane));
                 }
             }
             Action::PaneNav(dir) => self.pane_nav(dir),
-            // Not implemented yet; logged rather than silently dropped.
-            Action::SelectAll | Action::Reconnect | Action::OpenProfilePicker => {
+            Action::Reconnect => {
+                // A new session for an SSH pane or any ended pane (history: `restart_pane`).
+                if let Some(pane) = self
+                    .active_pane()
+                    .filter(|p| p.is_ssh() || !p.state.is_running())
+                {
+                    self.restart_pane(pane.id);
+                }
+            }
+            Action::OpenProfilePicker => return self.open_picker(),
+            // Not implemented yet; the user is told rather than left guessing.
+            Action::SelectAll => {
                 tracing::debug!(%action, "action not implemented yet");
                 let note = Notification::new(Level::Info, "Not available yet")
-                    .detail(format!("\"{action}\" arrives with SSH / context menus"));
+                    .detail(format!("\"{action}\" arrives with context menus"));
                 return self.notify(note);
             }
         }
@@ -326,7 +359,7 @@ impl App {
     pub(crate) fn on_tab_ui(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ActivateTab(id) => self.activate(id),
-            Message::CloseTab(id) => return self.close_tab(id),
+            Message::CloseTab(id) => return self.request_close(CloseTarget::Tab(id)),
             Message::HoverTab(id) => self.hovered_tab = id,
             Message::TabBarCursor(at) => self.tab_bar_cursor = at,
             Message::StartRename(id) => return self.start_rename(id),
@@ -361,7 +394,7 @@ impl App {
                 }
             }
             Message::CloseMenu => self.menu = None,
-            Message::Escape if self.menu.take().is_none() => self.renaming = None,
+            Message::Escape => self.on_escape(),
             _ => {}
         }
         Task::none()
@@ -414,8 +447,13 @@ impl App {
                 return self.notify(note);
             }
             SessionOutput::Cwd { path, remote } => self.on_cwd(pane_id, path, remote),
-            SessionOutput::Prompt(id, kind) => return self.on_prompt(pane_id, id, &kind),
-            SessionOutput::Warning(warning) => return self.on_session_warning(&warning),
+            SessionOutput::Prompt(id, kind) => return self.on_prompt(pane_id, id, kind),
+            SessionOutput::Warning(warning) => {
+                if !pane.warnings.contains(&warning) {
+                    pane.warnings.push(warning.clone());
+                }
+                return self.on_session_warning(&warning);
+            }
             // No UI for these yet; Progress/Notify/PromptMark are logged by the session.
             SessionOutput::Wakeup
             | SessionOutput::Bell
@@ -444,14 +482,13 @@ impl App {
         match query.purpose {
             CwdFor::Tab => {
                 let profile = self
-                    .tab_of(pane_id)
-                    .and_then(|i| self.tabs.get(i))
-                    .map(|t| t.profile.clone())
+                    .pane(pane_id)
+                    .map(|p| p.profile.clone())
                     .filter(|p| matches!(p.kind, ProfileKind::Local(_)))
                     .unwrap_or_else(Profile::default_shell);
-                self.open_tab(profile, Some(path));
+                self.open_tab(&profile, Some(path));
             }
-            CwdFor::Split(side) => self.split_now(pane_id, side, Some(path)),
+            CwdFor::Split(side) => self.split_now(pane_id, side, Some(path), None),
         }
     }
 }

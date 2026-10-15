@@ -1,17 +1,18 @@
-//! Pane-level operations inside a tab's split tree: split, close, navigate, focus, restart,
+//! Pane-level operations inside a tab's split tree: split, close, navigate, focus,
 //! divider ratios and the per-pane resize path.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use fogu_core::{Dir, ProfileKind, Side, Size, SplitTree};
+use fogu_core::{Dir, EffectiveProfile, Profile, ProfileKind, Side, Size, resolve};
 use fogu_session::SessionInput;
 use iced::Task;
 
 use crate::actions::CLOSE_GRACE;
 use crate::app::App;
 use crate::message::Message;
-use crate::tab::PaneId;
+use crate::modal::{Modal, ModalButton};
+use crate::tab::{Pane, PaneId, TabId};
 
 /// Transport resize debounce during drags.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(50);
@@ -25,6 +26,16 @@ pub(crate) enum CwdFor {
     Tab,
     /// `SplitRight`/`SplitDown`: open the new pane there, on this side of the queried pane.
     Split(Side),
+}
+
+/// What a close request (keymap, `×`, middle-click) is for; kept while the "close live SSH
+/// session?" modal is up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CloseTarget {
+    /// A whole tab.
+    Tab(TabId),
+    /// One pane.
+    Pane(PaneId),
 }
 
 /// A `QueryCwd` sent to `pane` at `asked`.
@@ -42,23 +53,29 @@ impl App {
             return Task::none();
         };
         let target = tab.focused;
-        let local = matches!(tab.profile.kind, ProfileKind::Local(_));
-        let running = tab
-            .focused_pane()
-            .is_some_and(|p| p.state.is_running() && !p.closing);
-        if local && running && self.ask_cwd(target, CwdFor::Split(side)) {
+        let local_running = tab.focused_pane().is_some_and(|p| {
+            matches!(p.profile.kind, ProfileKind::Local(_)) && p.state.is_running() && !p.closing
+        });
+        if local_running && self.ask_cwd(target, CwdFor::Split(side)) {
             return self.after(SPLIT_CWD_WAIT, Message::CwdTimeout(target));
         }
-        self.split_now(target, side, None);
+        self.split_now(target, side, None, None);
         Task::none()
     }
 
-    /// Opens a pane with the tab's profile on `side` of `target` and focuses it.
-    pub(crate) fn split_now(&mut self, target: PaneId, side: Side, cwd: Option<PathBuf>) {
+    /// Opens a pane with `profile` (default: `target`'s own) on `side` of `target` and
+    /// focuses it.
+    pub(crate) fn split_now(
+        &mut self,
+        target: PaneId,
+        side: Side,
+        cwd: Option<PathBuf>,
+        profile: Option<Profile>,
+    ) {
         let Some(index) = self.tab_of(target) else {
             return;
         };
-        let Some(profile) = self.tabs.get(index).map(|t| t.profile.clone()) else {
+        let Some(profile) = profile.or_else(|| self.pane(target).map(|p| p.profile.clone())) else {
             return;
         };
         let pane = self.open_pane(&profile, cwd);
@@ -85,8 +102,72 @@ impl App {
         };
         if let CwdFor::Split(side) = query.purpose {
             self.pending_cwd = None;
-            self.split_now(pane, side, None);
+            self.split_now(pane, side, None, None);
         }
+    }
+
+    /// `true` when closing `pane` must be confirmed: a live SSH session whose profile keeps
+    /// `warn_on_close` (default on).
+    fn warns_on_close(&self, pane: &Pane) -> bool {
+        if !pane.is_ssh() || !pane.state.is_running() || pane.closing {
+            return false;
+        }
+        matches!(
+            resolve(&pane.profile, &self.config.profile_defaults),
+            EffectiveProfile::Ssh(ssh) if ssh.warn_on_close
+        )
+    }
+
+    /// A close from the keymap, `×` or middle-click: asks first when a live SSH session would
+    /// go (`warn_on_close`), otherwise closes now.
+    pub(crate) fn request_close(&mut self, target: CloseTarget) -> Task<Message> {
+        let warn = match target {
+            CloseTarget::Tab(id) => self
+                .tabs
+                .iter()
+                .find(|t| t.id == id)
+                .is_some_and(|t| t.panes.values().any(|p| self.warns_on_close(p))),
+            CloseTarget::Pane(id) => self.pane(id).is_some_and(|p| self.warns_on_close(p)),
+        };
+        if warn {
+            self.pending_close = Some(target);
+            return Task::none();
+        }
+        self.close_now(target)
+    }
+
+    /// The user confirmed (`true`) or cancelled the pending close.
+    pub(crate) fn on_confirm_close(&mut self, confirmed: bool) -> Task<Message> {
+        match self.pending_close.take() {
+            Some(target) if confirmed => self.close_now(target),
+            _ => Task::none(),
+        }
+    }
+
+    fn close_now(&mut self, target: CloseTarget) -> Task<Message> {
+        match target {
+            CloseTarget::Tab(id) => self.close_tab(id),
+            CloseTarget::Pane(id) => self.close_pane(id),
+        }
+    }
+
+    /// The "close live SSH session?" modal, if one is pending.
+    pub(crate) fn close_modal(&self) -> Option<Modal> {
+        self.pending_close?;
+        Some(Modal {
+            title: "Close SSH session?",
+            body: "The connection is still open; closing ends it.".to_owned(),
+            buttons: vec![
+                ModalButton {
+                    label: "Close",
+                    on_press: Message::ConfirmClose(true),
+                },
+                ModalButton {
+                    label: "Cancel",
+                    on_press: Message::ConfirmClose(false),
+                },
+            ],
+        })
     }
 
     /// Asks pane `id`'s session to close; the pane goes on `Exited` or after [`CLOSE_GRACE`].
@@ -169,29 +250,6 @@ impl App {
         }
         if !self.focused {
             self.on_focused(true);
-        }
-    }
-
-    /// Replaces pane `id` with a fresh session of the tab's profile, in the same place.
-    pub(crate) fn restart_pane(&mut self, id: PaneId) {
-        let Some(index) = self.tab_of(id) else {
-            return;
-        };
-        let Some(profile) = self.tabs.get(index).map(|t| t.profile.clone()) else {
-            return;
-        };
-        let pane = self.open_pane(&profile, None);
-        let new = pane.id;
-        let Some(tab) = self.tabs.get_mut(index) else {
-            return;
-        };
-        // Dropping the old pane closes its input channel: the old session ends itself.
-        tab.panes.remove(&id);
-        tab.panes.insert(new, pane);
-        let layout = std::mem::replace(&mut tab.layout, SplitTree::new(new));
-        tab.layout = layout.map(|leaf| if leaf == id { new } else { leaf });
-        if tab.focused == id {
-            tab.focused = new;
         }
     }
 

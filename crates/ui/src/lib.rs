@@ -1,9 +1,10 @@
 //! `fogu-ui`: the iced application (tabs, split container, terminal widget, settings,
 //! palette, prompts).
 //!
-//! One window with tabs of split panes running local shells: keyboard input through the keymap,
-//! scrollback, mouse selection + copy, sanitized/bracketed paste, zoom, clear, tab rename/colour,
-//! a tab context menu and mouse-resizable splits.
+//! One window with tabs of split panes running local shells or SSH sessions: keyboard input
+//! through the keymap, scrollback, mouse selection + copy, sanitized/bracketed paste, zoom,
+//! clear, tab rename/colour, a tab context menu, mouse-resizable splits, a profile picker and
+//! the SSH prompt / host-key dialogs.
 
 mod actions;
 mod app;
@@ -20,9 +21,11 @@ mod notifications;
 mod palette;
 mod panes;
 mod paste;
+mod profile_picker;
+mod prompt;
+mod restart;
 mod runs;
 mod split_container;
-mod ssh_notices;
 mod subscription;
 mod tab;
 mod tab_bar;
@@ -46,6 +49,9 @@ pub struct RunOptions {
     pub notices: Vec<Notification>,
     /// Exit right after the first presented frame (benchmarks).
     pub exit_after_first_frame: bool,
+    /// `--config-dir`: SSH sessions keep their `known_hosts` there (default:
+    /// `$XDG_CONFIG_HOME/fogu`).
+    pub config_dir: Option<std::path::PathBuf>,
 }
 
 /// `WM_CLASS` / Wayland app id; matches the `.desktop` file's `StartupWMClass`.

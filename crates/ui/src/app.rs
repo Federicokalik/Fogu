@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use fogu_core::Config;
 use fogu_session::SessionRuntime;
 use fogu_term::input;
-use fogu_term::input::KeyCode;
 use iced::widget::column;
 use iced::{Element, Point, Subscription, Task, clipboard, event, window};
 
@@ -21,12 +20,15 @@ use crate::context_menu::{self, ContextMenu};
 use crate::lifecycle::PendingClipboard;
 use crate::message::{Message, PasteSource, SelectEvent};
 use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
-use crate::modal::overlay;
+use crate::modal::{self, overlay};
 use crate::mouse::MouseConfig;
 use crate::notifications::{AUTO_DISMISS, Level, Notification, Toasts};
 use crate::palette::{Colors, to_iced};
-use crate::panes::CwdQuery;
+use crate::panes::{CloseTarget, CwdQuery};
 use crate::paste::PendingPaste;
+use crate::profile_picker::{self, PickerMsg, ProfilePicker};
+use crate::prompt;
+use crate::restart;
 use crate::split_container::SplitContainer;
 use crate::subscription::session_events;
 use crate::tab::{PaneId, Tab, TabId};
@@ -72,10 +74,18 @@ pub struct App {
     pub(crate) toasts: Toasts,
     pub(crate) pending_clipboard: Vec<PendingClipboard>,
     pub(crate) blink: Blink,
+    pub(crate) picker: Option<ProfilePicker>,
+    /// A close waiting for the "close live SSH session?" confirmation.
+    pub(crate) pending_close: Option<CloseTarget>,
+    /// `--config-dir` (SSH `known_hosts` location); `None` = the default.
+    pub(crate) config_dir: Option<std::path::PathBuf>,
     exit_after_first_frame: bool,
-    /// Test builds: input ends of the stub sessions, to inspect what the UI sent.
+    /// Test builds: input ends of the stub sessions (what the UI sent) and the effective
+    /// profile each stub session was opened with.
     #[cfg(test)]
     pub(crate) stub_inputs: Vec<tokio::sync::mpsc::Receiver<fogu_session::SessionInput>>,
+    #[cfg(test)]
+    pub(crate) stub_profiles: Vec<fogu_core::EffectiveProfile>,
 }
 
 impl App {
@@ -118,10 +128,15 @@ impl App {
             toasts,
             pending_clipboard: Vec::new(),
             blink: Blink::new(Instant::now()),
+            picker: None,
+            pending_close: None,
+            config_dir: None,
             exit_after_first_frame: false,
             config,
             #[cfg(test)]
             stub_inputs: Vec::new(),
+            #[cfg(test)]
+            stub_profiles: Vec::new(),
         }
     }
 
@@ -138,6 +153,7 @@ impl App {
         );
         let mut app = Self::new(runtime, config, resolved);
         app.exit_after_first_frame = options.exit_after_first_frame;
+        app.config_dir = options.config_dir;
         let mut tasks = Vec::new();
         let font_notes = font_problems
             .into_iter()
@@ -149,7 +165,7 @@ impl App {
             tasks.push(app.after(AUTO_DISMISS, Message::ToastExpire));
         }
         let profile = app.default_profile();
-        app.open_tab(profile, None);
+        app.open_tab(&profile, None);
         tasks.push(
             window::oldest()
                 .and_then(window::scale_factor)
@@ -202,6 +218,10 @@ impl App {
                 Task::none()
             }
             Message::Frame => iced::exit(),
+            Message::Prompt(message) => self.on_prompt_msg(message),
+            Message::Picker(message) => self.on_picker(message),
+            Message::Enter => self.on_enter(),
+            Message::ConfirmClose(confirmed) => self.on_confirm_close(confirmed),
             Message::Session(pane, event) => self.on_session(pane, event),
             Message::Action(action) => self.on_action(action),
             Message::GridResized { pane, cols, rows } => self.on_grid_resized(pane, cols, rows),
@@ -251,8 +271,8 @@ impl App {
             return Task::none();
         };
         match message {
-            Message::Key(key) if !pane.state.is_running() => {
-                if matches!(key.key, KeyCode::Enter | KeyCode::NumpadEnter) && !pane.closing {
+            Message::Key(_) | Message::Text(_) if !pane.state.is_running() => {
+                if !pane.closing && restart::restarts(&message, alt_is_meta) {
                     self.restart_pane(id);
                 }
             }
@@ -368,7 +388,10 @@ impl App {
         let Some(tab) = self.active_tab() else {
             return column![].into();
         };
-        let typing_elsewhere = self.renaming.is_some() || self.menu.is_some();
+        let typing_elsewhere = self.renaming.is_some()
+            || self.menu.is_some()
+            || self.picker.is_some()
+            || self.pending_close.is_some();
         let mouse = MouseConfig {
             wheel_lines: self.config.terminal.wheel_lines,
             paste_on_middle_click: self.config.terminal.paste_on_middle_click,
@@ -380,7 +403,8 @@ impl App {
             .filter_map(|id| tab.panes.get(id))
             .map(|pane| {
                 let id = pane.id;
-                let focused = id == tab.focused && self.focused && !typing_elsewhere;
+                let focused =
+                    id == tab.focused && self.focused && !typing_elsewhere && pane.prompt.is_none();
                 let view: Element<'_, Message> = TerminalView::new(
                     id,
                     &pane.snapshot,
@@ -394,7 +418,12 @@ impl App {
                 .hotkeys(&self.config.hotkeys)
                 .cursor_on(self.blink.on)
                 .into();
-                (id, view.map(move |message| message.for_pane(id)))
+                let view = view.map(move |message| message.for_pane(id));
+                // A prompt is modal over the pane that asked, not over the whole window.
+                match &pane.prompt {
+                    Some(state) => (id, modal::over(view, prompt::view(id, state))),
+                    None => (id, view),
+                }
             })
             .collect();
         let mut divider = to_iced(self.colors.foreground());
@@ -427,7 +456,9 @@ impl App {
         if let Some(toasts) = self.toasts.view(self.metrics.cell_h) {
             panes = iced::widget::stack![panes, toasts].into();
         }
-        let base = overlay(column![bar, panes].into(), self.paste_modal());
+        let modal = self.paste_modal().or_else(|| self.close_modal());
+        let base = overlay(column![bar, panes].into(), modal);
+        let base = profile_picker::overlay(base, self.picker.as_ref(), &self.config);
         context_menu::overlay(base, self.menu.as_ref(), self.window_size)
     }
 
@@ -438,7 +469,7 @@ impl App {
             .iter()
             .flat_map(|tab| tab.panes.values())
             .map(|pane| session_events(&pane.events));
-        let window_events = event::listen_with(|event, _status, _window| match event {
+        let window_events = event::listen_with(|event, status, _window| match event {
             iced::Event::Window(window::Event::Focused) => Some(Message::Focused(true)),
             iced::Event::Window(window::Event::Unfocused) => Some(Message::Focused(false)),
             iced::Event::Window(window::Event::Rescaled(scale)) => {
@@ -449,6 +480,16 @@ impl App {
                 key: keyboard::Key::Named(Named::Escape),
                 ..
             }) => Some(Message::Escape),
+            // Keys no widget took: dialog defaults and picker navigation.
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(named),
+                ..
+            }) if status == event::Status::Ignored => match named {
+                Named::Enter => Some(Message::Enter),
+                Named::ArrowUp => Some(Message::Picker(PickerMsg::Move(-1))),
+                Named::ArrowDown => Some(Message::Picker(PickerMsg::Move(1))),
+                _ => None,
+            },
             _ => None,
         });
         let frame = self

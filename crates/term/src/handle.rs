@@ -8,14 +8,17 @@ use std::time::Instant;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::WindowSize;
-use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::grid::{Cursor as GridCursor, Dimensions, Grid, Scroll};
 use alacritty_terminal::index::{Boundary, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::color::COUNT;
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::vte::ansi::{ClearMode, CursorShape, Handler as _, Processor};
 
-use crate::event_proxy::{EventProxy, Palette, Shared, TermEvent, default_palette, lock};
+use crate::event_proxy::{
+    EventProxy, Palette, Shared, TermEvent, default_palette, lock, sanitize_title,
+};
 use crate::snapshot::RenderSnapshot;
 
 /// Maximum bytes parsed per `Term` lock, so the renderer can always grab it within a frame.
@@ -182,6 +185,54 @@ impl TermHandle {
         term.clear_screen(ClearMode::All);
         term.clear_screen(ClearMode::Saved);
         term.scroll_display(Scroll::Bottom);
+    }
+
+    /// Prepares the grid of a session that ended for the next session (restart / reconnect
+    /// keeping history, `terminal.keep_history_on_restart`). The old session was attacker
+    /// input, so nothing it set may reach the new one: the alternate screen is left and its
+    /// content dropped; every mode (mouse reporting, bracketed paste, application cursor keys
+    /// and keypad, focus reports, origin, insert, wrap, cursor visibility), the scroll region,
+    /// tab stops, charsets, SGR attributes and hyperlink, DECSCUSR cursor style, the saved
+    /// cursor, title and title stack, keyboard-protocol stacks and OSC 4/10/11/12 colours go
+    /// back to their defaults (what RIS resets), and undelivered events (replies, titles,
+    /// OSC 52 writes) are dropped. Only the primary screen's text and the scrollback are kept,
+    /// followed by `separator` on a dim line of its own. The next session must get a fresh
+    /// [`share`](Self::share) (a new parser), so a half-received escape sequence or pending
+    /// synchronized update of the old session can't continue either.
+    pub fn reset_for_new_session(&mut self, separator: &str) {
+        let column = {
+            let mut term = self.term.lock();
+            if term.mode().contains(TermMode::ALT_SCREEN) {
+                term.swap_alt();
+            }
+            // RIS on a placeholder grid: resets everything but the primary screen + history.
+            let blank = Grid::new(term.screen_lines(), term.columns(), 0);
+            let primary = std::mem::replace(term.grid_mut(), blank);
+            term.reset_state();
+            *term.grid_mut() = primary;
+            for index in 0..COUNT {
+                term.reset_color(index);
+            }
+            let grid = term.grid_mut();
+            // Default template (SGR, hyperlink), charsets and pending wrap; same position.
+            grid.cursor = GridCursor {
+                point: grid.cursor.point,
+                ..GridCursor::default()
+            };
+            grid.saved_cursor = grid.cursor.clone();
+            term.scroll_display(Scroll::Bottom);
+            term.grid().cursor.point.column.0
+        };
+        lock(&self.shared).events.clear();
+        let mut line = Vec::new();
+        if column > 0 {
+            line.extend_from_slice(b"\r\n");
+        }
+        line.extend_from_slice(b"\x1b[2m");
+        line.extend_from_slice(sanitize_title(separator).as_bytes());
+        line.extend_from_slice(b"\x1b[0m\r\n");
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut *self.term.lock(), &line);
     }
 
     /// Starts a new selection of `kind` at grid `point` (clamped to the grid; line 0 is the top

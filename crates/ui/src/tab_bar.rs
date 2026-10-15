@@ -5,10 +5,12 @@ use fogu_core::Action;
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
     Id, Row, button, column, container, mouse_area, row, scrollable, space, text, text_input,
+    tooltip,
 };
 use iced::{Alignment, Color, Element, Length};
 
 use crate::context_menu::to_iced;
+use crate::lifecycle::{warning_detail, warning_title};
 use crate::message::Message;
 use crate::palette::{self, Colors};
 use crate::tab::{Tab, TabId};
@@ -20,6 +22,8 @@ const MAX_TITLE_CHARS: usize = 20;
 /// Height of the colour underline.
 const UNDERLINE_H: f32 = 3.0;
 const TITLE_SIZE: f32 = 13.0;
+/// Warning badge colour (amber).
+const WARN: Color = Color::from_rgb(0.96, 0.65, 0.14);
 /// Id of the inline rename field.
 pub const RENAME_INPUT: &str = "fogu-rename-input";
 
@@ -105,6 +109,13 @@ impl<'a> TabBar<'a> {
         } else {
             space().width(16).into()
         };
+        let title = match warning_badge(tab) {
+            Some(badge) => row![badge, title]
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into(),
+            None => title,
+        };
         let underline = tab.color.map_or(Color::TRANSPARENT, to_iced);
         let header_bg = match (active, hovered) {
             (true, _) => bg,
@@ -142,12 +153,38 @@ impl<'a> TabBar<'a> {
             .padding([2, 12])
             .style(button::text)
             .on_press(Message::Action(Action::NewTab));
+        // Right-click on `+` or the `▾` next to it: the profile picker.
+        let plus = mouse_area(plus).on_right_press(Message::Action(Action::OpenProfilePicker));
+        let profiles = button(text("▾").size(13).color(fg))
+            .padding([2, 8])
+            .style(button::text)
+            .on_press(Message::Action(Action::OpenProfilePicker));
         let bar_bg = self.bar_bg();
-        let bar = container(row![tabs, plus].align_y(Alignment::Center))
+        let bar = container(row![tabs, plus, profiles].align_y(Alignment::Center))
             .width(Length::Fill)
             .style(move |_theme: &iced::Theme| container::background(bar_bg));
         mouse_area(bar).on_move(Message::TabBarCursor).into()
     }
+}
+
+/// A persistent `!` badge when a pane of `tab` reported a warning (e.g. host key not
+/// verified); the tooltip says what.
+fn warning_badge(tab: &Tab) -> Option<Element<'_, Message>> {
+    let lines: Vec<String> = tab
+        .warnings()
+        .map(|w| format!("{}: {}", warning_title(w), warning_detail(w)))
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    let badge = container(text("!").size(11).color(Color::BLACK))
+        .padding([0, 5])
+        .style(|theme: &iced::Theme| container::rounded_box(theme).background(WARN));
+    let tip = container(text(lines.join("\n")).size(12))
+        .padding(6)
+        .max_width(320)
+        .style(container::rounded_box);
+    Some(tooltip(badge, tip, tooltip::Position::Bottom).into())
 }
 
 #[cfg(test)]

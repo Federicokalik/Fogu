@@ -2,7 +2,7 @@
 //! flags) resolve to. `Hotkeys` is the config's `BTreeMap<Action, Vec<KeyChord>>` plus a
 //! precomputed reverse lookup.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -319,7 +319,15 @@ impl Serialize for Hotkeys {
 
 impl<'de> Deserialize<'de> for Hotkeys {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let bindings = BTreeMap::<Action, Vec<KeyChord>>::deserialize(deserializer)?;
+        // `[hotkeys]` overrides the defaults per action (`[]` unbinds); a chord the user assigns is
+        // taken away from whichever default action had it.
+        let user = BTreeMap::<Action, Vec<KeyChord>>::deserialize(deserializer)?;
+        let claimed: HashSet<KeyChord> = user.values().flatten().copied().collect();
+        let mut bindings = Self::default_keymap().bindings;
+        for chords in bindings.values_mut() {
+            chords.retain(|chord| !claimed.contains(chord));
+        }
+        bindings.extend(user);
         Ok(Self::new(bindings))
     }
 }
@@ -329,6 +337,20 @@ mod tests {
     #![expect(clippy::unwrap_used, reason = "tests")]
 
     use super::*;
+
+    #[test]
+    fn user_hotkeys_merge_over_the_defaults() {
+        let keymap: Hotkeys = toml::from_str(
+            r#"copy = ["Ctrl-Shift-T"]
+paste = []"#,
+        )
+        .unwrap();
+        let chord = |s| KeyChord::parse(s).unwrap();
+        assert_eq!(keymap.lookup(chord("Ctrl-Shift-T")), Some(Action::Copy));
+        assert_eq!(keymap.lookup(chord("Ctrl-Shift-W")), Some(Action::CloseTab));
+        assert_eq!(keymap.bindings()[&Action::NewTab], Vec::<KeyChord>::new());
+        assert_eq!(keymap.bindings()[&Action::Paste], Vec::<KeyChord>::new());
+    }
 
     #[test]
     fn default_keymap_parses() {

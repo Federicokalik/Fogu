@@ -4,12 +4,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use fogu_core::{Profile, RgbColor, Size, SplitTree};
-use fogu_session::{ExitInfo, SessionHandle, SessionInput};
+use fogu_core::{Profile, ProfileKind, RgbColor, Size, SplitTree};
+use fogu_session::{ExitInfo, SessionHandle, SessionInput, SessionWarning};
 use fogu_term::{RenderSnapshot, Scroll, TermHandle};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
 
+use crate::prompt::PromptState;
 use crate::subscription::EventSlot;
 
 /// Identifies a tab; monotonic, never reused.
@@ -23,6 +24,8 @@ pub struct PaneId(pub u64);
 
 /// Longest crash detail shown in a pane's status line, in characters.
 const STATUS_DETAIL_CHARS: usize = 80;
+/// Same for a disconnected SSH pane (its line also says "Press any key to reconnect").
+const REMOTE_DETAIL_CHARS: usize = 40;
 
 /// Lifecycle of a pane's session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,7 +35,8 @@ pub enum PaneState {
     /// The process ended.
     Exited(ExitInfo),
     /// The session failed or its task panicked (spawn error, I/O error, panic); the text is the
-    /// sanitized reason. The pane's `TermHandle` is never reused: restart builds a new one.
+    /// sanitized reason. A restart reuses the grid only after
+    /// `TermHandle::reset_for_new_session` (`terminal.keep_history_on_restart`).
     Crashed(String),
 }
 
@@ -53,8 +57,34 @@ impl PaneState {
         )
     }
 
-    /// The overlay drawn over an ended pane; `None` while running.
-    pub fn status_line(&self) -> Option<String> {
+    /// The overlay drawn over an ended pane; `None` while running. `remote` panes (SSH) say
+    /// "Disconnected" and offer a reconnect instead of a restart.
+    pub fn status_line(&self, remote: bool) -> Option<String> {
+        if remote {
+            let why = match self {
+                Self::Running => return None,
+                Self::Exited(ExitInfo {
+                    signal: Some(signal),
+                    ..
+                }) => format!("signal {signal}"),
+                Self::Exited(ExitInfo {
+                    code: Some(code), ..
+                }) => format!("exit code {code}"),
+                // No exit status: the server or network closed the connection.
+                Self::Exited(_) => "connection closed".to_owned(),
+                // Short: "Press any key to reconnect" must stay visible; the full reason is in the
+                // terminal and the error toast.
+                Self::Crashed(why) if why.chars().count() > REMOTE_DETAIL_CHARS => {
+                    let mut short: String = why.chars().take(REMOTE_DETAIL_CHARS - 1).collect();
+                    short.push('…');
+                    short
+                }
+                Self::Crashed(why) => why.clone(),
+            };
+            return Some(format!(
+                "[Disconnected ({why})] \u{2014} Press any key to reconnect"
+            ));
+        }
         let what = match self {
             Self::Running => return None,
             Self::Exited(ExitInfo {
@@ -69,7 +99,7 @@ impl PaneState {
                 format!("crashed: {why}")
             }
         };
-        Some(format!("[{what}] \u{2014} Enter to restart"))
+        Some(format!("[{what}] \u{2014} Press any key to restart"))
     }
 }
 
@@ -77,6 +107,10 @@ impl PaneState {
 #[derive(Debug)]
 pub struct Pane {
     pub id: PaneId,
+    /// The profile this pane runs (restart, reconnect, exit policy, OSC 52 policy).
+    pub profile: Profile,
+    /// Title until an OSC title arrives: the profile name, `user@host` for SSH.
+    pub default_title: String,
     pub term: TermHandle,
     dirty: Arc<AtomicBool>,
     session_input: Sender<SessionInput>,
@@ -93,13 +127,25 @@ pub struct Pane {
     pub status: Option<String>,
     /// `Close` was sent; the pane goes on `Exited` or after the grace period.
     pub closing: bool,
+    /// The session's open question (password, host key…), drawn as a modal over the pane.
+    pub prompt: Option<PromptState>,
+    /// Warnings the session reported (tab badge), without duplicates.
+    pub warnings: Vec<SessionWarning>,
 }
 
 impl Pane {
-    /// Wraps a freshly opened session `handle` feeding `term`.
-    pub fn new(id: PaneId, term: TermHandle, handle: SessionHandle) -> Self {
+    /// Wraps a freshly opened session `handle` of `profile` feeding `term`.
+    pub fn new(
+        id: PaneId,
+        profile: Profile,
+        default_title: String,
+        term: TermHandle,
+        handle: SessionHandle,
+    ) -> Self {
         Self {
             id,
+            profile,
+            default_title,
             dirty: term.dirty(),
             snapshot: term.snapshot(),
             term,
@@ -111,7 +157,14 @@ impl Pane {
             title_from_osc: None,
             status: None,
             closing: false,
+            prompt: None,
+            warnings: Vec::new(),
         }
+    }
+
+    /// `true` for an SSH pane.
+    pub fn is_ssh(&self) -> bool {
+        matches!(self.profile.kind, ProfileKind::Ssh(_))
     }
 
     /// Clears `dirty` *before* snapshotting, so output arriving meanwhile sends a new wakeup.
@@ -163,12 +216,11 @@ impl Pane {
     }
 }
 
-/// One tab: a profile, its title sources, colour and its panes laid out by a split tree.
+/// One tab: its title override, colour and its panes laid out by a split tree. Each pane
+/// carries its own profile (a split may connect elsewhere).
 #[derive(Debug)]
 pub struct Tab {
     pub id: TabId,
-    /// The profile the tab was opened from (splits and restarts reopen it).
-    pub profile: Profile,
     /// The user's rename; wins over everything until cleared.
     pub title_override: Option<String>,
     /// Header tint + focused pane border; defaults to the profile's colour.
@@ -182,12 +234,11 @@ pub struct Tab {
 }
 
 impl Tab {
-    /// A new tab for `profile` with the single pane `pane`.
-    pub fn new(id: TabId, profile: Profile, pane: Pane) -> Self {
+    /// A new tab with the single pane `pane`, coloured like its profile.
+    pub fn new(id: TabId, pane: Pane) -> Self {
         Self {
             id,
-            color: profile.color,
-            profile,
+            color: pane.profile.color,
             title_override: None,
             layout: SplitTree::new(pane.id),
             focused: pane.id,
@@ -207,13 +258,20 @@ impl Tab {
 
     /// The title shown in the header and the window title (the focused pane's OSC title).
     pub fn title(&self) -> &str {
+        let Some(pane) = self.focused_pane() else {
+            return self.title_override.as_deref().unwrap_or_default();
+        };
         resolve_title(
             self.title_override.as_deref(),
-            self.focused_pane()
-                .and_then(|p| p.title_from_osc.as_deref()),
-            self.profile.disable_dynamic_title,
-            &self.profile.name,
+            pane.title_from_osc.as_deref(),
+            pane.profile.disable_dynamic_title,
+            &pane.default_title,
         )
+    }
+
+    /// Every warning any of the tab's panes reported (tab badge).
+    pub fn warnings(&self) -> impl Iterator<Item = &SessionWarning> {
+        self.panes.values().flat_map(|p| p.warnings.iter())
     }
 }
 
@@ -270,13 +328,49 @@ mod tests {
         ];
         for (state, clean, want) in rows {
             assert_eq!(state.is_clean_exit(), clean, "{state:?}");
-            let line = state.status_line();
+            let line = state.status_line(false);
             match want {
                 None => assert_eq!(line, None),
                 Some(want) => {
                     let line = line.unwrap();
                     assert!(line.starts_with(want), "{line}");
-                    assert!(line.ends_with("Enter to restart"));
+                    assert!(line.ends_with("Press any key to restart"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn remote_status_lines_offer_reconnect() {
+        let rows = [
+            (PaneState::Running, None),
+            (
+                PaneState::Exited(ExitInfo {
+                    code: Some(3),
+                    signal: None,
+                }),
+                Some("[Disconnected (exit code 3)]"),
+            ),
+            (
+                PaneState::Exited(ExitInfo {
+                    code: None,
+                    signal: None,
+                }),
+                Some("[Disconnected (connection closed)]"),
+            ),
+            (
+                PaneState::Crashed("authentication failed".into()),
+                Some("[Disconnected (authentication failed)]"),
+            ),
+        ];
+        for (state, want) in rows {
+            let line = state.status_line(true);
+            match want {
+                None => assert_eq!(line, None),
+                Some(want) => {
+                    let line = line.unwrap();
+                    assert!(line.starts_with(want), "{line}");
+                    assert!(line.ends_with("Press any key to reconnect"), "{line}");
                 }
             }
         }

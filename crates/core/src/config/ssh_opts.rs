@@ -155,7 +155,7 @@ pub struct SshOpts {
     pub ready_timeout: Option<u64>,
     /// Don't print the server's auth banner.
     pub skip_banner: Option<bool>,
-    /// Confirm before closing a live tab (unset = global setting).
+    /// Confirm before closing a live SSH tab or pane (unset = `true`).
     pub warn_on_close: Option<bool>,
     /// PTY `TERM` (`xterm-256color`).
     pub term: Option<String>,
@@ -225,7 +225,7 @@ pub struct EffectiveSsh {
     /// See [`SshOpts::skip_banner`].
     pub skip_banner: bool,
     /// See [`SshOpts::warn_on_close`].
-    pub warn_on_close: Option<bool>,
+    pub warn_on_close: bool,
     /// See [`SshOpts::term`].
     pub term: String,
     /// See [`SshOpts::input_backspace`].
@@ -292,7 +292,6 @@ impl EffectiveSsh {
             (!self.scripts.is_empty(), "scripts"),
             (self.cwd.is_some(), "cwd"),
             (self.remember_cwd, "remember_cwd"),
-            (self.warn_on_close.is_some(), "warn_on_close"),
         ];
         checks
             .into_iter()
@@ -322,7 +321,7 @@ pub fn resolve_ssh(p: &SshOpts, d: &SshOpts) -> EffectiveSsh {
         keepalive_count_max: pick!(keepalive_count_max).unwrap_or(DEFAULT_KEEPALIVE_COUNT_MAX),
         ready_timeout: pick!(ready_timeout).map(ms),
         skip_banner: pick!(skip_banner).unwrap_or(false),
-        warn_on_close: pick!(warn_on_close),
+        warn_on_close: pick!(warn_on_close).unwrap_or(true),
         term: pick!(term).unwrap_or_else(|| DEFAULT_TERM.to_owned()),
         input_backspace: pick!(input_backspace).unwrap_or_default(),
         jump_host: pick!(jump_host),

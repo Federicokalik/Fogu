@@ -20,7 +20,7 @@ fn headless() -> App {
     };
     let mut app = App::new(runtime, Arc::new(Config::default()), resolved);
     let profile = app.default_profile();
-    app.open_tab(profile, None);
+    app.open_tab(&profile, None);
     app
 }
 
@@ -324,7 +324,7 @@ fn exited_pane_keeps_and_restarts_on_enter_or_closes() {
     let p0 = pane_of(&app, 0);
     send(&mut app, Message::Session(p0, exited(3)));
     let status = app.active_pane().unwrap().status.clone().unwrap();
-    assert!(status.contains("exited with code 3") && status.contains("Enter to restart"));
+    assert!(status.contains("exited with code 3") && status.contains("Press any key to restart"));
     let enter = KeyInput {
         key: KeyCode::Enter,
         text: None,
@@ -337,7 +337,10 @@ fn exited_pane_keeps_and_restarts_on_enter_or_closes() {
     assert!(app.active_pane().unwrap().status.is_none());
 
     // `Close`: the exited pane goes away, its sibling and the tab stay.
-    app.tabs[0].profile.behavior_on_session_end = SessionEndBehavior::Close;
+    app.active_pane_mut()
+        .unwrap()
+        .profile
+        .behavior_on_session_end = SessionEndBehavior::Close;
     let p1 = split(&mut app, Action::SplitDown);
     send(&mut app, Message::Session(p1, exited(0)));
     assert_eq!(leaves(&app), [restarted]);

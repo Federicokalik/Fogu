@@ -127,6 +127,10 @@ pub struct TerminalCfg {
     /// Default OSC 52 (clipboard write) policy; profiles may override it
     /// (`LocalOpts`/`SshOpts::osc52_write`).
     pub osc52_write: Osc52Policy,
+    /// Restart (local) / reconnect (SSH) of an ended pane keeps its screen and scrollback, below
+    /// a dim "── restarted ──" / "── reconnected ──" line; `false` starts from a
+    /// blank terminal. Terminal modes the old session set are reset either way. Default `true`.
+    pub keep_history_on_restart: bool,
 }
 
 impl Default for TerminalCfg {
@@ -145,6 +149,7 @@ impl Default for TerminalCfg {
             wheel_lines: 3,
             right_click: RightClickAction::default(),
             osc52_write: Osc52Policy::default(),
+            keep_history_on_restart: true,
         }
     }
 }
@@ -239,6 +244,14 @@ mod tests {
         assert!((config.appearance.font_size - 20.0).abs() < f32::EPSILON);
         // Everything else still gets its default.
         assert_eq!(config.terminal.scrollback_lines, 10_000);
+        assert!(config.terminal.keep_history_on_restart);
+    }
+
+    #[test]
+    fn keep_history_on_restart_can_be_turned_off() {
+        let text = "[terminal]\nkeep_history_on_restart = false\n";
+        let config: Config = toml::from_str(text).unwrap();
+        assert!(!config.terminal.keep_history_on_restart);
     }
 
     #[test]

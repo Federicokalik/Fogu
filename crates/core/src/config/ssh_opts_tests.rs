@@ -98,6 +98,7 @@ fn every_field_resolves_and_is_reported_unsupported() {
     assert_eq!(ssh.socks_proxy, Some(("127.0.0.1".to_owned(), 9050)));
     assert_eq!(ssh.http_proxy, Some(("proxy.lan".to_owned(), 3128)));
     assert!(!ssh.verify_host_keys && !ssh.clear_service_messages_on_connect);
+    assert!(!ssh.warn_on_close);
     assert_eq!(
         ssh.unsupported(),
         [
@@ -114,7 +115,6 @@ fn every_field_resolves_and_is_reported_unsupported() {
             "scripts",
             "cwd",
             "remember_cwd",
-            "warn_on_close",
         ]
     );
 }
@@ -130,6 +130,7 @@ fn builtin_defaults() {
     assert_eq!(ssh.ready_timeout, None);
     assert_eq!(ssh.term, "xterm-256color");
     assert!(ssh.reuse_session && ssh.verify_host_keys && ssh.clear_service_messages_on_connect);
+    assert!(ssh.warn_on_close);
     assert!(!ssh.skip_banner && !ssh.agent_forward && !ssh.x11 && !ssh.remember_cwd);
     assert_eq!(ssh.unsupported(), Vec::<&str>::new());
 }

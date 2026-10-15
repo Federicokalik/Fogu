@@ -7,6 +7,8 @@ use fogu_term::{Scroll, SelectionType};
 use iced::Point;
 
 use crate::metrics::CellPos;
+use crate::profile_picker::PickerMsg;
+use crate::prompt::PromptMsg;
 use crate::tab::{PaneId, TabId};
 
 /// A step of a mouse selection gesture, in viewport cells.
@@ -128,8 +130,17 @@ pub enum Message {
     BlinkTick,
     /// A frame was presented (`--exit-after-first-frame`).
     Frame,
-    /// Escape pressed anywhere: cancel rename / close the menu.
+    /// Escape pressed anywhere: close the innermost overlay (picker, confirmation, prompt,
+    /// menu, rename).
     Escape,
+    /// Enter that no widget took (host-key dialogs have no text field).
+    Enter,
+    /// The SSH prompt dialog of a pane (typed text only as a redacting `PromptText`).
+    Prompt(PromptMsg),
+    /// The profile picker.
+    Picker(PickerMsg),
+    /// The "close live SSH session?" modal: `true` = close, `false` = keep it.
+    ConfirmClose(bool),
 }
 
 impl Message {

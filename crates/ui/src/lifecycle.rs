@@ -6,7 +6,7 @@ use std::fmt;
 use std::time::Instant;
 
 use fogu_core::{Osc52Policy, effective_osc52_write};
-use fogu_session::{ClipboardRequest, SessionError};
+use fogu_session::{ClipboardRequest, SessionError, SessionWarning};
 use fogu_term::{ClipboardType, sanitize_title};
 use iced::{Task, clipboard};
 
@@ -102,7 +102,7 @@ impl App {
 
     /// Marks the pane ended and applies the profile's `behavior_on_session_end`: a pane being
     /// closed, or whose exit the policy says to close, goes away now; otherwise it shows its
-    /// status and restarts into a fresh terminal on Enter. A crash is never closed by policy.
+    /// status and restarts on any key (`restart.rs`). A crash is never closed by policy.
     pub(crate) fn on_pane_ended(&mut self, pane_id: PaneId, state: PaneState) -> Task<Message> {
         let Some(tab) = self
             .tabs
@@ -111,21 +111,30 @@ impl App {
         else {
             return Task::none();
         };
-        let by_policy = matches!(state, PaneState::Exited(_))
-            && tab
-                .profile
-                .behavior_on_session_end
-                .closes(state.is_clean_exit());
         let Some(pane) = tab.panes.get_mut(&pane_id) else {
             return Task::none();
         };
-        pane.status = state.status_line();
+        let by_policy = matches!(state, PaneState::Exited(_))
+            && pane
+                .profile
+                .behavior_on_session_end
+                .closes(state.is_clean_exit());
+        // A question the session can no longer take an answer to.
+        pane.prompt = None;
+        pane.status = state.status_line(pane.is_ssh());
         pane.state = state;
         pane.refresh();
         if pane.closing || by_policy {
             return self.remove_pane(pane_id);
         }
         Task::none()
+    }
+
+    /// A non-fatal session condition: a toast now (the tab badge comes from `Pane::warnings`).
+    pub(crate) fn on_session_warning(&mut self, warning: &SessionWarning) -> Task<Message> {
+        let note =
+            Notification::new(Level::Warn, warning_title(warning)).detail(warning_detail(warning));
+        self.notify(note)
     }
 
     /// OSC 52 write from pane `pane_id`, per `terminal.osc52_write` (profile override first):
@@ -136,10 +145,7 @@ impl App {
         pane_id: PaneId,
         request: ClipboardRequest,
     ) -> Task<Message> {
-        let profile = self
-            .tab_of(pane_id)
-            .and_then(|i| self.tabs.get(i))
-            .map(|t| &t.profile);
+        let profile = self.pane(pane_id).map(|p| &p.profile);
         let default = self.config.terminal.osc52_write;
         let policy = profile.map_or(default, |p| effective_osc52_write(p, default));
         match policy {
@@ -171,3 +177,23 @@ impl App {
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod tests;
+
+/// Short name of a session warning (toast title).
+pub(crate) fn warning_title(warning: &SessionWarning) -> &'static str {
+    match warning {
+        SessionWarning::HostKeyNotVerified => "Host key not verified",
+        SessionWarning::Unsupported(_) => "SSH options ignored",
+    }
+}
+
+/// One-line explanation of a session warning (toast detail, tab badge tooltip).
+pub(crate) fn warning_detail(warning: &SessionWarning) -> String {
+    match warning {
+        SessionWarning::HostKeyNotVerified => {
+            "verify_host_keys = false: the server's identity was not checked.".to_owned()
+        }
+        SessionWarning::Unsupported(options) => {
+            format!("Not supported yet: {}", options.join(", "))
+        }
+    }
+}
