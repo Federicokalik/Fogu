@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Fogu
+Comment=Terminal emulator
+Exec=fogu
+Icon=fogu
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=fogu
