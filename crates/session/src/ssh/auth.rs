@@ -235,7 +235,9 @@ impl Auth<'_> {
                     Outcome::Success => return Ok(Outcome::Success),
                     failure => last = failure,
                 },
-                Ok(Err(err)) => tracing::warn!(error = ?err, "SSH agent signing failed"),
+                Ok(Err(err)) => {
+                    tracing::warn!(error = %ssh_error(&err), "SSH agent signing failed");
+                }
                 Err(_elapsed) => return Err(SessionError::Timeout.into()),
             }
         }

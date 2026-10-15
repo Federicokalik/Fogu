@@ -243,3 +243,33 @@ fn replace_drops_old_records_of_that_host_only() {
     assert_eq!(lookup(&[path], "h.example", 22, &key(KEY_B)), Lookup::Known);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn learn_appends_a_newline_first_when_the_file_lacks_one() {
+    let dir = temp_dir("learn-nl");
+    let path = write(&dir, "known_hosts", &format!("other ssh-ed25519 {KEY_A}"));
+    learn(&path, "h.example", 22, &key(KEY_B)).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        text,
+        format!("other ssh-ed25519 {KEY_A}\nh.example ssh-ed25519 {KEY_B}\n")
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn replace_refuses_to_rewrite_an_oversized_file() {
+    let dir = temp_dir("replace-big");
+    let path = dir.join("known_hosts");
+    let file = std::fs::File::create(&path).unwrap();
+    // Sparse: no 16 MiB are actually written.
+    file.set_len(MAX_FILE_BYTES + 1).unwrap();
+    drop(file);
+    assert!(replace(&path, "h.example", 22, &key(KEY_B)).is_err());
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), MAX_FILE_BYTES + 1);
+    assert_eq!(
+        lookup(&[path], "h.example", 22, &key(KEY_B)),
+        Lookup::Unknown
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

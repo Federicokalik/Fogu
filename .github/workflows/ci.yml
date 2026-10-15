@@ -15,7 +15,7 @@ jobs:
       # no toolchain action: rustup (preinstalled on ubuntu-24.04) auto-installs the
       # toolchain + components from rust-toolchain.toml, which is also the MSRV
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libxkbcommon-dev libwayland-dev socat
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev libxkbcommon-dev libwayland-dev socat openssh-server
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       # a `fogu-term` API change must break the fuzz targets at PR time, not at the nightly run
@@ -28,7 +28,10 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
+      # the SSH integration tests need a real sshd (installed above): a missing one fails the run
       - run: cargo nextest run --workspace --locked --no-tests=pass
+        env:
+          FOGU_REQUIRE_SSHD: "1"
       - run: cargo test --doc --workspace --locked
       - run: cargo deny check
   fuzz-smoke:

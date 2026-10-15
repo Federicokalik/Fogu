@@ -258,11 +258,27 @@ pub(crate) fn learn(path: &Path, host: &str, port: u16, key: &PublicKey) -> io::
         fsutil::create_private_dir(dir)?;
     }
     let mut line = record_line(host, port, key)?;
-    let existing = std::fs::read(path).unwrap_or_default();
-    if existing.last().is_some_and(|&b| b != b'\n') {
+    if !ends_with_newline(path)? {
         line.insert(0, '\n');
     }
     fsutil::append_private(path, line.as_bytes())
+}
+
+/// `true` when `path` is missing, empty or ends in a newline (reads one byte, never the file).
+fn ends_with_newline(path: &Path) -> io::Result<bool> {
+    use std::io::{Seek as _, SeekFrom};
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(err) => return Err(err),
+    };
+    if file.metadata()?.len() == 0 {
+        return Ok(true);
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0_u8; 1];
+    file.read_exact(&mut last)?;
+    Ok(last == *b"\n")
 }
 
 /// The explicit "replace and connect" flow: drops every plain record for `host:port` from our
@@ -270,13 +286,16 @@ pub(crate) fn learn(path: &Path, host: &str, port: u16, key: &PublicKey) -> io::
 /// `~/.ssh/known_hosts` are never touched; ours is consulted first and an equal key wins.
 pub(crate) fn replace(path: &Path, host: &str, port: u16, key: &PublicKey) -> io::Result<()> {
     let name = lookup_name(host, port);
-    let old = std::fs::read_to_string(path).or_else(|err| {
-        if err.kind() == io::ErrorKind::NotFound {
-            Ok(String::new())
-        } else {
-            Err(err)
+    let old = match std::fs::metadata(path) {
+        Ok(meta) if meta.len() > MAX_FILE_BYTES => {
+            // Never rewrite a file we refused to read: `lookup` ignored it, so nothing in it
+            // produced the "changed" verdict either.
+            return Err(io::Error::other("known_hosts is too large to rewrite"));
         }
-    })?;
+        Ok(_) => std::fs::read_to_string(path)?,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err),
+    };
     let mut text: String = old
         .lines()
         .filter(|raw| {

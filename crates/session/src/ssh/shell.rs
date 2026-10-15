@@ -42,7 +42,7 @@ pub(crate) async fn run(
             .await?;
         // Servers without `AcceptEnv COLORTERM` ignore this; that's fine.
         if let Err(err) = channel.set_env(false, "COLORTERM", "truecolor").await {
-            tracing::debug!(error = %err, "COLORTERM not sent");
+            tracing::debug!(error = %ssh_error(&err), "COLORTERM not sent");
         }
         channel.request_shell(false).await?;
         Ok::<_, russh::Error>(channel)
@@ -137,7 +137,7 @@ where
         )
         .await;
     if let Err(err) = result {
-        tracing::warn!(error = %err, "SSH window-change failed");
+        tracing::warn!(error = %ssh_error(&err), "SSH window-change failed");
     }
 }
 

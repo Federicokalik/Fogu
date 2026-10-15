@@ -49,7 +49,12 @@ impl<F: FnMut(&PromptKind) -> PromptReply> Prompter<F> {
                             return None;
                         }
                     }
-                    SessionOutput::Wakeup => view.dirty().store(false, Ordering::Release),
+                    SessionOutput::Wakeup => {
+                        view.dirty().store(false, Ordering::Release);
+                        if done(&SessionOutput::Wakeup) {
+                            return Some(SessionOutput::Wakeup);
+                        }
+                    }
                     other if done(&other) => return Some(other),
                     _ => {}
                 }

@@ -3,7 +3,9 @@
 #![cfg(feature = "ssh")]
 #![expect(clippy::unwrap_used, clippy::panic, reason = "tests")]
 
-mod support;
+mod support {
+    pub mod prompter;
+}
 
 use std::time::Duration;
 
