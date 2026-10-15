@@ -18,12 +18,14 @@ thiserror.workspace = true
 tracing.workspace = true
 russh = { workspace = true, optional = true }
 ring = { workspace = true, optional = true }
+russh-sftp = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
 secrecy.workspace = true
 
 [features]
 default = ["ssh"]
 # The SSH transport (`run_ssh`). Off = local shells only, no russh in the tree.
-ssh = ["dep:russh", "dep:ring"]
+ssh = ["dep:russh", "dep:ring", "dep:russh-sftp", "dep:tokio-util"]
 
 [[example]]
 name = "ssh_probe"

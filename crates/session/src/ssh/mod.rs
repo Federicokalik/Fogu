@@ -11,6 +11,7 @@
 mod auth;
 mod connect;
 mod hostkeys;
+pub(crate) mod sftp;
 mod shell;
 
 use std::path::{Path, PathBuf};
@@ -21,6 +22,8 @@ use fogu_term::TermHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::timeout;
 
+use self::sftp::SftpEnds;
+pub use self::sftp::validate_name;
 use crate::pipeline::{Gone, Pump};
 use crate::prompt::{PROMPT_TEXT_MAX_CHARS, sanitize_remote};
 use crate::{
@@ -96,6 +99,8 @@ pub(crate) struct Ui {
     /// Latest size the UI asked for.
     pub(crate) size: Size,
     next_prompt: u64,
+    /// The SFTP engine's channel ends, handed to the engine once the shell is up.
+    pub(crate) sftp: Option<SftpEnds>,
 }
 
 impl Ui {
@@ -162,12 +167,14 @@ pub(crate) async fn run_ssh(
     term: TermHandle,
     in_rx: Receiver<SessionInput>,
     out_tx: Sender<SessionOutput>,
+    sftp: SftpEnds,
 ) {
     let mut ui = Ui {
         pump: Pump::new(term, out_tx, true),
         in_rx,
         size,
         next_prompt: 0,
+        sftp: Some(sftp),
     };
     let out = match session(&ssh, &paths, &mut ui).await {
         Ok(info) => SessionOutput::Exited(info),

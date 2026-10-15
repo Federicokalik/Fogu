@@ -159,7 +159,11 @@ impl App {
         let (input, input_rx) = tokio::sync::mpsc::channel(8);
         let (_, events) = tokio::sync::mpsc::channel(8);
         self.stub_inputs.push(input_rx);
-        SessionHandle { input, events }
+        SessionHandle {
+            input,
+            events,
+            sftp: None,
+        }
     }
 
     /// Makes `id` the visible tab: focus out/in reports, fresh snapshots (inactive panes skip

@@ -20,6 +20,7 @@ mod support;
 mod auth;
 mod hostile;
 mod hostkeys;
+mod sftp;
 mod shell;
 
 use fogu_session::{PromptKind, PromptReply, SessionError, SessionOutput};

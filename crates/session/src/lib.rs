@@ -6,6 +6,7 @@ mod env;
 mod local;
 mod pipeline;
 mod prompt;
+pub mod sftp;
 #[cfg(feature = "ssh")]
 mod ssh;
 mod supervise;
@@ -27,8 +28,9 @@ pub use prompt::{
     KbdPrompt, PROMPT_INSTRUCTIONS_MAX_CHARS, PROMPT_MAX_COUNT, PROMPT_TEXT_MAX_CHARS, PromptId,
     PromptKind, PromptReply, sanitize_remote,
 };
+pub use sftp::{SftpCmd, SftpEvent, SftpHandle, SftpRequest, display_name};
 #[cfg(feature = "ssh")]
-pub use ssh::{PROMPT_TIMEOUT, SshPaths};
+pub use ssh::{PROMPT_TIMEOUT, SshPaths, validate_name};
 pub use supervise::supervise;
 
 /// Capacity of the UI → session input channel.
@@ -66,6 +68,9 @@ pub struct SessionHandle {
     pub input: Sender<SessionInput>,
     /// Everything the session reports back; merged into one iced subscription.
     pub events: Receiver<SessionOutput>,
+    /// SSH sessions only: the SFTP engine on the same connection (idle until the first
+    /// command; commands sent before the shell is up wait).
+    pub sftp: Option<SftpHandle>,
 }
 
 /// UI → session messages.
@@ -261,10 +266,14 @@ pub fn open_ssh(
     size: Size,
     term: TermHandle,
 ) -> SessionHandle {
-    spawn(rt, |in_rx, out_tx| {
+    let (sftp, sftp_ends) = ssh::sftp::channels();
+    let mut handle = spawn(rt, |in_rx, out_tx| {
         let span = tracing::info_span!("session", kind = "ssh");
-        rt.spawn(ssh::run_ssh(ssh.clone(), paths, size, term, in_rx, out_tx).instrument(span))
-    })
+        let task = ssh::run_ssh(ssh.clone(), paths, size, term, in_rx, out_tx, sftp_ends);
+        rt.spawn(task.instrument(span))
+    });
+    handle.sftp = Some(sftp);
+    handle
 }
 
 /// Without the `ssh` feature an SSH profile fails at once with [`SessionError::Spawn`]
@@ -298,5 +307,6 @@ fn spawn(
     SessionHandle {
         input: in_tx,
         events: out_rx,
+        sftp: None,
     }
 }

@@ -2,14 +2,18 @@
 //! loop shaped like `run_local`'s: input first, pending writes in ≤ 4 KiB chunks through the
 //! channel's `AsyncWrite` (which waits for window space without blocking reads), one channel
 //! message per iteration into the shared [`Pump`](crate::pipeline::Pump), debounced
-//! `window-change`, and the synchronized-update timer.
+//! `window-change`, and the synchronized-update timer. The SFTP engine starts here too (it
+//! shares the connection) and is stopped before the connection is closed.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use fogu_core::{EffectiveSsh, Size};
 use russh::{ChannelMsg, Disconnect, Sig};
 use tokio::io::AsyncWriteExt as _;
 use tokio::time::{Instant, sleep_until};
+use tokio_util::sync::CancellationToken;
+use tracing::Instrument as _;
 
 use super::connect::{Connection, ssh_error};
 use super::{Stop, Ui};
@@ -26,33 +30,19 @@ pub(crate) async fn run(
     ui: &mut Ui,
     ready: Duration,
 ) -> Result<ExitInfo, Stop> {
-    let setup = async {
-        let channel = conn.handle.channel_open_session().await?;
-        let size = ui.size;
-        channel
-            .request_pty(
-                false,
-                &ssh.term,
-                u32::from(size.cols.max(2)),
-                u32::from(size.rows.max(1)),
-                u32::from(size.px_w),
-                u32::from(size.px_h),
-                &[],
-            )
-            .await?;
-        // Servers without `AcceptEnv COLORTERM` ignore this; that's fine.
-        if let Err(err) = channel.set_env(false, "COLORTERM", "truecolor").await {
-            tracing::debug!(error = %ssh_error(&err), "COLORTERM not sent");
-        }
-        channel.request_shell(false).await?;
-        Ok::<_, russh::Error>(channel)
-    };
-    let channel = match tokio::time::timeout(ready, setup).await {
-        Ok(Ok(channel)) => channel,
-        Ok(Err(err)) => return Err(ssh_error(&err).into()),
-        Err(_elapsed) => return Err(crate::SessionError::Timeout.into()),
-    };
+    let channel = open_channel(&conn, ssh, ui.size, ready).await?;
     conn.drain_events(ssh, ui).await?;
+    let ssh_handle = Arc::new(conn.handle);
+    let sftp_stop = CancellationToken::new();
+    let sftp_task = ui.sftp.take().map(|ends| {
+        let engine = super::sftp::run(
+            Arc::clone(&ssh_handle),
+            ends,
+            sftp_stop.clone(),
+            Arc::new(super::sftp::Statvfs),
+        );
+        tokio::spawn(engine.instrument(tracing::Span::current()))
+    });
     let (mut reader, write_half) = channel.split();
     let mut writer = write_half.make_writer();
     let mut status = ExitInfo {
@@ -117,11 +107,53 @@ pub(crate) async fn run(
         let _eof = write_half.eof().await;
         let _close = write_half.close().await;
     }
-    let _bye = conn
-        .handle
+    // The SFTP engine cancels its transfers (cleaning up partial files) before the connection
+    // goes away (bounded by its grace period).
+    sftp_stop.cancel();
+    if let Some(task) = sftp_task {
+        let grace = super::sftp::STOP_GRACE + Duration::from_secs(1);
+        if tokio::time::timeout(grace, task).await.is_err() {
+            tracing::warn!("SFTP engine did not stop in time");
+        }
+    }
+    let _bye = ssh_handle
         .disconnect(Disconnect::ByApplication, "", "en")
         .await;
     end
+}
+
+/// `pty-req` → `env COLORTERM` → `shell` on a new session channel, within `ready`.
+async fn open_channel(
+    conn: &Connection,
+    ssh: &EffectiveSsh,
+    size: Size,
+    ready: Duration,
+) -> Result<russh::Channel<russh::client::Msg>, Stop> {
+    let setup = async {
+        let channel = conn.handle.channel_open_session().await?;
+        channel
+            .request_pty(
+                false,
+                &ssh.term,
+                u32::from(size.cols.max(2)),
+                u32::from(size.rows.max(1)),
+                u32::from(size.px_w),
+                u32::from(size.px_h),
+                &[],
+            )
+            .await?;
+        // Servers without `AcceptEnv COLORTERM` ignore this; that's fine.
+        if let Err(err) = channel.set_env(false, "COLORTERM", "truecolor").await {
+            tracing::debug!(error = %ssh_error(&err), "COLORTERM not sent");
+        }
+        channel.request_shell(false).await?;
+        Ok::<_, russh::Error>(channel)
+    };
+    match tokio::time::timeout(ready, setup).await {
+        Ok(Ok(channel)) => Ok(channel),
+        Ok(Err(err)) => Err(ssh_error(&err).into()),
+        Err(_elapsed) => Err(crate::SessionError::Timeout.into()),
+    }
 }
 
 async fn window_change<S>(channel: &russh::ChannelWriteHalf<S>, size: Size)

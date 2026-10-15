@@ -9,9 +9,7 @@
 //! patterns with `*`/`?` globs and `!` negation, case-insensitive; hashed `|1|salt|hash` entries
 //! via HMAC-SHA1. Only `known_hosts` lines are read here: never the key material of the user.
 
-use std::fs::OpenOptions;
-use std::io::{self, Read as _, Write as _};
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use fogu_core::fsutil;
@@ -308,16 +306,7 @@ pub(crate) fn replace(path: &Path, host: &str, port: u16, key: &PublicKey) -> io
     if let Some(dir) = path.parent() {
         fsutil::create_private_dir(dir)?;
     }
-    let tmp = path.with_extension("tmp");
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(fsutil::FILE_MODE)
-        .open(&tmp)?;
-    file.write_all(text.as_bytes())?;
-    file.sync_all()?;
-    std::fs::rename(&tmp, path)
+    fsutil::write_private_atomic(path, text.as_bytes())
 }
 
 #[cfg(test)]

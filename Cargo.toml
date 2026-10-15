@@ -69,6 +69,12 @@ russh = { version = "0.64.1", default-features = false, features = ["ring", "fla
 # why: HMAC-SHA1 to match hashed `|1|salt|hash` known_hosts entries; already in the tree as
 # russh's crypto backend (same version), so no new code.
 ring = "0.17.14"
+# why: the SFTP client: the russh project's own SFTP v3 subsystem, tokio-native, runs on a
+# channel of the existing russh connection (no second login).
+russh-sftp = "3.0.1"
+# why: `CancellationToken` for per-transfer cancel checked between chunks; already in the
+# tree via russh/russh-sftp. No default features needed.
+tokio-util = { version = "0.7.20", default-features = false }
 # why: passwords/passphrases/keyboard-interactive answers live only in `SecretString`
 # (zeroize-on-drop, redacted `Debug`).
 secrecy = "0.10.3"
