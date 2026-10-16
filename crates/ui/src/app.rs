@@ -75,6 +75,8 @@ pub struct App {
     pub(crate) profiles: ProfilesView,
     /// The "Port forwarding" dialog of an SSH pane.
     pub(crate) forwards: Option<crate::forwards_dialog::ForwardsDialog>,
+    /// The editor's "Set stored secret" dialog.
+    pub(crate) secret_dialog: Option<crate::secret_dialog::SecretDialog>,
     /// A close waiting for the "close live SSH session?" confirmation.
     pub(crate) pending_close: Option<CloseTarget>,
     /// `--config-dir` (SSH `known_hosts` location); `None` = the default.
@@ -161,6 +163,7 @@ impl App {
             },
             pending_close: None,
             forwards: None,
+            secret_dialog: None,
             config_dir: None,
             modifiers: keyboard::Modifiers::default(),
             desktop: sftp::Desktop::default(),
@@ -265,6 +268,7 @@ impl App {
             Message::ConfirmClose(confirmed) => self.on_confirm_close(confirmed),
             Message::Sftp(message) => self.on_sftp(message),
             Message::Forwards(message) => self.on_forwards(message),
+            Message::SecretDialog(message) => self.on_secret_dialog(message),
             Message::Desktop(message) => self.on_desktop(message),
             Message::Background(message) => self.on_background(message),
             Message::KeyIgnored(key, modified, mods) => self.on_key_ignored(&key, &modified, mods),

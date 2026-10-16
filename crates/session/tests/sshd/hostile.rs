@@ -61,7 +61,10 @@ fn server_closing_right_after_auth_reports_an_error() {
     ssh.ready_timeout = Some(Duration::from_secs(5));
     let mut client = Client::connect(&ssh, fake_paths(&dir), |kind| match kind {
         PromptKind::HostKeyUnknown { .. } => PromptReply::Accept,
-        PromptKind::Password { .. } => PromptReply::Secret(secret(fake_server::PASSWORD)),
+        PromptKind::Password { .. } => PromptReply::Secret {
+            value: secret(fake_server::PASSWORD),
+            remember: false,
+        },
         other => panic!("unexpected prompt: {other:?}"),
     });
     let end = client.until_for(Duration::from_secs(8), |e| {

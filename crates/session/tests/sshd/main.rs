@@ -25,6 +25,7 @@ mod reuse;
 mod route;
 mod sftp;
 mod shell;
+mod stored;
 
 use fogu_session::{PromptKind, PromptReply, SessionError, SessionOutput};
 use secrecy::SecretString;

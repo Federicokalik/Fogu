@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use fogu_core::{EffectiveSsh, Size};
 use fogu_session::{
-    PromptReply, SessionError, SessionOutput, SessionRuntime, SessionWarning, SshPaths, open_ssh,
+    PromptReply, SecretStore, SessionError, SessionOutput, SessionRuntime, SessionWarning,
+    SshPaths, open_ssh,
 };
 use fogu_term::{TermHandle, WORD_SEPARATORS};
 use support::prompter::Prompter;
@@ -34,10 +35,17 @@ fn paths(name: &str) -> SshPaths {
 /// Runs `ssh` until it reports an error or exits; returns that event, the warnings and the
 /// terminal text.
 fn run(ssh: &EffectiveSsh, name: &str) -> (SessionOutput, Vec<SessionWarning>, String) {
-    let rt = SessionRuntime::new().unwrap();
+    let rt = SessionRuntime::with_store(SecretStore::Disabled("tests".into())).unwrap();
     let term = TermHandle::new(SIZE.cols, SIZE.rows, 100, WORD_SEPARATORS);
     let view = term.share();
-    let mut session = open_ssh(rt.handle(), ssh, paths(name), SIZE, term);
+    let mut session = open_ssh(
+        rt.handle(),
+        ssh,
+        paths(name),
+        rt.secrets().clone(),
+        SIZE,
+        term,
+    );
     let mut prompter = Prompter::new(|_| PromptReply::Reject);
     let mut warnings = Vec::new();
     let end = rt.handle().block_on(prompter.run_until(

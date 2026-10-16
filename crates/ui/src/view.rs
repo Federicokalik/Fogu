@@ -134,11 +134,15 @@ impl App {
             profiles: self.profiles.open,
         }
         .view();
-        // Toasts are layered over the panes only, never over the tab bar.
-        let mut panes = body;
-        if let Some(toasts) = self.toasts.view(self.metrics.cell_h) {
-            panes = iced::widget::stack![panes, toasts].into();
-        }
+        // Toasts are layered over the panes only, never over the tab bar. The stack is always
+        // there (an empty spacer without toasts): wrapping the panes only while a toast shows
+        // would rebuild their widget state, and a prompt's text field would lose its focus when
+        // the toast goes away.
+        let toasts = self
+            .toasts
+            .view(self.metrics.cell_h)
+            .unwrap_or_else(|| iced::widget::space().into());
+        let panes = iced::widget::stack![body, toasts];
         let main = column![bar, panes].into();
         let main = profiles::view::with_sidebar(main, &self.profiles, &self.config, &self.colors);
         self.overlays(main, dialog)
@@ -155,7 +159,13 @@ impl App {
             .or_else(|| self.close_modal())
             .or_else(|| self.delete_modal());
         let base = overlay(base, modal);
-        let base = match sftp_dialog.or_else(|| self.forwards_view()) {
+        let dialog = self
+            .secret_dialog
+            .as_ref()
+            .map(crate::secret_dialog::view)
+            .or(sftp_dialog)
+            .or_else(|| self.forwards_view());
+        let base = match dialog {
             Some(dialog) => modal::over(base, dialog),
             None => base,
         };

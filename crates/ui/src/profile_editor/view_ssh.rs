@@ -19,7 +19,6 @@ use crate::sftp::panel::Look;
 const ROUTE_NOTE: &str = "Reach the host through at most one of: a jump host, a proxy command, \
      a SOCKS5 proxy or an HTTP proxy. A profile that sets more than one refuses to connect. \
      Every jump host's key is checked like any other host's.";
-const NO_PASSWORDS: &str = "Stored passwords are not available yet: you are asked when connecting.";
 
 pub(super) fn sections<'a>(
     ed: &'a ProfileEditor,
@@ -265,7 +264,7 @@ fn authentication<'a>(
         || "found automatically".to_owned(),
         |p| p.to_string_lossy().into_owned(),
     );
-    let rows = vec![
+    let mut rows = vec![
         forms::choice(
             look,
             FieldId::Auth,
@@ -284,13 +283,6 @@ fn authentication<'a>(
             ),
             "OpenSSH, PEM or PuTTY keys; RSA keys are signed by the SSH agent.",
             look.dim,
-        ),
-        forms::secret_hint(
-            look,
-            FieldId::Password,
-            "Password",
-            "not stored",
-            Some(NO_PASSWORDS),
         ),
         forms::path(
             look,
@@ -316,6 +308,18 @@ fn authentication<'a>(
             &d.agent_key_lifetime.unwrap_or(DEFAULT_AGENT_KEY_LIFETIME_S),
         ),
     ];
+    // After the method and the key list: the password, then a passphrase per key.
+    rows.insert(
+        2,
+        toggle_row(
+            ed,
+            look,
+            (FieldId::StoredSecrets, "stored_secrets"),
+            "Use the Secret Service for passwords and passphrases",
+            eff.stored_secrets,
+        ),
+    );
+    rows.splice(3..3, super::stored::rows(ed, eff, look));
     forms::section(look, "Authentication", rows)
 }
 

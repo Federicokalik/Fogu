@@ -39,7 +39,14 @@ fn main() -> Result<()> {
     let rt = SessionRuntime::new()?;
     let term = TermHandle::new(SIZE.cols, SIZE.rows, 1000, WORD_SEPARATORS);
     let view = term.share();
-    let mut session = open_ssh(rt.handle(), &ssh, SshPaths::default_for_user(), SIZE, term);
+    let mut session = open_ssh(
+        rt.handle(),
+        &ssh,
+        SshPaths::default_for_user(),
+        rt.secrets().clone(),
+        SIZE,
+        term,
+    );
     let mut sent = false;
     let end = rt.handle().block_on(async {
         loop {
@@ -153,12 +160,17 @@ fn answer(kind: &PromptKind) -> PromptReply {
             ));
             host_key_reply(&a)
         }
-        PromptKind::Password { user, host } => PromptReply::Secret(SecretString::from(read_line(
-            &format!("[prompt] password for {user}@{host}:"),
-        ))),
-        PromptKind::KeyPassphrase { path } => PromptReply::Secret(SecretString::from(read_line(
-            &format!("[prompt] passphrase for {}:", path.display()),
-        ))),
+        PromptKind::Password { user, host, .. } => PromptReply::Secret {
+            value: SecretString::from(read_line(&format!("[prompt] password for {user}@{host}:"))),
+            remember: false,
+        },
+        PromptKind::KeyPassphrase { path, .. } => PromptReply::Secret {
+            value: SecretString::from(read_line(&format!(
+                "[prompt] passphrase for {}:",
+                path.display()
+            ))),
+            remember: false,
+        },
         PromptKind::KeyboardInteractive {
             name,
             instructions,

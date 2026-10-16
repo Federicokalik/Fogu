@@ -41,6 +41,18 @@ impl fmt::Debug for KbdPrompt {
     }
 }
 
+/// Whether a password / passphrase prompt can offer "Remember".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Remember {
+    /// The Secret Service takes it.
+    Available,
+    /// A stored secret was just tried and the server refused it: the dialog says so and offers
+    /// to replace it (Remember) or forget it ([`PromptReply::Forget`]).
+    Rejected,
+    /// No usable store; the reason is shown instead of the checkbox.
+    Unavailable(String),
+}
+
 /// What the session is asking. Host and port come from the user's profile; fingerprints are
 /// computed locally; everything else that comes from the server is sanitized.
 #[derive(Clone, PartialEq, Eq)]
@@ -82,11 +94,15 @@ pub enum PromptKind {
         user: String,
         /// Host as configured.
         host: String,
+        /// Whether the answer can be stored.
+        remember: Remember,
     },
     /// Passphrase for an encrypted private key file. Reply: `Secret`.
     KeyPassphrase {
         /// The key file.
         path: PathBuf,
+        /// Whether the answer can be stored.
+        remember: Remember,
     },
     /// Keyboard-interactive round. Reply: `Secrets` with one answer per prompt, in order.
     KeyboardInteractive {
@@ -122,14 +138,21 @@ impl fmt::Debug for PromptKind {
                 .field("port", port)
                 .field("line", line)
                 .finish_non_exhaustive(),
-            Self::Password { user, host } => f
+            Self::Password {
+                user,
+                host,
+                remember,
+            } => f
                 .debug_struct("Password")
                 .field("user", user)
                 .field("host", host)
+                .field("remember", remember)
                 .finish(),
-            Self::KeyPassphrase { path } => {
-                f.debug_struct("KeyPassphrase").field("path", path).finish()
-            }
+            Self::KeyPassphrase { path, remember } => f
+                .debug_struct("KeyPassphrase")
+                .field("path", path)
+                .field("remember", remember)
+                .finish(),
             Self::KeyboardInteractive {
                 name,
                 instructions,
@@ -152,8 +175,15 @@ pub enum PromptReply {
     AcceptAndSave,
     /// Decline; the connection (or that auth method) is abandoned.
     Reject,
-    /// A password or passphrase.
-    Secret(SecretString),
+    /// A password or passphrase; `remember` = store it once it proves right.
+    Secret {
+        /// The typed secret.
+        value: SecretString,
+        /// "Remember" was ticked.
+        remember: bool,
+    },
+    /// A rejected stored secret: delete it (and ask again).
+    Forget,
     /// Keyboard-interactive answers, one per prompt.
     Secrets(Vec<SecretString>),
 }
@@ -164,7 +194,10 @@ impl fmt::Debug for PromptReply {
             Self::Accept => f.write_str("Accept"),
             Self::AcceptAndSave => f.write_str("AcceptAndSave"),
             Self::Reject => f.write_str("Reject"),
-            Self::Secret(_) => f.write_str("Secret(<redacted>)"),
+            Self::Secret { remember, .. } => {
+                write!(f, "Secret(<redacted>, remember: {remember})")
+            }
+            Self::Forget => f.write_str("Forget"),
             Self::Secrets(answers) => write!(f, "Secrets(<{} redacted>)", answers.len()),
         }
     }
@@ -199,7 +232,10 @@ mod tests {
         let debug = format!("{kind:?}");
         assert!(!debug.contains("evil"), "{debug}");
         let reply = PromptReply::Secrets(vec![SecretString::from("hunter2")]);
-        let secret = PromptReply::Secret(SecretString::from("hunter2"));
+        let secret = PromptReply::Secret {
+            value: SecretString::from("hunter2"),
+            remember: true,
+        };
         for debug in [format!("{reply:?}"), format!("{secret:?}")] {
             assert!(!debug.contains("hunter2"), "{debug}");
         }

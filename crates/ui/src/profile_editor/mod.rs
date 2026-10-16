@@ -9,6 +9,7 @@
 mod choices;
 mod fields;
 mod handlers;
+mod stored;
 mod view;
 mod view_lists;
 mod view_ssh;
@@ -23,6 +24,7 @@ use fogu_core::{Config, GroupId, Profile, ProfileId, ProfileKind};
 
 pub use fields::FieldId;
 pub use handlers::EditorMsg;
+pub use stored::StoredEntry;
 pub use view::page;
 
 /// Where the edited profile comes from.
@@ -58,6 +60,8 @@ pub struct ProfileEditor {
     pub title: String,
     /// Whether "Browse…" can open a file picker (else why not), checked when opened.
     pub picker: Result<(), &'static str>,
+    /// What the Secret Service holds for the password and each private key (existence only).
+    pub stored: Vec<StoredEntry>,
 }
 
 impl ProfileEditor {
@@ -82,6 +86,7 @@ impl ProfileEditor {
             groups: Vec::new(),
             jumps: Vec::new(),
             picker: Ok(()),
+            stored: Vec::new(),
             title: String::new(),
         }
     }

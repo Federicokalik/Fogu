@@ -6,6 +6,8 @@ mod env;
 mod local;
 mod pipeline;
 mod prompt;
+#[cfg(feature = "ssh")]
+mod secrets;
 pub mod sftp;
 #[cfg(feature = "ssh")]
 mod ssh;
@@ -28,14 +30,18 @@ use tracing::Instrument as _;
 pub use env::build_env;
 pub use prompt::{
     KbdPrompt, PROMPT_INSTRUCTIONS_MAX_CHARS, PROMPT_MAX_COUNT, PROMPT_TEXT_MAX_CHARS, PromptId,
-    PromptKind, PromptReply, sanitize_remote,
+    PromptKind, PromptReply, Remember, sanitize_remote,
 };
+#[cfg(feature = "ssh")]
+pub use secrets::{SecretError, SecretStore, Secrets};
 pub use sftp::{SftpCmd, SftpEvent, SftpHandle, SftpRequest, display_name, validate_name};
 #[cfg(feature = "ssh")]
 pub use ssh::algorithms::{
     Supported as SupportedAlgorithms, non_default as non_default_algorithms,
     supported as supported_algorithms,
 };
+#[cfg(feature = "ssh")]
+pub use ssh::key_fingerprint;
 #[cfg(feature = "ssh")]
 pub use ssh::pool::ConnectionPool;
 #[cfg(feature = "ssh")]
@@ -54,21 +60,46 @@ pub struct SessionRuntime {
     rt: Runtime,
     #[cfg(feature = "ssh")]
     pool: ConnectionPool,
+    #[cfg(feature = "ssh")]
+    secrets: Secrets,
 }
 
 impl SessionRuntime {
-    /// Builds the multi-thread runtime.
+    /// Builds the multi-thread runtime; stored secrets use the desktop Secret Service.
     pub fn new() -> io::Result<Self> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        let rt = Self::runtime()?;
+        Ok(Self {
+            #[cfg(feature = "ssh")]
+            secrets: Secrets::new(rt.handle().clone()),
+            #[cfg(feature = "ssh")]
+            pool: ConnectionPool::default(),
+            rt,
+        })
+    }
+
+    /// [`Self::new`] with a fixed secret store (tests; `SecretStore::Disabled` = none).
+    #[cfg(feature = "ssh")]
+    pub fn with_store(store: SecretStore) -> io::Result<Self> {
+        let rt = Self::runtime()?;
+        Ok(Self {
+            secrets: Secrets::with_store(rt.handle().clone(), store),
+            pool: ConnectionPool::default(),
+            rt,
+        })
+    }
+
+    fn runtime() -> io::Result<Runtime> {
+        tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("fogu-session")
             .enable_all()
-            .build()?;
-        Ok(Self {
-            rt,
-            #[cfg(feature = "ssh")]
-            pool: ConnectionPool::default(),
-        })
+            .build()
+    }
+
+    /// The stored secrets (passwords, passphrases) of this runtime's sessions.
+    #[cfg(feature = "ssh")]
+    pub fn secrets(&self) -> &Secrets {
+        &self.secrets
     }
 
     /// Handle to pass to [`open`].
@@ -91,7 +122,8 @@ impl SessionRuntime {
             pool: self.pool.clone(),
             profile: profile.clone(),
         };
-        open_ssh_in(self.handle(), ssh, paths, Some(pooled), size, term)
+        let secrets = self.secrets.clone();
+        open_ssh_in(self.handle(), ssh, paths, secrets, Some(pooled), size, term)
     }
 }
 
@@ -194,6 +226,9 @@ pub enum SessionWarning {
     UnknownAlgorithms(Vec<String>),
     /// Algorithms outside the library's defaults (weaker or legacy) are enabled.
     WeakAlgorithms(Vec<String>),
+    /// Stored passwords / passphrases can't be used or saved right now (sanitized reason); the
+    /// user is asked instead.
+    SecretStore(String),
 }
 
 /// Identifies one SSH connection of this process (never reused).
@@ -362,23 +397,28 @@ pub fn open(
             rt.spawn(local::run_local(local.clone(), size, term, in_rx, out_tx).instrument(span))
         }),
         #[cfg(feature = "ssh")]
-        EffectiveProfile::Ssh(ssh) => open_ssh(rt, ssh, SshPaths::default_for_user(), size, term),
+        EffectiveProfile::Ssh(ssh) => {
+            let secrets = Secrets::new(rt.clone());
+            open_ssh(rt, ssh, SshPaths::default_for_user(), secrets, size, term)
+        }
         #[cfg(not(feature = "ssh"))]
         EffectiveProfile::Ssh(ssh) => unsupported_ssh(rt, ssh),
     }
 }
 
 /// [`open`] for an SSH profile with explicit `known_hosts` locations (`--config-dir`, tests).
-/// The connection is never shared; see [`SessionRuntime::open_ssh_shared`].
+/// The connection is never shared; see [`SessionRuntime::open_ssh_shared`]. `secrets` holds the
+/// stored passwords / passphrases (usually [`SessionRuntime::secrets`]).
 #[cfg(feature = "ssh")]
 pub fn open_ssh(
     rt: &Handle,
     ssh: &EffectiveSsh,
     paths: SshPaths,
+    secrets: Secrets,
     size: Size,
     term: TermHandle,
 ) -> SessionHandle {
-    open_ssh_in(rt, ssh, paths, None, size, term)
+    open_ssh_in(rt, ssh, paths, secrets, None, size, term)
 }
 
 #[cfg(feature = "ssh")]
@@ -386,6 +426,7 @@ fn open_ssh_in(
     rt: &Handle,
     ssh: &EffectiveSsh,
     paths: SshPaths,
+    secrets: Secrets,
     pooled: Option<ssh::pool::Pooled>,
     size: Size,
     term: TermHandle,
@@ -396,6 +437,7 @@ fn open_ssh_in(
         let task = ssh::run_ssh(
             ssh.clone(),
             paths,
+            secrets,
             pooled,
             size,
             term,

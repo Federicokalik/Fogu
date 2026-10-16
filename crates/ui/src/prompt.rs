@@ -18,11 +18,10 @@ use std::fmt;
 
 use fogu_session::{
     PROMPT_INSTRUCTIONS_MAX_CHARS, PROMPT_TEXT_MAX_CHARS, PromptId, PromptKind, PromptReply,
-    SessionInput, sanitize_remote,
+    Remember, SessionInput, sanitize_remote,
 };
 use iced::widget::{
     Id, button, checkbox, column, container, operation, row, scrollable, space, text, text_input,
-    tooltip,
 };
 use iced::{Color, Element, Font, Length, Task};
 use secrecy::zeroize::Zeroize;
@@ -37,7 +36,6 @@ use crate::tab::PaneId;
 const DIALOG_W: f32 = 540.0;
 /// Header colour of the changed-key dialog.
 const DANGER: Color = Color::from_rgb(0.80, 0.16, 0.16);
-const REMEMBER_TIP: &str = "coming with Secret Service support";
 
 /// Text typed into a prompt field while it travels inside a `Message`: redacted `Debug`,
 /// zeroized on drop.
@@ -50,8 +48,13 @@ impl PromptText {
         Self(text)
     }
 
+    /// Nothing typed.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// A fresh secret buffer holding the text; `self` is zeroized as it drops.
-    fn into_secret(self) -> SecretString {
+    pub(crate) fn into_secret(self) -> SecretString {
         SecretString::from(self.0.as_str())
     }
 }
@@ -81,6 +84,8 @@ pub enum Choice {
     ArmReplace,
     /// Changed key, second click: replace the record and connect.
     Replace,
+    /// Rejected stored secret: delete it and ask again.
+    Forget,
 }
 
 /// Prompt dialog messages. None carries a secret except [`PromptMsg::Input`]'s [`PromptText`].
@@ -90,6 +95,8 @@ pub enum PromptMsg {
     Input(PaneId, usize, PromptText),
     /// Enter in field `.1`: focus the next field, or submit after the last one.
     FieldEnter(PaneId, usize),
+    /// The "Remember" checkbox of pane `.0`'s prompt.
+    Remember(PaneId, bool),
     /// Send the answers.
     Submit(PaneId),
     /// A dialog button.
@@ -104,6 +111,8 @@ pub(crate) struct PromptState {
     pub via: Option<String>,
     answers: Vec<SecretString>,
     replace_armed: bool,
+    /// "Remember" is ticked (starts ticked when a stored secret was just rejected: replace it).
+    remember: bool,
 }
 
 impl fmt::Debug for PromptState {
@@ -114,6 +123,7 @@ impl fmt::Debug for PromptState {
             .field("via", &self.via)
             .field("answers", &self.answers.len())
             .field("replace_armed", &self.replace_armed)
+            .field("remember", &self.remember)
             .finish()
     }
 }
@@ -127,10 +137,11 @@ impl PromptState {
         };
         Self {
             id,
-            kind,
             via,
             answers: (0..fields).map(|_| SecretString::default()).collect(),
             replace_armed: false,
+            remember: matches!(remember_of(&kind), Some(Remember::Rejected)),
+            kind,
         }
     }
 
@@ -144,11 +155,23 @@ impl PromptState {
         let answers = std::mem::take(&mut self.answers);
         match self.kind {
             PromptKind::Password { .. } | PromptKind::KeyPassphrase { .. } => {
-                answers.into_iter().next().map(PromptReply::Secret)
+                let remember = self.remember && self.can_remember();
+                answers
+                    .into_iter()
+                    .next()
+                    .map(|value| PromptReply::Secret { value, remember })
             }
             PromptKind::KeyboardInteractive { .. } => Some(PromptReply::Secrets(answers)),
             PromptKind::HostKeyUnknown { .. } | PromptKind::HostKeyChanged { .. } => None,
         }
+    }
+
+    /// The store takes what is typed.
+    fn can_remember(&self) -> bool {
+        !matches!(
+            remember_of(&self.kind),
+            Some(Remember::Unavailable(_)) | None
+        )
     }
 
     /// The reply a button gives; `None` keeps the dialog open. A changed key is only ever
@@ -156,6 +179,9 @@ impl PromptState {
     fn choose(&mut self, choice: Choice) -> Option<PromptReply> {
         match (&self.kind, choice) {
             (_, Choice::Cancel) => Some(PromptReply::Reject),
+            (_, Choice::Forget) if remember_of(&self.kind) == Some(&Remember::Rejected) => {
+                Some(PromptReply::Forget)
+            }
             (PromptKind::HostKeyUnknown { .. }, Choice::AcceptOnce) => Some(PromptReply::Accept),
             (PromptKind::HostKeyUnknown { .. }, Choice::AcceptAndSave) => {
                 Some(PromptReply::AcceptAndSave)
@@ -169,6 +195,16 @@ impl PromptState {
             }
             _ => None,
         }
+    }
+}
+
+/// The "Remember" state of a password / passphrase prompt.
+fn remember_of(kind: &PromptKind) -> Option<&Remember> {
+    match kind {
+        PromptKind::Password { remember, .. } | PromptKind::KeyPassphrase { remember, .. } => {
+            Some(remember)
+        }
+        _ => None,
     }
 }
 
@@ -224,6 +260,11 @@ impl App {
                 }
                 self.submit_prompt(pane);
             }
+            PromptMsg::Remember(pane, on) => {
+                if let Some(prompt) = self.pane_mut(pane).and_then(|p| p.prompt.as_mut()) {
+                    prompt.remember = on;
+                }
+            }
             PromptMsg::Submit(pane) => self.submit_prompt(pane),
             PromptMsg::Choose(pane, choice) => {
                 let reply = self
@@ -265,6 +306,9 @@ impl App {
     /// Enter that no widget took, for the front pane's dialog: submits a secret prompt and
     /// cancels a changed-key dialog (its default); an unknown-key dialog needs a click.
     pub(crate) fn on_enter(&mut self) -> Task<Message> {
+        if self.secret_dialog.is_some() {
+            return self.on_secret_dialog(crate::secret_dialog::SecretMsg::Save);
+        }
         let Some(pane) = self.active_pane() else {
             return Task::none();
         };
@@ -287,7 +331,8 @@ impl App {
     /// pane's prompt (declined), menu, the sidebar's search (then its keyboard focus), inline
     /// rename.
     pub(crate) fn on_escape(&mut self) {
-        if self.picker.take().is_some()
+        if self.secret_dialog.take().is_some()
+            || self.picker.take().is_some()
             || self.forwards.take().is_some()
             || self.pending_close.take().is_some()
             || self.profiles.pending_delete.take().is_some()
@@ -342,12 +387,32 @@ fn field(pane: PaneId, idx: usize, value: &SecretString, secret: bool) -> Elemen
         .into()
 }
 
-/// "Remember password/passphrase": disabled until stored secrets exist.
-fn remember<'a>(label: &'static str) -> Element<'a, Message> {
-    let tip = container(text(REMEMBER_TIP).size(12))
-        .padding(6)
-        .style(container::rounded_box);
-    tooltip(checkbox(false).label(label), tip, tooltip::Position::Bottom).into()
+/// The "Remember" part of a secret prompt: a checkbox when the Secret Service takes it (it
+/// replaces a rejected stored secret, with a Forget button beside the note), else why not.
+fn remember<'a>(pane: PaneId, state: &PromptState, what: &'static str) -> Element<'a, Message> {
+    let tick = |label: String| {
+        checkbox(state.remember)
+            .label(label)
+            .on_toggle(move |on| Message::Prompt(PromptMsg::Remember(pane, on)))
+    };
+    match remember_of(&state.kind) {
+        Some(Remember::Available) => tick(format!("Remember {what}")).into(),
+        Some(Remember::Rejected) => column![
+            text(format!("The stored {what} was rejected.")).color(DANGER),
+            row![
+                tick(format!("Replace the stored {what}")),
+                space().width(Length::Fill),
+                choose_button("Forget it", pane, Choice::Forget).style(button::secondary),
+            ]
+            .align_y(iced::Alignment::Center),
+        ]
+        .spacing(6)
+        .into(),
+        Some(Remember::Unavailable(why)) => text(format!("Cannot remember it: {}", safe(why)))
+            .size(12)
+            .into(),
+        None => column![].into(),
+    }
 }
 
 /// `[primary] [Cancel]` for a secret prompt.
@@ -391,21 +456,21 @@ pub(crate) fn view(pane: PaneId, state: &PromptState) -> Element<'_, Message> {
         .spacing(12)
         .into(),
         PromptKind::HostKeyChanged { .. } => changed_view(pane, state),
-        PromptKind::Password { user, host } => column![
+        PromptKind::Password { user, host, .. } => column![
             title("Password"),
             text(format!("Password for {}@{}", safe(user), safe(host))),
             first_field(pane, state),
-            remember("Remember password"),
+            remember(pane, state, "password"),
             submit_row(pane, "Log in"),
         ]
         .spacing(12)
         .into(),
-        PromptKind::KeyPassphrase { path } => column![
+        PromptKind::KeyPassphrase { path, .. } => column![
             title("Key passphrase"),
             text("Passphrase for the private key"),
             mono(safe(&path.display().to_string())),
             first_field(pane, state),
-            remember("Remember passphrase"),
+            remember(pane, state, "passphrase"),
             submit_row(pane, "Unlock"),
         ]
         .spacing(12)

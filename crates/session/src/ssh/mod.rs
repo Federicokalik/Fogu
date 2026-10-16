@@ -12,6 +12,7 @@
 mod agent;
 pub mod algorithms;
 mod auth;
+pub use auth::key_fingerprint;
 mod connect;
 mod forward;
 mod hostkeys;
@@ -34,6 +35,7 @@ use self::pool::Pooled;
 use self::sftp::SftpEnds;
 use crate::pipeline::{Gone, Pump};
 use crate::prompt::{PROMPT_TEXT_MAX_CHARS, sanitize_remote};
+use crate::secrets::Secrets;
 use crate::{
     ExitInfo, PromptId, PromptKind, PromptReply, SessionError, SessionInput, SessionOutput,
     SessionWarning,
@@ -115,6 +117,8 @@ pub(crate) struct Ui {
     pub(crate) sftp: Option<SftpEnds>,
     /// `user@host:port` of the jump host being connected, sent with each prompt.
     pub(crate) via: Option<String>,
+    /// Stored passwords / passphrases.
+    pub(crate) secrets: Secrets,
 }
 
 impl Ui {
@@ -191,6 +195,7 @@ impl Ui {
 pub(crate) async fn run_ssh(
     ssh: EffectiveSsh,
     paths: SshPaths,
+    secrets: Secrets,
     pooled: Option<Pooled>,
     size: Size,
     term: TermHandle,
@@ -206,6 +211,7 @@ pub(crate) async fn run_ssh(
         prompt_timeout: ssh.prompt_timeout,
         sftp: Some(sftp),
         via: None,
+        secrets,
     };
     let pooled = pooled.filter(|_| ssh.reuse_session);
     let out = match session(&ssh, &paths, pooled, &mut ui).await {

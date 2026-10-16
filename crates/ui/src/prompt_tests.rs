@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use fogu_core::{Action, Config, Profile, ProfileId, ProfileKind, SshOpts};
 use fogu_session::{
-    ExitInfo, KbdPrompt, PromptId, PromptKind, PromptReply, SessionInput, SessionOutput,
+    ExitInfo, KbdPrompt, PromptId, PromptKind, PromptReply, Remember, SessionInput, SessionOutput,
     SessionRuntime, SessionWarning,
 };
 use secrecy::ExposeSecret;
@@ -121,6 +121,7 @@ fn password_submit_moves_the_buffer_into_the_reply() {
     let password = PromptKind::Password {
         user: "alice".into(),
         host: "box.lan".into(),
+        remember: Remember::Available,
     };
     ask(&mut app, 7, password);
     assert_eq!(
@@ -133,10 +134,11 @@ fn password_submit_moves_the_buffer_into_the_reply() {
     act(&mut app, PromptMsg::Submit);
     let (id, reply) = reply(&mut app);
     assert_eq!(id, PromptId(7));
-    let PromptReply::Secret(secret) = reply else {
+    let PromptReply::Secret { value, remember } = reply else {
         panic!("expected a secret, got {reply:?}");
     };
-    assert_eq!(secret.expose_secret(), "hunter2");
+    assert_eq!(value.expose_secret(), "hunter2");
+    assert!(!remember, "Remember starts unticked");
     assert!(app.active_pane().unwrap().prompt.is_none(), "dialog closed");
 }
 
@@ -283,6 +285,7 @@ fn typed_secrets_never_show_in_message_debug() {
     let kind = PromptKind::Password {
         user: "alice".into(),
         host: "box.lan".into(),
+        remember: Remember::Available,
     };
     ask(&mut app, 1, kind);
     let typed = PromptText::new("hunter2".to_owned());
@@ -382,4 +385,57 @@ fn picker_opens_the_filtered_profile_in_a_tab_or_a_split() {
     send(&mut app, Message::Action(Action::OpenProfilePicker));
     send(&mut app, Message::Escape);
     assert!(app.picker.is_none(), "Escape closes the picker");
+}
+
+fn password_prompt(remember: Remember) -> PromptKind {
+    PromptKind::Password {
+        user: "alice".into(),
+        host: "box.lan".into(),
+        remember,
+    }
+}
+
+fn typed_reply(app: &mut App, remember: Remember, tick: Option<bool>) -> PromptReply {
+    ask(app, 3, password_prompt(remember));
+    let text = PromptText::new("hunter2".to_owned());
+    act(app, |p| PromptMsg::Input(p, 0, text));
+    if let Some(on) = tick {
+        act(app, |p| PromptMsg::Remember(p, on));
+    }
+    act(app, PromptMsg::Submit);
+    reply(app).1
+}
+
+#[test]
+fn remember_is_sent_only_when_ticked_and_the_store_takes_it() {
+    let mut app = ssh_app(None);
+    let reply = typed_reply(&mut app, Remember::Available, Some(true));
+    assert!(matches!(reply, PromptReply::Secret { remember: true, .. }));
+    // A store that is unavailable never gets "remember", whatever the checkbox said.
+    let unavailable = Remember::Unavailable("no keyring".into());
+    let reply = typed_reply(&mut app, unavailable, Some(true));
+    assert!(matches!(
+        reply,
+        PromptReply::Secret {
+            remember: false,
+            ..
+        }
+    ));
+    // A rejected stored password starts as "replace it".
+    let reply = typed_reply(&mut app, Remember::Rejected, None);
+    assert!(matches!(reply, PromptReply::Secret { remember: true, .. }));
+}
+
+#[test]
+fn forget_is_offered_only_for_a_rejected_stored_secret() {
+    let mut app = ssh_app(None);
+    ask(&mut app, 4, password_prompt(Remember::Available));
+    act(&mut app, |p| PromptMsg::Choose(p, Choice::Forget));
+    assert!(app.active_pane().unwrap().prompt.is_some(), "ignored");
+    let mut app = ssh_app(None);
+    ask(&mut app, 5, password_prompt(Remember::Rejected));
+    act(&mut app, |p| PromptMsg::Choose(p, Choice::Forget));
+    let (id, reply) = reply(&mut app);
+    assert_eq!(id, PromptId(5));
+    assert!(matches!(reply, PromptReply::Forget), "{reply:?}");
 }

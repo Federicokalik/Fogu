@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use fogu_core::{ForwardKind, PortForward};
 use fogu_session::{
-    ConnectionId, ForwardState, PromptKind, PromptReply, SessionOutput, SessionRuntime,
-    SessionWarning,
+    ConnectionId, ForwardState, PromptKind, PromptReply, SecretStore, SessionOutput,
+    SessionRuntime, SessionWarning,
 };
 
 use super::no_prompts;
@@ -84,7 +84,7 @@ fn two_tabs_of_one_profile_share_one_connection_and_its_forwards() {
         target_port: target,
         description: String::new(),
     }];
-    let rt = Arc::new(SessionRuntime::new().unwrap());
+    let rt = Arc::new(SessionRuntime::with_store(SecretStore::Disabled("tests".into())).unwrap());
     let mut a: TestClient = Client::connect_shared(&rt, "lab", &ssh, sshd.paths(), accept_host);
     let first = connection(&mut a);
     let forward = a.until(
@@ -131,7 +131,7 @@ fn other_profiles_and_reuse_off_never_share() {
         return;
     };
     let ssh = sshd.profile();
-    let rt = Arc::new(SessionRuntime::new().unwrap());
+    let rt = Arc::new(SessionRuntime::with_store(SecretStore::Disabled("tests".into())).unwrap());
     let mut a: TestClient = Client::connect_shared(&rt, "one", &ssh, sshd.paths(), accept_host);
     let first = connection(&mut a);
     a.wait_shell();

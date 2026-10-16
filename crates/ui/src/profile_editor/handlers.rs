@@ -9,7 +9,7 @@ use fogu_core::{LocalOpts, Profile, ProfileId, ProfileKind, SshOpts, strip_defau
 use iced::Task;
 
 use super::fields::{Effect, FieldId};
-use super::{ProfileEditor, Source};
+use super::{ProfileEditor, Source, StoredEntry};
 use crate::app::App;
 use crate::forms::FieldValue;
 use crate::message::Message;
@@ -31,6 +31,10 @@ pub enum EditorMsg {
     Delete,
     /// Read-only `~/.ssh/config` host: save it as a stored profile and edit that.
     CopyToMine,
+    /// What the Secret Service holds for this profile's secrets (existence only).
+    Stored(Vec<StoredEntry>),
+    /// Set / Clear of a stored secret finished (`Err` = why not).
+    StoreDone(Result<(), String>),
 }
 
 /// Why "Browse…" is off when no picker can open.
@@ -102,11 +106,20 @@ impl App {
         let id = TabId(self.take_id());
         self.tabs.push(Tab::editor(id, editor));
         self.activate(id);
-        Task::none()
+        self.store_query(id)
     }
 
     pub(crate) fn on_editor(&mut self, tab: TabId, message: EditorMsg) -> Task<Message> {
         match message {
+            EditorMsg::Field(field @ (FieldId::Password | FieldId::KeyPassphrase(_)), value) => {
+                return self.secret_field(tab, field, &value);
+            }
+            EditorMsg::Stored(entries) => {
+                if let Some(editor) = self.editor_mut(tab) {
+                    editor.stored = entries;
+                }
+            }
+            EditorMsg::StoreDone(result) => return self.store_done(tab, result),
             EditorMsg::Field(field, value) => {
                 let config = self.config.clone();
                 let hosts = self.profiles.ssh_hosts.profiles.clone();

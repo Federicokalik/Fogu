@@ -13,6 +13,7 @@ mod profile;
 mod quick_connect;
 pub mod recent;
 mod scheme;
+mod secret_key;
 mod size;
 mod split;
 pub mod ssh_config;
@@ -32,5 +33,6 @@ pub use profile::{
 };
 pub use quick_connect::{QuickConnect, QuickConnectError};
 pub use scheme::{ColorScheme, RgbColor};
+pub use secret_key::SecretKey;
 pub use size::Size;
 pub use split::{Divider, Node, NodePath, Orientation, Rect, Side, SplitTree};

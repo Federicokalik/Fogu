@@ -8,13 +8,19 @@
 //! Secrets: passwords, passphrases, answers and key-file text are `SecretString`s, exposed only
 //! as the argument of the russh / key-decoding call. russh copies a password into its own
 //! `String` for the packet (not zeroized; outside our control).
+//!
+//! Stored secrets: a password / key passphrase the Secret Service holds is tried once per
+//! connection before the prompt. One the server (or the key) refuses is never retried: the user
+//! is asked, and the dialog offers to replace or forget it. A prompt's secret is stored only
+//! after it proved right (the server accepted the password; the key decrypted). A store that
+//! is missing or locked is reported in the terminal and the user is asked as before.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fogu_core::{EffectiveSsh, SshAuth};
+use fogu_core::{EffectiveSsh, SecretKey, SshAuth};
 use russh::client::KeyboardInteractiveAuthResponse as Kbd;
 use russh::keys::agent::{AgentIdentity, Constraint};
 use russh::keys::{Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
@@ -29,7 +35,8 @@ use crate::prompt::{
     KbdPrompt, PROMPT_INSTRUCTIONS_MAX_CHARS, PROMPT_MAX_COUNT, PROMPT_TEXT_MAX_CHARS,
     sanitize_remote,
 };
-use crate::{PromptKind, PromptReply, SessionError};
+use crate::secrets::SecretError;
+use crate::{PromptKind, PromptReply, Remember, SessionError, SessionOutput, SessionWarning};
 
 /// One step of the plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +120,8 @@ struct Auth<'a> {
     ssh: &'a EffectiveSsh,
     ui: &'a mut Ui,
     ready: Duration,
+    /// Why stored secrets cannot be used on this connection (reported once).
+    store_problem: Option<String>,
 }
 
 /// Runs the plan until one method succeeds.
@@ -127,6 +136,8 @@ pub(crate) async fn authenticate(
         ssh,
         ui,
         ready,
+        store_problem: (!ssh.stored_secrets)
+            .then(|| "turned off for this profile (stored_secrets = false)".to_owned()),
     };
     let mut allowed: Option<MethodSet> = None;
     for &method in plan(ssh.auth) {
@@ -414,44 +425,191 @@ impl Auth<'_> {
             }
         };
         tracing::debug!(path = %path.display(), error = %err, "key is encrypted");
-        for _ in 0..PASSPHRASE_ATTEMPTS {
+        Box::pin(self.passphrase(path, &text)).await
+    }
+
+    /// The stored passphrase of an encrypted key (tried once), else prompts.
+    async fn passphrase(
+        &mut self,
+        path: &Path,
+        text: &SecretString,
+    ) -> Result<Option<PrivateKey>, Stop> {
+        let key = SecretKey::KeyPassphrase {
+            key_fingerprint: file_fingerprint(text),
+        };
+        let mut rejected = false;
+        if let Some(stored) = self.stored(&key).await? {
+            let decoded =
+                russh::keys::decode_secret_key(text.expose_secret(), Some(stored.expose_secret()));
+            if let Ok(key) = decoded {
+                let line = format!("Using the stored passphrase for {}", path.display());
+                self.ui.service(&line).await?;
+                return Ok(Some(key));
+            }
+            let line = format!("Stored passphrase for {} rejected", path.display());
+            self.ui.service(&line).await?;
+            rejected = true;
+        }
+        let mut asked = 0;
+        while asked < PASSPHRASE_ATTEMPTS {
             let kind = PromptKind::KeyPassphrase {
                 path: path.to_path_buf(),
+                remember: self.remember(rejected),
             };
-            let PromptReply::Secret(passphrase) = self.ui.ask(kind).await? else {
-                return Ok(None);
+            let (passphrase, save) = match self.ui.ask(kind).await? {
+                PromptReply::Secret { value, remember } => (value, remember),
+                PromptReply::Forget => {
+                    self.forget(&key, "passphrase").await?;
+                    rejected = false;
+                    continue;
+                }
+                _ => return Ok(None),
             };
+            asked += 1;
             match russh::keys::decode_secret_key(
                 text.expose_secret(),
                 Some(passphrase.expose_secret()),
             ) {
-                Ok(key) => return Ok(Some(key)),
+                Ok(decoded) => {
+                    if save {
+                        self.save(&key, passphrase, "passphrase").await?;
+                    }
+                    return Ok(Some(decoded));
+                }
                 Err(_) => self.ui.service("Wrong passphrase").await?,
             }
         }
         Ok(None)
     }
 
-    async fn password(&mut self, allowed: &mut Option<MethodSet>) -> Result<Outcome, Stop> {
-        let mut last = Outcome::Skipped;
-        for _ in 0..PASSWORD_ATTEMPTS {
-            if !server_allows(allowed.as_ref(), Method::Password) {
-                break;
+    /// `Remember` for the next prompt; `rejected` = a stored secret was just refused.
+    fn remember(&self, rejected: bool) -> Remember {
+        match (&self.store_problem, rejected) {
+            (Some(why), _) => Remember::Unavailable(why.clone()),
+            (None, true) => Remember::Rejected,
+            (None, false) => Remember::Available,
+        }
+    }
+
+    /// Says (once) that stored secrets can't be used here; the user is asked instead.
+    async fn store_failed(&mut self, err: &SecretError) -> Result<(), Stop> {
+        tracing::warn!(error = %err, "stored secrets unavailable");
+        self.store_problem = Some(err.to_string());
+        self.store_notice(format!("Stored secrets unavailable: {err}"))
+            .await
+    }
+
+    /// A store problem the user should see: a terminal line (the profile may clear those on
+    /// connect) and a warning (toast + tab badge).
+    async fn store_notice(&mut self, text: String) -> Result<(), Stop> {
+        self.ui.service(&text).await?;
+        self.ui
+            .pump
+            .emit(SessionOutput::Warning(SessionWarning::SecretStore(text)))
+            .await?;
+        Ok(())
+    }
+
+    /// The stored secret for `key`; none when there is none or the store is unusable.
+    async fn stored(&mut self, key: &SecretKey) -> Result<Option<SecretString>, Stop> {
+        if self.store_problem.is_some() {
+            return Ok(None);
+        }
+        match self.ui.secrets.get(key).await {
+            Ok(found) => Ok(found),
+            Err(err) => {
+                self.store_failed(&err).await?;
+                Ok(None)
             }
+        }
+    }
+
+    /// Stores a secret that proved right; failure is shown, never fatal.
+    async fn save(&mut self, key: &SecretKey, value: SecretString, what: &str) -> Result<(), Stop> {
+        if self.store_problem.is_some() {
+            return Ok(());
+        }
+        match self.ui.secrets.set(key, value).await {
+            Ok(()) => {
+                let line = format!("Saved the {what} to the Secret Service");
+                self.ui.service(&line).await?;
+            }
+            Err(err) => {
+                self.store_notice(format!("Could not save the {what}: {err}"))
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Deletes a rejected stored secret (the user chose Forget).
+    async fn forget(&mut self, key: &SecretKey, what: &str) -> Result<(), Stop> {
+        match self.ui.secrets.delete(key).await {
+            Ok(()) => {
+                let line = format!("Forgot the stored {what}");
+                self.ui.service(&line).await?;
+            }
+            Err(err) => {
+                self.store_notice(format!("Could not forget the stored {what}: {err}"))
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// One password attempt.
+    async fn try_password(&mut self, password: &SecretString) -> Result<Outcome, Stop> {
+        let user = self.ssh.user.clone();
+        let fut = self
+            .conn
+            .handle
+            .authenticate_password(user, password.expose_secret());
+        Ok(call(self.ready, fut).await?.into())
+    }
+
+    async fn password(&mut self, allowed: &mut Option<MethodSet>) -> Result<Outcome, Stop> {
+        let key = SecretKey::ssh_password(self.ssh);
+        let mut last = Outcome::Skipped;
+        let mut rejected = false;
+        if let Some(stored) = self.stored(&key).await? {
+            self.ui.service("Using the stored password").await?;
+            match self.try_password(&stored).await? {
+                Outcome::Success => return Ok(Outcome::Success),
+                Outcome::Failure(remaining) => {
+                    self.ui.service("Stored password rejected").await?;
+                    if !remaining.is_empty() {
+                        *allowed = Some(remaining.clone());
+                    }
+                    last = Outcome::Failure(remaining);
+                    rejected = true;
+                }
+                Outcome::Skipped => {}
+            }
+        }
+        let mut asked = 0;
+        while asked < PASSWORD_ATTEMPTS && server_allows(allowed.as_ref(), Method::Password) {
             let kind = PromptKind::Password {
                 user: self.ssh.user.clone(),
                 host: self.ssh.host.clone(),
+                remember: self.remember(rejected),
             };
-            let PromptReply::Secret(password) = self.ui.ask(kind).await? else {
-                return Ok(Outcome::Skipped);
+            let (password, save) = match self.ui.ask(kind).await? {
+                PromptReply::Secret { value, remember } => (value, remember),
+                PromptReply::Forget => {
+                    self.forget(&key, "password").await?;
+                    rejected = false;
+                    continue;
+                }
+                _ => return Ok(Outcome::Skipped),
             };
-            let user = self.ssh.user.clone();
-            let fut = self
-                .conn
-                .handle
-                .authenticate_password(user, password.expose_secret());
-            match Outcome::from(call(self.ready, fut).await?) {
-                Outcome::Success => return Ok(Outcome::Success),
+            asked += 1;
+            match self.try_password(&password).await? {
+                Outcome::Success => {
+                    if save {
+                        self.save(&key, password, "password").await?;
+                    }
+                    return Ok(Outcome::Success);
+                }
                 Outcome::Failure(remaining) => {
                     self.ui.service("Password rejected").await?;
                     if !remaining.is_empty() {
@@ -559,6 +717,29 @@ fn openssh_public_key(path: &Path) -> Option<PublicKey> {
     russh::keys::ssh_key::PrivateKey::from_openssh(text.expose_secret())
         .ok()
         .map(|key| key.public_key().clone())
+}
+
+/// What a key's stored passphrase is filed under: the public key's SHA-256 fingerprint (the
+/// public half is readable without the passphrase), else a SHA-256 of the file text.
+fn file_fingerprint(text: &SecretString) -> String {
+    use std::fmt::Write as _;
+    if let Ok(key) = russh::keys::ssh_key::PrivateKey::from_openssh(text.expose_secret()) {
+        return fingerprint(key.public_key());
+    }
+    let digest = ring::digest::digest(&ring::digest::SHA256, text.expose_secret().as_bytes());
+    let mut hex = String::from("file:sha256:");
+    for byte in digest.as_ref() {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// [`file_fingerprint`] of the key file at `path` (`~` expanded; `None` = unreadable); the profile editor files
+/// a key's passphrase under the same name the connection looks it up by.
+#[must_use]
+pub fn key_fingerprint(path: &Path) -> Option<String> {
+    let text = read_key_file(&expand_home(path)).ok()?;
+    Some(file_fingerprint(&text))
 }
 
 /// A key file's text, as a secret (it may be an unencrypted private key).

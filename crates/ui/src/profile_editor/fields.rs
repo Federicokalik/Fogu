@@ -54,8 +54,11 @@ pub enum FieldId {
     ReuseLinger,
     // SSH: authentication.
     Auth,
+    StoredSecrets,
     PrivateKeys,
     Password,
+    /// The stored passphrase of private key row `.0`.
+    KeyPassphrase(usize),
     AgentPath,
     IdentitiesOnly,
     HostKeyAlias,
@@ -413,6 +416,7 @@ fn apply_ssh(
         (FieldId::AgentPath, FieldValue::Text(t)) => ssh.agent_path = opt(&t).map(PathBuf::from),
         (FieldId::AgentPath, FieldValue::Picked(path)) => ssh.agent_path = Some(path),
         (FieldId::SkipBanner, FieldValue::Bool(b)) => ssh.skip_banner = Some(b),
+        (FieldId::StoredSecrets, FieldValue::Bool(b)) => ssh.stored_secrets = Some(b),
         (FieldId::ClearServiceMessages, FieldValue::Bool(b)) => {
             ssh.clear_service_messages_on_connect = Some(b);
         }
@@ -469,7 +473,7 @@ fn apply_ssh(
                 None => list.push(name),
             }
         }
-        // `Password`: stored passwords are not available; its buttons are disabled.
+        // `Password` / `KeyPassphrase`: Set… / Clear are handled by the app (`stored.rs`).
         _ => {}
     }
 }

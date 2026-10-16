@@ -107,6 +107,7 @@ fn every_ssh_field_is_set_through_the_reducer() {
         FieldId::ClearServiceMessages,
         FieldId::VerifyHostKeys,
         FieldId::SocksRemoteDns,
+        FieldId::StoredSecrets,
     ] {
         field(&mut app, id, V::Bool(false));
     }
@@ -213,6 +214,7 @@ fn every_ssh_field_is_set_through_the_reducer() {
         }),
         reuse_session: Some(false),
         reuse_linger: Some(30),
+        stored_secrets: Some(false),
         scripts: Some(vec![LoginScript {
             expect: "Password:".into(),
             send: "x\\n".into(),

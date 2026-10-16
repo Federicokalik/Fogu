@@ -7,8 +7,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use fogu_core::{EffectiveSsh, ProfileId, Size};
 use fogu_session::{
-    PromptKind, PromptReply, SessionHandle, SessionInput, SessionOutput, SessionRuntime, SshPaths,
-    open_ssh,
+    PromptKind, PromptReply, SecretStore, SessionHandle, SessionInput, SessionOutput,
+    SessionRuntime, SshPaths, open_ssh,
 };
 use fogu_term::{TermHandle, WORD_SEPARATORS};
 
@@ -34,10 +34,20 @@ pub struct Client<F> {
 impl<F: FnMut(&PromptKind) -> PromptReply> Client<F> {
     /// Opens `ssh` with `paths`; `answer` replies to every prompt.
     pub fn connect(ssh: &EffectiveSsh, paths: SshPaths, answer: F) -> Self {
-        let rt = Arc::new(SessionRuntime::new().expect("runtime"));
+        Self::connect_with(ssh, paths, SecretStore::Disabled("tests".into()), answer)
+    }
+
+    /// [`Self::connect`] with `store` as the stored secrets.
+    pub fn connect_with(
+        ssh: &EffectiveSsh,
+        paths: SshPaths,
+        store: SecretStore,
+        answer: F,
+    ) -> Self {
+        let rt = Arc::new(SessionRuntime::with_store(store).expect("runtime"));
         let term = TermHandle::new(SIZE.cols, SIZE.rows, 100, WORD_SEPARATORS);
         let view = term.share();
-        let session = open_ssh(rt.handle(), ssh, paths, SIZE, term);
+        let session = open_ssh(rt.handle(), ssh, paths, rt.secrets().clone(), SIZE, term);
         Self {
             rt,
             session,

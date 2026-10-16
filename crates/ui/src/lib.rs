@@ -32,6 +32,7 @@ mod profiles;
 mod prompt;
 mod restart;
 mod runs;
+mod secret_dialog;
 mod sftp;
 mod split_container;
 mod subscription;

@@ -299,6 +299,7 @@ pub(crate) fn warning_title(warning: &SessionWarning) -> &'static str {
         SessionWarning::X11Forwarded => "X11 forwarded",
         SessionWarning::UnknownAlgorithms(_) => "Unknown SSH algorithms ignored",
         SessionWarning::WeakAlgorithms(_) => "Weaker SSH algorithms enabled",
+        SessionWarning::SecretStore(_) => "Stored secrets",
     }
 }
 
@@ -326,5 +327,6 @@ pub(crate) fn warning_detail(warning: &SessionWarning) -> String {
         SessionWarning::WeakAlgorithms(names) => {
             format!("Outside the secure defaults: {}", names.join(", "))
         }
+        SessionWarning::SecretStore(text) => format!("{text}. You are asked instead."),
     }
 }

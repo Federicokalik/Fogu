@@ -40,11 +40,14 @@ fn encrypted_ed25519_key_asks_for_the_passphrase() {
     let mut tries = 0;
     let mut client = Client::connect(&ssh, sshd.paths(), |kind| {
         assert!(
-            matches!(kind, PromptKind::KeyPassphrase { path } if *path == key),
+            matches!(kind, PromptKind::KeyPassphrase { path, .. } if *path == key),
             "{kind:?}"
         );
         tries += 1;
-        PromptReply::Secret(secret(if tries == 1 { "wrong" } else { "s3cret pass" }))
+        PromptReply::Secret {
+            value: secret(if tries == 1 { "wrong" } else { "s3cret pass" }),
+            remember: false,
+        }
     });
     client.wait_shell();
     assert_eq!(client.prompter.asked.len(), 2);
@@ -66,10 +69,13 @@ fn rsa_key_files_are_signed_by_the_agent_with_one_passphrase_prompt() {
         ssh.agent_path = Some(agent.socket.clone());
         let mut client = Client::connect(&ssh, sshd.paths(), |kind| {
             assert!(
-                matches!(kind, PromptKind::KeyPassphrase { path } if *path == key),
+                matches!(kind, PromptKind::KeyPassphrase { path, .. } if *path == key),
                 "{kind:?}"
             );
-            PromptReply::Secret(secret(pass))
+            PromptReply::Secret {
+                value: secret(pass),
+                remember: false,
+            }
         });
         client.wait_shell();
         let asked = usize::from(!pass.is_empty());
@@ -193,7 +199,10 @@ fn password_auth_retries_after_a_wrong_password() {
                 } else {
                     fake_server::PASSWORD
                 };
-                PromptReply::Secret(secret(text))
+                PromptReply::Secret {
+                    value: secret(text),
+                    remember: false,
+                }
             }
             other => panic!("unexpected prompt: {other:?}"),
         },
@@ -212,7 +221,10 @@ fn three_wrong_passwords_fail_authentication() {
         fake_paths(&dir),
         |kind| match kind {
             PromptKind::HostKeyUnknown { .. } => PromptReply::Accept,
-            _ => PromptReply::Secret(secret("wrong")),
+            _ => PromptReply::Secret {
+                value: secret("wrong"),
+                remember: false,
+            },
         },
     );
     let err = error_of(client.end());

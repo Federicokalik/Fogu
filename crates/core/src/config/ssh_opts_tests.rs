@@ -39,6 +39,7 @@ agent_forward = true
 x11 = true
 reuse_session = false
 reuse_linger = 0
+stored_secrets = false
 cwd = "/srv"
 remember_cwd = true
 clear_service_messages_on_connect = false
@@ -108,6 +109,7 @@ fn every_field_resolves_and_is_reported_unsupported() {
     assert!(!ssh.warn_on_close);
     assert!(ssh.agent_forward && ssh.x11 && !ssh.reuse_session);
     assert_eq!(ssh.reuse_linger, Duration::ZERO);
+    assert!(!ssh.stored_secrets);
     assert_eq!(
         ssh.unsupported(),
         ["input_backspace", "scripts", "cwd", "remember_cwd",]
@@ -126,7 +128,7 @@ fn builtin_defaults() {
     assert_eq!(ssh.term, "xterm-256color");
     assert!(ssh.reuse_session && ssh.verify_host_keys && ssh.clear_service_messages_on_connect);
     assert_eq!(ssh.reuse_linger, Duration::from_secs(10));
-    assert!(ssh.warn_on_close && ssh.socks_remote_dns);
+    assert!(ssh.warn_on_close && ssh.socks_remote_dns && ssh.stored_secrets);
     assert!(!ssh.skip_banner && !ssh.agent_forward && !ssh.x11 && !ssh.remember_cwd);
     assert_eq!(ssh.unsupported(), Vec::<&str>::new());
 }

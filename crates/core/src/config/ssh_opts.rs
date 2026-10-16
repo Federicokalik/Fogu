@@ -290,6 +290,9 @@ pub struct SshOpts {
     /// Seconds a reused connection stays open after its last tab closed (10); 0 = close at
     /// once.
     pub reuse_linger: Option<u32>,
+    /// Use and offer the desktop Secret Service for this profile's passwords and key
+    /// passphrases (`true`).
+    pub stored_secrets: Option<bool>,
     /// Login scripts.
     pub scripts: Option<Vec<LoginScript>>,
     /// Remote directory to `cd` into after login.
@@ -377,6 +380,8 @@ pub struct EffectiveSsh {
     pub reuse_session: bool,
     /// See [`SshOpts::reuse_linger`].
     pub reuse_linger: Duration,
+    /// See [`SshOpts::stored_secrets`].
+    pub stored_secrets: bool,
     /// See [`SshOpts::scripts`].
     pub scripts: Vec<LoginScript>,
     /// See [`SshOpts::cwd`].
@@ -474,6 +479,7 @@ pub fn resolve_ssh(p: &SshOpts, d: &SshOpts) -> EffectiveSsh {
         x11: pick!(x11).unwrap_or(false),
         algorithms: pick!(algorithms).unwrap_or_default(),
         reuse_session: pick!(reuse_session).unwrap_or(true),
+        stored_secrets: pick!(stored_secrets).unwrap_or(true),
         reuse_linger: Duration::from_secs(
             pick!(reuse_linger).map_or(u64::from(DEFAULT_REUSE_LINGER_S), u64::from),
         ),
@@ -540,6 +546,7 @@ pub fn strip_ssh(p: &SshOpts, d: &SshOpts) -> SshOpts {
         algorithms,
         reuse_session,
         reuse_linger,
+        stored_secrets,
         scripts,
         cwd,
         remember_cwd,

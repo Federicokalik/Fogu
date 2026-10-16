@@ -155,6 +155,8 @@ pub enum Message {
     Sftp(SftpMsg),
     /// The port forwarding dialog.
     Forwards(crate::forwards_dialog::ForwardsMsg),
+    /// The editor's "Set stored password / passphrase" dialog.
+    SecretDialog(crate::secret_dialog::SecretMsg),
     /// A key press no widget took (unmodified key, key with modifiers applied, modifiers).
     KeyIgnored(
         iced::keyboard::Key,

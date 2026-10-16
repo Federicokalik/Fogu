@@ -7,6 +7,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # full debuginfo made the test build outgrow the runner's disk (93 MB left, linker bus
+  # error); line tables keep file:line backtraces at about half the size (4.6 GB vs ~9.4 GB)
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 jobs:
   check:
     runs-on: ubuntu-24.04

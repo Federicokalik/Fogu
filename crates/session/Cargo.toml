@@ -21,12 +21,18 @@ ring = { workspace = true, optional = true }
 russh-sftp = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 secrecy.workspace = true
+oo7 = { workspace = true, optional = true }
 
 [features]
 default = ["ssh"]
 # The SSH transport (`run_ssh`). Off = local shells only, no russh in the tree.
-ssh = ["dep:russh", "dep:ring", "dep:russh-sftp", "dep:tokio-util"]
+# Tests only: `SecretStore::InMemory` for the integration tests.
+test-store = []
+ssh = ["dep:russh", "dep:ring", "dep:russh-sftp", "dep:tokio-util", "dep:oo7"]
 
 [[example]]
 name = "ssh_probe"
 required-features = ["ssh"]
+
+[dev-dependencies]
+fogu-session = { path = ".", features = ["test-store"] }
