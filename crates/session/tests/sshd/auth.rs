@@ -1,4 +1,4 @@
-//! Authentication methods against real OpenSSH (key, encrypted key, RSA refusal, agent) and, for
+//! Authentication methods against real OpenSSH (key, encrypted key, RSA via the agent, agent) and, for
 //! password / keyboard-interactive, against the in-process server (see `support/fake_server.rs`).
 
 use std::fs;
@@ -51,26 +51,32 @@ fn encrypted_ed25519_key_asks_for_the_passphrase() {
 }
 
 #[test]
-fn rsa_key_files_are_refused_visibly_without_a_passphrase_prompt() {
+fn rsa_key_files_are_signed_by_the_agent_with_one_passphrase_prompt() {
     let Some(sshd) = TestSshd::start() else {
+        return;
+    };
+    let Some(agent) = TestAgent::start(&sshd.dir) else {
         return;
     };
     sshd.trust();
     for (name, pass) in [("rsa_plain", ""), ("rsa_locked", "pw")] {
         let key = sshd.new_key(name, "rsa", pass, true);
         let mut ssh = sshd.profile();
-        ssh.private_keys = vec![key];
-        // `no_prompts` fails the test if a passphrase is requested for the RSA file.
+        ssh.private_keys = vec![key.clone()];
+        ssh.agent_path = Some(agent.socket.clone());
+        let mut client = Client::connect(&ssh, sshd.paths(), |kind| {
+            assert!(
+                matches!(kind, PromptKind::KeyPassphrase { path } if *path == key),
+                "{kind:?}"
+            );
+            PromptReply::Secret(secret(pass))
+        });
+        client.wait_shell();
+        let asked = usize::from(!pass.is_empty());
+        assert_eq!(client.prompter.asked.len(), asked, "{name}");
+        // The key now sits in the agent: no prompt the second time.
         let mut client = Client::connect(&ssh, sshd.paths(), no_prompts);
-        let err = error_of(client.end());
-        assert!(matches!(err, SessionError::AuthFailed), "{name}: {err:?}");
-        // The terminal wraps the long line: compare without line breaks.
-        let grid = client.view.dump_grid();
-        let flat: String = grid.split_whitespace().collect();
-        assert!(
-            flat.contains("RSAprivatekeysarenotsupported"),
-            "{name}:\n{grid}"
-        );
+        client.wait_shell();
     }
 }
 

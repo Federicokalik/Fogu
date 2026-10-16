@@ -151,9 +151,10 @@ pub(crate) async fn connect(
     .await?;
     let (stream, mut route) = transport::open(ssh, paths, ui, ready, depth).await?;
     let files = paths.files();
+    let (kh_host, kh_port) = known_hosts_name(ssh);
     let config = Arc::new(config(
         ssh,
-        &hostkeys::known_algorithms(&files, &ssh.host, ssh.port),
+        &hostkeys::known_algorithms(&files, kh_host, kh_port),
     ));
     let (tx, mut events) = mpsc::channel(8);
     let handler = Client {
@@ -284,7 +285,8 @@ async fn verify(
         return Ok(());
     }
     let refuse = |failure| Err(Stop::Failed(SessionError::HostKey(failure)));
-    match hostkeys::lookup(&paths.files(), &ssh.host, ssh.port, key) {
+    let (kh_host, kh_port) = known_hosts_name(ssh);
+    match hostkeys::lookup(&paths.files(), kh_host, kh_port, key) {
         Lookup::Known => Ok(()),
         Lookup::Revoked { path, line } => {
             tracing::warn!(path = %path.display(), line, "revoked host key offered");
@@ -300,8 +302,7 @@ async fn verify(
             match ui.ask(kind).await? {
                 PromptReply::Accept => Ok(()),
                 PromptReply::AcceptAndSave => {
-                    if let Err(err) = hostkeys::learn(&paths.known_hosts, &ssh.host, ssh.port, key)
-                    {
+                    if let Err(err) = hostkeys::learn(&paths.known_hosts, kh_host, kh_port, key) {
                         tracing::warn!(error = %err, "could not save the host key");
                         ui.service(&format!("Could not save the host key: {err}"))
                             .await?;
@@ -333,7 +334,7 @@ async fn verify(
             // Only the explicit replace flow continues; a plain Accept is a refusal.
             match ui.ask(kind).await? {
                 PromptReply::AcceptAndSave => {
-                    match hostkeys::replace(&paths.known_hosts, &ssh.host, ssh.port, key) {
+                    match hostkeys::replace(&paths.known_hosts, kh_host, kh_port, key) {
                         Ok(()) => Ok(()),
                         Err(err) => {
                             tracing::warn!(error = %err, "could not replace the host key");
@@ -347,4 +348,12 @@ async fn verify(
             }
         }
     }
+}
+
+/// The `known_hosts` name of the server: `host_key_alias` as is (OpenSSH appends no port to an
+/// alias), else host and port.
+fn known_hosts_name(ssh: &EffectiveSsh) -> (&str, u16) {
+    ssh.host_key_alias
+        .as_deref()
+        .map_or((ssh.host.as_str(), ssh.port), |alias| (alias, 22))
 }

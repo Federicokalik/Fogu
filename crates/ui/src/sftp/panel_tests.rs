@@ -451,3 +451,14 @@ fn reconnect_rebinds_the_panel_to_the_new_pane() {
     assert!(matches!(sent[0].cmd, SftpCmd::SetOptions(_)));
     assert!(matches!(&sent[1].cmd, SftpCmd::Realpath(_)));
 }
+
+#[test]
+fn navigating_elsewhere_leaves_the_path_field() {
+    let (tx, mut rx) = channel();
+    let mut panel = at_home(&tx, &mut rx);
+    panel.editing = Some("/home/u".into());
+    panel.list(&tx, "/home/u/docs".into(), true).unwrap();
+    let docs = drain(&mut rx)[0].id;
+    panel.on_event(listing(docs, "/home/u/docs", &["x"]), &tx, Instant::now());
+    assert_eq!(panel.editing, None, "the bar shows the new directory");
+}

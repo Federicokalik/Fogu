@@ -1,0 +1,167 @@
+//! Finding an SSH agent when Fogu is started from the desktop menu (no `SSH_AUTH_SOCK`), and
+//! a private agent for RSA keys when there is none: RSA signatures are always made by an OpenSSH
+//! agent process, never in Fogu (no `rsa` crate, RUSTSEC-2023-0071).
+
+use std::ffi::OsString;
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use russh::keys::agent::client::AgentClient;
+use tokio::net::UnixStream;
+
+/// How long one candidate socket may take to accept.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long a freshly started private agent may take to create its socket.
+const START_TIMEOUT: Duration = Duration::from_secs(3);
+
+pub(crate) type Agent = AgentClient<UnixStream>;
+
+/// Agent sockets to try, in order: `$SSH_AUTH_SOCK`, systemd's `ssh-agent.socket`, gcr's agent,
+/// then the sockets OpenSSH ≥ 10.1 keeps in `~/.ssh/agent/` (newest first). `dir_sockets` are
+/// those, already filtered by [`owned_sockets`].
+pub(crate) fn candidates(
+    env: Option<OsString>,
+    runtime_dir: Option<&Path>,
+    dir_sockets: Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = env
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .into_iter()
+        .collect();
+    if let Some(run) = runtime_dir {
+        out.push(run.join("ssh-agent.socket"));
+        out.push(run.join("gcr/ssh"));
+    }
+    out.extend(dir_sockets);
+    out.dedup();
+    out
+}
+
+/// Sockets in `dir` (newest first) when `dir` and each socket belong to `uid` and `dir` is not
+/// writable by others: another user must not be able to plant an agent we would trust.
+pub(crate) fn owned_sockets(dir: &Path, uid: u32) -> Vec<PathBuf> {
+    let Ok(meta) = std::fs::symlink_metadata(dir) else {
+        return Vec::new();
+    };
+    if !meta.is_dir() || meta.uid() != uid || meta.permissions().mode() & 0o022 != 0 {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let m = std::fs::symlink_metadata(e.path()).ok()?;
+            (m.file_type().is_socket() && m.uid() == uid)
+                .then(|| (m.modified().unwrap_or(std::time::UNIX_EPOCH), e.path()))
+        })
+        .collect();
+    found.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    found.into_iter().map(|(_, p)| p).collect()
+}
+
+/// The configured agent (`agent_path`), else the first live candidate.
+pub(crate) async fn connect(configured: Option<&Path>) -> Option<Agent> {
+    if let Some(path) = configured {
+        return try_connect(path).await;
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let uid = home
+        .as_deref()
+        .and_then(|h| std::fs::metadata(h).ok())
+        .map(|m| m.uid());
+    let dir_sockets = match (&home, uid) {
+        (Some(home), Some(uid)) => owned_sockets(&home.join(".ssh/agent"), uid),
+        _ => Vec::new(),
+    };
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    for path in candidates(
+        std::env::var_os("SSH_AUTH_SOCK"),
+        runtime.as_deref(),
+        dir_sockets,
+    ) {
+        if let Some(agent) = try_connect(&path).await {
+            return Some(agent);
+        }
+    }
+    None
+}
+
+async fn try_connect(path: &Path) -> Option<Agent> {
+    match tokio::time::timeout(CONNECT_TIMEOUT, AgentClient::connect_uds(path)).await {
+        Ok(Ok(agent)) => {
+            tracing::info!(path = %path.display(), "using SSH agent");
+            Some(agent)
+        }
+        Ok(Err(err)) => {
+            tracing::debug!(path = %path.display(), error = %err, "no SSH agent here");
+            None
+        }
+        Err(_elapsed) => None,
+    }
+}
+
+/// A discovered agent, else Fogu's own `ssh-agent` (started once, stops when Fogu exits).
+pub(crate) async fn connect_or_start(configured: Option<&Path>) -> Option<Agent> {
+    static PRIVATE: OnceLock<Option<PathBuf>> = OnceLock::new();
+    if let Some(agent) = connect(configured).await {
+        return Some(agent);
+    }
+    if configured.is_some() {
+        return None;
+    }
+    let socket = PRIVATE.get_or_init(start_private).clone()?;
+    let deadline = tokio::time::Instant::now() + START_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
+        if let Some(agent) = try_connect(&socket).await {
+            return Some(agent);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tracing::warn!("private ssh-agent did not start");
+    None
+}
+
+/// Starts `ssh-agent -a <socket> tail --pid=<us> -f /dev/null`: OpenSSH's agent runs the command
+/// as its child and exits with it, so it never outlives Fogu.
+fn start_private() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+    let dir = base.join("fogu");
+    if let Err(err) = fogu_core::fsutil::create_private_dir(&dir) {
+        tracing::warn!(error = %err, "cannot create the private agent directory");
+        return None;
+    }
+    let socket = dir.join(format!("agent-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&socket);
+    let spawned = std::process::Command::new("ssh-agent")
+        .arg("-a")
+        .arg(&socket)
+        .args([
+            "tail",
+            &format!("--pid={}", std::process::id()),
+            "-f",
+            "/dev/null",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match spawned {
+        Ok(_child) => {
+            tracing::info!(path = %socket.display(), "started a private ssh-agent");
+            Some(socket)
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "cannot start ssh-agent");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "agent_tests.rs"]
+mod tests;

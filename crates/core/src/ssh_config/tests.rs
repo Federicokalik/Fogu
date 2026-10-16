@@ -493,3 +493,21 @@ fn missing_file_is_empty_and_changes_are_noticed() {
     assert!(config.changed(), "new file in a globbed directory");
     assert_eq!(SshConfig::load(&path, &env).aliases(), ["two", "one"]);
 }
+
+#[test]
+fn host_key_alias_is_mapped_and_check_host_ip_no_is_quiet() {
+    let env = home("hostkeyalias");
+    let config = load(
+        &env,
+        "Host a\n  HostKeyAlias dev-a\n  CheckHostIP no\nHost b\n  CheckHostIP yes\n",
+    );
+    let a = opts(&config, &env, "a");
+    assert_eq!(a.host_key_alias.as_deref(), Some("dev-a"));
+    assert!(
+        a.ignored_ssh_config.is_empty(),
+        "{:?}",
+        a.ignored_ssh_config
+    );
+    let b = opts(&config, &env, "b");
+    assert_eq!(b.ignored_ssh_config, ["CheckHostIP"]);
+}

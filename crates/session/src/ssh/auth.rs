@@ -16,12 +16,12 @@ use std::time::Duration;
 
 use fogu_core::{EffectiveSsh, SshAuth};
 use russh::client::KeyboardInteractiveAuthResponse as Kbd;
-use russh::keys::agent::AgentIdentity;
-use russh::keys::agent::client::AgentClient;
+use russh::keys::agent::{AgentIdentity, Constraint};
 use russh::keys::{Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use russh::{MethodKind, MethodSet, client::AuthResult};
 use secrecy::{ExposeSecret as _, SecretString};
 
+use super::agent::{self, Agent};
 use super::connect::{Connection, ssh_error};
 use super::hostkeys::fingerprint;
 use super::{Stop, Ui};
@@ -49,6 +49,14 @@ const PASSPHRASE_ATTEMPTS: usize = 3;
 const KBD_MAX_ROUNDS: usize = 10;
 /// Private key files larger than this are not read.
 const MAX_KEY_FILE_BYTES: u64 = 1024 * 1024;
+/// Tried when a profile names no key file, in OpenSSH's order (`man ssh`, `-i`).
+const DEFAULT_IDENTITIES: [&str; 5] = [
+    "~/.ssh/id_rsa",
+    "~/.ssh/id_ecdsa",
+    "~/.ssh/id_ecdsa_sk",
+    "~/.ssh/id_ed25519",
+    "~/.ssh/id_ed25519_sk",
+];
 
 /// The methods tried for `auth`, in order.
 pub(crate) fn plan(auth: SshAuth) -> &'static [Method] {
@@ -170,21 +178,22 @@ impl Auth<'_> {
         Ok(call(self.ready, fut).await?.into())
     }
 
-    /// The RSA signature hash the server accepts (`None` = legacy `ssh-rsa`).
-    /// RSA client keys are refused visibly: the `rsa` crate is not built in (RUSTSEC-2023-0071,
-    /// non-constant-time private-key operations, no fixed release).
-    async fn refuse_rsa(&mut self, path: &Path) -> Result<Option<PrivateKey>, Stop> {
-        tracing::warn!(path = %path.display(), "RSA private key refused (RUSTSEC-2023-0071)");
+    /// RSA keys are signed by an OpenSSH agent only (the `rsa` crate is not built in:
+    /// RUSTSEC-2023-0071, non-constant-time private-key operations, no fixed release). Without
+    /// any agent the key is skipped visibly.
+    async fn refuse_rsa(&mut self, path: &Path) -> Result<Outcome, Stop> {
+        tracing::warn!(path = %path.display(), "RSA key skipped: no SSH agent");
         self.ui
             .service(&format!(
-                "Skipping RSA key {}: RSA private keys are not supported (RUSTSEC-2023-0071); \
-                 use an ed25519 or ecdsa key",
+                "Skipping RSA key {}: RSA keys need an SSH agent and ssh-agent could not be \
+                 started (install openssh, or use an ed25519 key)",
                 path.display()
             ))
             .await?;
-        Ok(None)
+        Ok(Outcome::Skipped)
     }
 
+    /// The RSA signature hash the server accepts (`None` = legacy `ssh-rsa`).
     async fn rsa_hash(&self, algorithm: &Algorithm) -> Result<Option<HashAlg>, Stop> {
         if !matches!(algorithm, Algorithm::Rsa { .. }) {
             return Ok(None);
@@ -195,16 +204,10 @@ impl Auth<'_> {
     }
 
     async fn agent(&mut self) -> Result<Outcome, Stop> {
-        let connected = match &self.ssh.agent_path {
-            Some(path) => AgentClient::connect_uds(expand_home(path)).await,
-            None => AgentClient::connect_env().await,
-        };
-        let mut agent = match connected {
-            Ok(agent) => agent,
-            Err(err) => {
-                tracing::debug!(error = %err, "no SSH agent");
-                return Ok(Outcome::Skipped);
-            }
+        let configured = self.ssh.agent_path.as_deref().map(expand_home);
+        let Some(mut agent) = agent::connect(configured.as_deref()).await else {
+            tracing::debug!("no SSH agent");
+            return Ok(Outcome::Skipped);
         };
         let identities = match call(self.ready, agent.request_identities()).await {
             Ok(ids) => ids,
@@ -214,7 +217,7 @@ impl Auth<'_> {
             }
             Err(stop) => return Err(stop),
         };
-        let preferred = configured_public_keys(&self.ssh.private_keys);
+        let preferred = configured_public_keys(&self.key_paths());
         let mut keys: Vec<PublicKey> = identities
             .into_iter()
             .filter_map(|id| match id {
@@ -230,36 +233,137 @@ impl Auth<'_> {
         keys.sort_by_key(|key| !is_configured(key));
         let mut last = Outcome::Skipped;
         for key in keys {
-            self.ui
-                .service(&format!("Trying agent key {}", fingerprint(&key)))
-                .await?;
-            let hash = self.rsa_hash(&key.algorithm()).await?;
-            let user = self.ssh.user.clone();
-            let fut = self
-                .conn
-                .handle
-                .authenticate_publickey_with(user, key, hash, &mut agent);
-            match tokio::time::timeout(self.ready, fut).await {
-                Ok(Ok(result)) => match Outcome::from(result) {
-                    Outcome::Success => return Ok(Outcome::Success),
-                    failure => last = failure,
-                },
-                Ok(Err(err)) => {
-                    tracing::warn!(error = %ssh_error(&err), "SSH agent signing failed");
-                }
-                Err(_elapsed) => return Err(SessionError::Timeout.into()),
+            match self.with_agent(&mut agent, key).await? {
+                Outcome::Success => return Ok(Outcome::Success),
+                Outcome::Skipped => {}
+                failure @ Outcome::Failure(_) => last = failure,
             }
         }
         Ok(last)
     }
 
+    /// One public-key attempt signed by `agent`.
+    async fn with_agent(&mut self, agent: &mut Agent, key: PublicKey) -> Result<Outcome, Stop> {
+        self.ui
+            .service(&format!("Trying agent key {}", fingerprint(&key)))
+            .await?;
+        let hash = self.rsa_hash(&key.algorithm()).await?;
+        let user = self.ssh.user.clone();
+        let fut = self
+            .conn
+            .handle
+            .authenticate_publickey_with(user, key, hash, agent);
+        match tokio::time::timeout(self.ready, fut).await {
+            Ok(Ok(result)) => Ok(result.into()),
+            Ok(Err(err)) => {
+                tracing::warn!(error = %ssh_error(&err), "SSH agent signing failed");
+                Ok(Outcome::Skipped)
+            }
+            Err(_elapsed) => Err(SessionError::Timeout.into()),
+        }
+    }
+
+    /// The profile's key files, else OpenSSH's default identities that exist.
+    fn key_paths(&self) -> Vec<PathBuf> {
+        if !self.ssh.private_keys.is_empty() {
+            return self
+                .ssh
+                .private_keys
+                .iter()
+                .map(|p| expand_home(p))
+                .collect();
+        }
+        DEFAULT_IDENTITIES
+            .iter()
+            .map(|p| expand_home(Path::new(p)))
+            .filter(|p| p.is_file())
+            .collect()
+    }
+
+    /// An RSA key file: used from the agent when it already holds it (no passphrase), else
+    /// decoded here (passphrase prompt), added to the agent with the profile's lifetime, and
+    /// signed by the agent. Fogu only decrypts the file, never signs with RSA itself.
+    async fn rsa_key(&mut self, path: &Path, public: Option<PublicKey>) -> Result<Outcome, Stop> {
+        let configured = self.ssh.agent_path.as_deref().map(expand_home);
+        let Some(mut agent) = agent::connect_or_start(configured.as_deref()).await else {
+            return self.refuse_rsa(path).await;
+        };
+        if let Some(public) = public {
+            let held = call(self.ready, agent.request_identities()).await?;
+            if held.iter().any(|id| match id {
+                AgentIdentity::PublicKey { key, .. } => key.key_data() == public.key_data(),
+                AgentIdentity::Certificate { .. } => false,
+            }) {
+                return self.with_agent(&mut agent, public).await;
+            }
+        }
+        let Some(key) = self.load_key(path).await? else {
+            return Ok(Outcome::Skipped);
+        };
+        self.add_and_sign(&mut agent, path, key).await
+    }
+
+    /// An RSA key decoded here from a non-OpenSSH file.
+    async fn rsa_decoded(&mut self, path: &Path, key: PrivateKey) -> Result<Outcome, Stop> {
+        let configured = self.ssh.agent_path.as_deref().map(expand_home);
+        let Some(mut agent) = agent::connect_or_start(configured.as_deref()).await else {
+            return self.refuse_rsa(path).await;
+        };
+        self.add_and_sign(&mut agent, path, key).await
+    }
+
+    /// Adds `key` to `agent` (with the lifetime constraint) and authenticates with it there.
+    async fn add_and_sign(
+        &mut self,
+        agent: &mut Agent,
+        path: &Path,
+        key: PrivateKey,
+    ) -> Result<Outcome, Stop> {
+        let constraints: Vec<Constraint> = self
+            .ssh
+            .agent_key_lifetime
+            .map(|seconds| Constraint::KeyLifetime { seconds })
+            .into_iter()
+            .collect();
+        if let Err(err) = call(self.ready, agent.add_identity(&key, &constraints)).await {
+            tracing::warn!(path = %path.display(), "adding the RSA key to the agent failed");
+            self.ui
+                .service(&format!("SSH agent refused key {}", path.display()))
+                .await?;
+            return match err {
+                Stop::Failed(_) => Ok(Outcome::Skipped),
+                stop => Err(stop),
+            };
+        }
+        let public = key.public_key().clone();
+        drop(key);
+        self.with_agent(agent, public).await
+    }
+
     async fn keys(&mut self) -> Result<Outcome, Stop> {
         let mut last = Outcome::Skipped;
-        for path in self.ssh.private_keys.clone() {
-            let path = expand_home(&path);
+        for path in self.key_paths() {
+            let public = openssh_public_key(&path);
+            if public.as_ref().is_some_and(|k| is_rsa(&k.algorithm())) {
+                match self.rsa_key(&path, public).await? {
+                    Outcome::Success => return Ok(Outcome::Success),
+                    Outcome::Skipped => {}
+                    failure @ Outcome::Failure(_) => last = failure,
+                }
+                continue;
+            }
             let Some(key) = self.load_key(&path).await? else {
                 continue;
             };
+            if is_rsa(&key.algorithm()) {
+                // PEM / PKCS#8 / PuTTY RSA: the public half shows only after decoding.
+                match self.rsa_decoded(&path, key).await? {
+                    Outcome::Success => return Ok(Outcome::Success),
+                    Outcome::Skipped => {}
+                    failure @ Outcome::Failure(_) => last = failure,
+                }
+                continue;
+            }
             self.ui
                 .service(&format!("Trying private key {}", path.display()))
                 .await?;
@@ -295,15 +399,8 @@ impl Auth<'_> {
                 return Ok(None);
             }
         };
-        // OpenSSH files carry the public half unencrypted: refuse RSA before asking a passphrase.
-        if russh::keys::ssh_key::PrivateKey::from_openssh(text.expose_secret())
-            .is_ok_and(|key| is_rsa(&key.algorithm()))
-        {
-            return self.refuse_rsa(path).await;
-        }
         let first = russh::keys::decode_secret_key(text.expose_secret(), None);
         let err = match first {
-            Ok(key) if is_rsa(&key.algorithm()) => return self.refuse_rsa(path).await,
             Ok(key) => return Ok(Some(key)),
             Err(err) if needs_passphrase(text.expose_secret(), &err) => err,
             Err(err) => {
@@ -328,7 +425,6 @@ impl Auth<'_> {
                 text.expose_secret(),
                 Some(passphrase.expose_secret()),
             ) {
-                Ok(key) if is_rsa(&key.algorithm()) => return self.refuse_rsa(path).await,
                 Ok(key) => return Ok(Some(key)),
                 Err(_) => self.ui.service("Wrong passphrase").await?,
             }
@@ -455,6 +551,14 @@ fn configured_public_keys(keys: &[PathBuf]) -> Vec<PublicKey> {
             russh::keys::load_public_key(&pub_path).ok()
         })
         .collect()
+}
+
+/// The unencrypted public half of an OpenSSH private key file (readable without the passphrase).
+fn openssh_public_key(path: &Path) -> Option<PublicKey> {
+    let text = read_key_file(path).ok()?;
+    russh::keys::ssh_key::PrivateKey::from_openssh(text.expose_secret())
+        .ok()
+        .map(|key| key.public_key().clone())
 }
 
 /// A key file's text, as a secret (it may be an unencrypted private key).

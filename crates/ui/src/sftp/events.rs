@@ -126,6 +126,8 @@ impl SftpPanelState {
             self.scroll_y = 0.0;
             // An inline rename/new folder belongs to the directory it was started in.
             self.ops.edit = None;
+            // So does a half-typed path: the bar shows where we are now.
+            self.editing = None;
         }
         if truncated {
             out.notes.push(

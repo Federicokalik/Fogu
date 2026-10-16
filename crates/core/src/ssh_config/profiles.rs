@@ -175,6 +175,14 @@ impl Mapper {
             "proxycommand" => self.proxy_command(d),
             "proxyjump" => self.proxy_jump(d, config),
             "localforward" | "remoteforward" | "dynamicforward" => self.forward(d),
+            "hostkeyalias"
+                if !arg.is_empty() && !arg.chars().any(|c| c.is_control() || c.is_whitespace()) =>
+            {
+                self.opts.host_key_alias = Some(arg.to_owned());
+            }
+            "hostkeyalias" => bad(self),
+            // Fogu never checks the server's IP against known_hosts: `no` is what it does.
+            "checkhostip" if arg.eq_ignore_ascii_case("no") => {}
             "stricthostkeychecking" if arg.eq_ignore_ascii_case("ask") => {}
             "stricthostkeychecking" => {
                 self.note(&format!(

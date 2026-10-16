@@ -3,8 +3,8 @@
 //! effective value (Save drops whatever equals the inherited value).
 
 use fogu_core::config::ssh_opts::{
-    DEFAULT_KEEPALIVE_COUNT_MAX, DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_PROMPT_TIMEOUT_MS,
-    DEFAULT_SSH_PORT, DEFAULT_TERM, resolve_ssh,
+    DEFAULT_AGENT_KEY_LIFETIME_S, DEFAULT_KEEPALIVE_COUNT_MAX, DEFAULT_KEEPALIVE_INTERVAL_MS,
+    DEFAULT_PROMPT_TIMEOUT_MS, DEFAULT_SSH_PORT, DEFAULT_TERM, resolve_ssh,
 };
 use fogu_core::{Config, EffectiveSsh, SshOpts};
 
@@ -130,6 +130,14 @@ fn connection<'a>(
             ssh.term.as_deref(),
             d.term.as_deref().unwrap_or(DEFAULT_TERM),
         ),
+        text_row(
+            ed,
+            look,
+            (FieldId::HostKeyAlias, "host_key_alias"),
+            "Host key name in known_hosts",
+            ssh.host_key_alias.as_deref(),
+            d.host_key_alias.as_deref().unwrap_or("host and port"),
+        ),
         toggle_row(
             ed,
             look,
@@ -232,7 +240,7 @@ fn authentication<'a>(
         .as_ref()
         .map(|p| p.to_string_lossy().into_owned());
     let agent_hint = d.agent_path.as_ref().map_or_else(
-        || "$SSH_AUTH_SOCK".to_owned(),
+        || "found automatically".to_owned(),
         |p| p.to_string_lossy().into_owned(),
     );
     let rows = vec![
@@ -252,7 +260,7 @@ fn authentication<'a>(
                 "~/.ssh/id_ed25519",
                 Some(ed.picker),
             ),
-            "OpenSSH, PEM or PuTTY keys; RSA keys are refused.",
+            "OpenSSH, PEM or PuTTY keys; RSA keys are signed by the SSH agent.",
             look.dim,
         ),
         forms::secret_hint(
@@ -276,6 +284,14 @@ fn authentication<'a>(
             (FieldId::IdentitiesOnly, "identities_only"),
             "Only agent keys matching the private keys above",
             eff.identities_only,
+        ),
+        number_row(
+            ed,
+            look,
+            (FieldId::AgentKeyLifetime, "agent_key_lifetime"),
+            "RSA key lifetime in the agent (s, 0 = no limit)",
+            ssh.agent_key_lifetime,
+            &d.agent_key_lifetime.unwrap_or(DEFAULT_AGENT_KEY_LIFETIME_S),
         ),
     ];
     forms::section(look, "Authentication", rows)

@@ -226,6 +226,8 @@ fn every_ssh_field_is_set_through_the_reducer() {
         identities_only: Some(true),
         prompt_timeout: Some(30_000),
         agent_path: Some("/run/agent.sock".into()),
+        agent_key_lifetime: None,
+        host_key_alias: None,
         ignored_ssh_config: Vec::new(),
     };
     assert_eq!(*ssh, expected);

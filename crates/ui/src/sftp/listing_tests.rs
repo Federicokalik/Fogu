@@ -60,8 +60,10 @@ fn sort_orders_keep_directories_first() {
 fn hidden_toggle_and_filter() {
     let mut l = sample();
     assert!(!names(&l).contains(&".hidden"));
+    assert_eq!(l.hidden_count(), 1);
     l.show_hidden = true;
     assert!(names(&l).contains(&".hidden"));
+    assert_eq!(l.hidden_count(), 0);
     l.filter = "TX".into();
     assert_eq!(names(&l), ["A.txt", "b.txt"]);
     l.filter = "nothing".into();

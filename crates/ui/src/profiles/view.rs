@@ -1,6 +1,7 @@
 //! Drawing of the profile sidebar (stock iced widgets, scheme colours like the SFTP panel):
 //! title, search, quick connect, then the sections and rows from [`lines`].
 
+use fogu_core::config::ProfileClick;
 use fogu_core::{Action, Config};
 use iced::widget::{
     Id, button, column, container, mouse_area, row, scrollable, space, text, text_input,
@@ -113,9 +114,14 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
                     continue;
                 };
                 let id = entry.profile.id.clone();
+                let open = msg(ProfilesMsg::RowOpen(id.clone(), Launch::Tab));
+                let (press, double) = match config.appearance.profiles_click {
+                    ProfileClick::Single => (open, None),
+                    ProfileClick::Double => (msg(ProfilesMsg::Select(pos)), Some(open)),
+                };
                 let events = RowEvents {
-                    press: Some(msg(ProfilesMsg::Select(pos))),
-                    double: Some(msg(ProfilesMsg::RowOpen(id.clone(), Launch::Tab))),
+                    press: Some(press),
+                    double,
                     middle: Some(msg(ProfilesMsg::RowOpen(id.clone(), Launch::Split))),
                     right: Some(msg(ProfilesMsg::Menu(id, pos))),
                 };

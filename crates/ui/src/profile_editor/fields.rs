@@ -57,6 +57,8 @@ pub enum FieldId {
     Password,
     AgentPath,
     IdentitiesOnly,
+    HostKeyAlias,
+    AgentKeyLifetime,
     // SSH: network.
     JumpHost,
     ProxyCommand,
@@ -131,6 +133,7 @@ fn range(id: FieldId) -> Option<(i64, i64)> {
         FieldId::KeepaliveInterval | FieldId::PromptTimeout => (0, ms_day),
         FieldId::ReadyTimeout => (1, ms_day),
         FieldId::KeepaliveCountMax => (0, 10_000),
+        FieldId::AgentKeyLifetime => (0, i64::from(u32::MAX)),
         FieldId::Weight => (i64::from(i32::MIN), i64::from(i32::MAX)),
         FieldId::BgOpacity => (0, 100),
         _ => return None,
@@ -219,6 +222,9 @@ impl ProfileEditor {
             FieldId::ReadyTimeout => ssh.ready_timeout = u64_(n),
             FieldId::KeepaliveCountMax => {
                 ssh.keepalive_count_max = n.and_then(|n| u32::try_from(n).ok());
+            }
+            FieldId::AgentKeyLifetime => {
+                ssh.agent_key_lifetime = n.and_then(|n| u32::try_from(n).ok());
             }
             FieldId::Weight => ssh.weight = n.and_then(|n| i32::try_from(n).ok()),
             FieldId::Forward(row, col) => {
@@ -396,6 +402,7 @@ fn apply_ssh(
         (FieldId::Host, FieldValue::Text(t)) => ssh.host = opt(&t),
         (FieldId::User, FieldValue::Text(t)) => ssh.user = opt(&t),
         (FieldId::Term, FieldValue::Text(t)) => ssh.term = opt(&t),
+        (FieldId::HostKeyAlias, FieldValue::Text(t)) => ssh.host_key_alias = opt(&t),
         (FieldId::ProxyCommand, FieldValue::Text(t)) => ssh.proxy_command = opt(&t),
         (FieldId::SocksHost, FieldValue::Text(t)) => ssh.socks_proxy_host = opt(&t),
         (FieldId::HttpHost, FieldValue::Text(t)) => ssh.http_proxy_host = opt(&t),

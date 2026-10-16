@@ -259,6 +259,10 @@ fn status_text(panel: &SftpPanelState) -> String {
     let shown = panel.listing.visible().len();
     let selected = panel.listing.selected.len();
     let mut out = format!("{shown} items");
+    let hidden = panel.listing.hidden_count();
+    if hidden > 0 {
+        let _infallible = write!(out, ", {hidden} hidden");
+    }
     if panel.listing.truncated {
         out.push_str(" (truncated)");
     }

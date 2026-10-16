@@ -91,15 +91,23 @@ fn rows(tab: TabId, panel: &SftpPanelState, look: Look) -> Element<'_, Message> 
     }
     let visible = panel.listing.visible();
     if visible.is_empty() && panel.loading.is_none() && panel.path.is_some() {
+        let hidden = panel.listing.hidden_count();
         let why = if panel.listing.entries.is_empty() {
-            "Empty folder"
+            "Empty folder".to_owned()
+        } else if hidden == panel.listing.entries.len() {
+            format!("Only hidden files here ({hidden})")
         } else {
-            "Nothing matches (filter / hidden files)"
+            "Nothing matches the filter".to_owned()
         };
-        return container(label(why, look.dim))
-            .padding(8)
-            .height(Length::Fill)
-            .into();
+        let mut body = column![label(why, look.dim)].spacing(6);
+        if hidden > 0 {
+            body = body.push(
+                iced::widget::button(label("Show hidden files", look.fg))
+                    .padding([2, 8])
+                    .on_press(msg(tab, PanelMsg::ShowHidden(true))),
+            );
+        }
+        return container(body).padding(8).height(Length::Fill).into();
     }
     let first = px_rows(panel.scroll_y);
     let count = if panel.view_h > 0.0 {

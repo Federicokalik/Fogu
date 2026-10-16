@@ -8,6 +8,7 @@
 //! texts are sanitized ([`sanitize_remote`]); channel data goes through the terminal like any
 //! program output. Secrets exist only as `SecretString` and are exposed only at the russh call.
 
+mod agent;
 pub mod algorithms;
 mod auth;
 mod connect;

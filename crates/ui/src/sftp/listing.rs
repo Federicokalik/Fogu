@@ -106,6 +106,17 @@ impl Listing {
         }
     }
 
+    /// Dot files currently left out because `show_hidden` is off.
+    pub fn hidden_count(&self) -> usize {
+        if self.show_hidden {
+            return 0;
+        }
+        self.entries
+            .iter()
+            .filter(|e| e.name.starts_with('.'))
+            .count()
+    }
+
     /// The entries to show, in order: hidden/filter applied, directories first, then by the
     /// sort column (ties by name).
     pub fn visible(&self) -> Vec<&Entry> {

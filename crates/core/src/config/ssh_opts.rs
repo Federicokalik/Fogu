@@ -24,6 +24,8 @@ pub const DEFAULT_KEEPALIVE_COUNT_MAX: u32 = 10;
 pub const DEFAULT_TERM: &str = "xterm-256color";
 /// How long a connect-time prompt (password, host key…) waits for an answer, in milliseconds.
 pub const DEFAULT_PROMPT_TIMEOUT_MS: u64 = 120_000;
+/// Seconds an RSA key added to the agent by Fogu stays there.
+pub const DEFAULT_AGENT_KEY_LIFETIME_S: u32 = 3600;
 
 /// Stored option names whose behaviour is not implemented yet: the profile editor marks them
 /// "not supported yet".
@@ -216,6 +218,9 @@ pub struct SshOpts {
     pub clear_service_messages_on_connect: Option<bool>,
     /// Verify host keys against `known_hosts` (`true`); `false` shows a warning badge.
     pub verify_host_keys: Option<bool>,
+    /// Name the host key is looked up and saved under in `known_hosts` instead of the host and
+    /// port (OpenSSH `HostKeyAlias`).
+    pub host_key_alias: Option<String>,
     /// Manual ordering in the profile list.
     pub weight: Option<i32>,
     /// Per-profile override of `terminal.osc52_write`.
@@ -225,8 +230,11 @@ pub struct SshOpts {
     pub identities_only: Option<bool>,
     /// How long a connect-time prompt waits for an answer, in ms (120000); 0 = no limit.
     pub prompt_timeout: Option<u64>,
-    /// SSH agent socket (`$SSH_AUTH_SOCK` when unset).
+    /// SSH agent socket (unset = `$SSH_AUTH_SOCK`, then the usual sockets, see the wiki).
     pub agent_path: Option<PathBuf>,
+    /// Seconds an RSA key file loaded by Fogu stays in the agent (3600); 0 = until the
+    /// agent stops. RSA keys are always signed by the agent, never in Fogu.
+    pub agent_key_lifetime: Option<u32>,
     /// `~/.ssh/config` options that apply to this host but are not used (unknown to Fogu,
     /// unusable values, or never obeyed like `StrictHostKeyChecking no`); listed in the
     /// connect-time warning. Only `ssh_config` profiles have them; never stored.
@@ -295,14 +303,18 @@ pub struct EffectiveSsh {
     pub clear_service_messages_on_connect: bool,
     /// See [`SshOpts::verify_host_keys`].
     pub verify_host_keys: bool,
+    /// See [`SshOpts::host_key_alias`].
+    pub host_key_alias: Option<String>,
     /// See [`SshOpts::weight`].
     pub weight: i32,
     /// See [`SshOpts::identities_only`].
     pub identities_only: bool,
     /// See [`SshOpts::prompt_timeout`]; `None` = no limit.
     pub prompt_timeout: Option<Duration>,
-    /// See [`SshOpts::agent_path`]; `None` = `$SSH_AUTH_SOCK`.
+    /// See [`SshOpts::agent_path`]; `None` = discovered.
     pub agent_path: Option<PathBuf>,
+    /// See [`SshOpts::agent_key_lifetime`]; `None` = no limit.
+    pub agent_key_lifetime: Option<u32>,
     /// See [`SshOpts::ignored_ssh_config`].
     pub ignored_ssh_config: Vec<String>,
     /// The `jump_host` chain, filled by [`resolve_jumps`](super::route::resolve_jumps) (the
@@ -388,12 +400,15 @@ pub fn resolve_ssh(p: &SshOpts, d: &SshOpts) -> EffectiveSsh {
         remember_cwd: pick!(remember_cwd).unwrap_or(false),
         clear_service_messages_on_connect: pick!(clear_service_messages_on_connect).unwrap_or(true),
         verify_host_keys: pick!(verify_host_keys).unwrap_or(true),
+        host_key_alias: pick!(host_key_alias),
         weight: pick!(weight).unwrap_or(0),
         identities_only: pick!(identities_only).unwrap_or(false),
         prompt_timeout: Some(pick!(prompt_timeout).unwrap_or(DEFAULT_PROMPT_TIMEOUT_MS))
             .filter(|&t| t > 0)
             .map(ms),
         agent_path: pick!(agent_path),
+        agent_key_lifetime: Some(pick!(agent_key_lifetime).unwrap_or(DEFAULT_AGENT_KEY_LIFETIME_S))
+            .filter(|&t| t > 0),
         ignored_ssh_config: p.ignored_ssh_config.clone(),
         jump: Jump::None,
     }
@@ -447,10 +462,12 @@ pub fn strip_ssh(p: &SshOpts, d: &SshOpts) -> SshOpts {
         remember_cwd,
         clear_service_messages_on_connect,
         verify_host_keys,
+        host_key_alias,
         weight,
         identities_only,
         prompt_timeout,
         agent_path,
+        agent_key_lifetime,
     );
     out
 }

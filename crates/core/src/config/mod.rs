@@ -45,6 +45,17 @@ pub enum TabsLocation {
     Top,
 }
 
+/// How many clicks open a profile row in the profile sidebar (the picker always opens on one).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProfileClick {
+    /// One click opens it.
+    #[default]
+    Single,
+    /// One click selects, a double click opens.
+    Double,
+}
+
 /// What a right click does by default; a profile/session may
 /// still show the menu via other means (e.g. a dedicated hotkey).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +100,8 @@ pub struct Appearance {
     pub recent_profiles: usize,
     /// Initial width of the profile sidebar, in logical px (drag its edge to resize).
     pub profiles_sidebar_width: f32,
+    /// Clicks that open a profile row in the sidebar.
+    pub profiles_click: ProfileClick,
 }
 
 impl Default for Appearance {
@@ -106,6 +119,7 @@ impl Default for Appearance {
             show_builtin_profiles: true,
             recent_profiles: 3,
             profiles_sidebar_width: 280.0,
+            profiles_click: ProfileClick::default(),
         }
     }
 }
