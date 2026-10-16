@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::background::Background;
 use crate::config::ssh_opts::{EffectiveSsh, SshOpts, resolve_ssh};
 use crate::scheme::RgbColor;
 
@@ -152,6 +153,9 @@ pub struct Profile {
     /// See [`SessionEndBehavior`].
     #[serde(default)]
     pub behavior_on_session_end: SessionEndBehavior,
+    /// Colour or image drawn under this profile's tabs (a tab may override it).
+    #[serde(default)]
+    pub background: Option<Background>,
     /// Kind-specific options, flattened into the same TOML table (`type = "local"` / `"ssh"`).
     #[serde(flatten)]
     pub kind: ProfileKind,
@@ -169,6 +173,7 @@ impl Profile {
             color: None,
             disable_dynamic_title: false,
             behavior_on_session_end: SessionEndBehavior::default(),
+            background: None,
             kind: ProfileKind::Local(LocalOpts::default()),
         }
     }

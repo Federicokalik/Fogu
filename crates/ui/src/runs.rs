@@ -88,6 +88,13 @@ pub fn cell_style(cell: &Cell, colors: &Colors) -> Style {
     }
 }
 
+/// The opaque background a run draws: `None` for the scheme's default background, which the
+/// widget draws once under the whole grid (translucent over a tab background). Explicit
+/// SGR backgrounds, inverse video included, are always drawn opaque so they stay readable.
+pub fn explicit_bg(style: &Style, default_bg: Rgb) -> Option<Rgb> {
+    (style.bg != default_bg).then_some(style.bg)
+}
+
 /// Groups one row into style runs (into `runs`, which is cleared first). Wide-char spacers are
 /// skipped (the wide char's run already covers 2 cells).
 pub fn row_runs(row: &[Cell], colors: &Colors, runs: &mut Vec<Run>) {
@@ -196,6 +203,34 @@ mod tests {
                 (4, 1, "y".into()),
             ]
         );
+    }
+
+    #[test]
+    fn only_explicit_backgrounds_are_drawn_opaque() {
+        let colors = Colors::new(&ColorScheme::default());
+        let default_bg = colors.background();
+        let red = Cell {
+            bg: Color::Named(NamedColor::Red),
+            ..cell('r')
+        };
+        let reset = Cell {
+            bg: Color::Named(NamedColor::Background),
+            ..cell('d')
+        };
+        // (cell, opaque background drawn?)
+        let rows = [
+            (cell('a'), None),
+            (reset, None),
+            (
+                red,
+                Some(colors.resolve(Color::Named(NamedColor::Red), false)),
+            ),
+            (styled('i', CellFlags::INVERSE), Some(colors.foreground())),
+        ];
+        for (cell, want) in rows {
+            let style = cell_style(&cell, &colors);
+            assert_eq!(explicit_bg(&style, default_bg), want, "{:?}", cell.ch);
+        }
     }
 
     #[test]

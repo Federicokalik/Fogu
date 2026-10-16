@@ -9,6 +9,8 @@
 mod actions;
 mod app;
 mod appearance;
+mod background;
+mod background_menu;
 mod blink;
 mod context_menu;
 mod keys;

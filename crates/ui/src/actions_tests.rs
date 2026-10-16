@@ -1,5 +1,10 @@
 //! Reducer tests on a headless `App` whose panes use stub sessions (no process, no window).
-#![expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests")]
+#![expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "tests"
+)]
 
 use std::sync::Arc;
 
@@ -198,6 +203,57 @@ fn tab_menu_sets_and_clears_colour() {
     assert!(app.menu.is_none());
     send(&mut app, Message::SetTabColor(None));
     assert_eq!(app.tabs[0].color, None);
+}
+
+#[test]
+fn background_menu_sets_edits_and_clears_the_tab_background() {
+    use crate::background_menu::BgMsg;
+    use fogu_core::{Background, Fit, TabBackground};
+
+    let mut app = headless();
+    let tab = app.active;
+    send(&mut app, Message::OpenTabMenu(tab));
+    send(&mut app, BgMsg::Menu.into());
+    let menu = app.menu.as_ref().unwrap();
+    let save = menu
+        .items
+        .iter()
+        .find(|i| i.label == "Save to profile")
+        .unwrap();
+    assert!(!save.enabled, "the built-in profile is not stored");
+    assert!(save.tooltip.is_some());
+    assert!(menu.slider.is_none(), "no image: no opacity slider");
+    send(&mut app, BgMsg::Colors.into());
+    send(&mut app, Message::MenuInput("#102030".into()));
+    send(&mut app, Message::MenuSubmit);
+    let color = Background::Color(RgbColor::from_hex(0x10_2030));
+    assert_eq!(app.tabs[0].background, TabBackground::Set(color));
+    assert!(app.menu.is_none());
+
+    send(
+        &mut app,
+        BgMsg::ImagePicked(Some("/no/such/wall.png".into())).into(),
+    );
+    send(&mut app, Message::OpenTabMenu(tab));
+    send(&mut app, BgMsg::Menu.into());
+    send(&mut app, BgMsg::Opacity(40.0).into());
+    send(&mut app, BgMsg::Fit(Fit::Contain).into());
+    let TabBackground::Set(Background::Image { opacity, fit, .. }) = &app.tabs[0].background else {
+        panic!("expected an image");
+    };
+    assert!((opacity - 0.4).abs() < 1e-6);
+    assert_eq!(*fit, Fit::Contain);
+    assert!(
+        app.menu.as_ref().unwrap().slider.is_some(),
+        "menu stays open"
+    );
+    // Not decoded yet (or failed): nothing drawn, terminal opaque.
+    let (backdrop, alpha) = app.backdrop(&app.tabs[0]);
+    assert!(backdrop.is_none());
+    assert!((alpha - 1.0).abs() < f32::EPSILON);
+
+    send(&mut app, BgMsg::Clear.into());
+    assert_eq!(app.tabs[0].background, TabBackground::None);
 }
 
 #[test]

@@ -114,11 +114,7 @@ impl App {
             Some(entry) => entry_menu(tab, panel, entry),
             None => area_menu(tab, panel),
         };
-        self.menu = Some(ContextMenu {
-            anchor: at,
-            items,
-            input: None,
-        });
+        self.menu = Some(ContextMenu::new(at, items));
         Task::none()
     }
 

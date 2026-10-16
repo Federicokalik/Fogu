@@ -10,6 +10,7 @@ use iced::advanced::widget::{Operation, Tree, Widget, tree};
 use iced::advanced::{Clipboard, Shell, mouse, overlay};
 use iced::{Border, Color, Element, Event, Length, Point, Rectangle, Size, Vector};
 
+use crate::background::Backdrop;
 use crate::message::Message;
 use crate::sftp::{PanelMsg, SftpMsg};
 use crate::tab::{PaneId, TabId};
@@ -33,6 +34,8 @@ pub struct SplitContainer<'a> {
     border: Option<(PaneId, Color)>,
     /// Width share of the side panel (the last child), if there is one.
     side: Option<f32>,
+    /// The tab background under the panes.
+    backdrop: Option<Backdrop>,
 }
 
 impl std::fmt::Debug for SplitContainer<'_> {
@@ -88,6 +91,7 @@ impl<'a> SplitContainer<'a> {
             divider,
             border: None,
             side: None,
+            backdrop: None,
         }
     }
 
@@ -129,6 +133,13 @@ impl<'a> SplitContainer<'a> {
             area: all,
         };
         (panes, Some((side, divider)))
+    }
+
+    /// Draws `backdrop` under the panes (not under the side panel).
+    #[must_use]
+    pub fn backdrop(mut self, backdrop: Option<Backdrop>) -> Self {
+        self.backdrop = backdrop;
+        self
     }
 
     /// Outlines `pane` with a 1-px `color` border.
@@ -424,39 +435,51 @@ impl Widget<Message, iced::Theme, iced::Renderer> for SplitContainer<'_> {
     ) {
         let bounds = layout.bounds();
         fill(renderer, bounds, self.background);
-        for ((child, state), layout) in self
-            .children
-            .iter()
-            .zip(&tree.children)
-            .zip(layout.children())
-        {
-            child
-                .as_widget()
-                .draw(state, renderer, theme, style, layout, cursor, viewport);
-        }
-        for drag in self.dividers(bounds) {
-            fill(renderer, across(drag.divider(), 1.0), self.divider);
-        }
-        let Some((pane, color)) = self.border else {
+        // Children, dividers and the focused pane's border.
+        let content = |renderer: &mut iced::Renderer| {
+            for ((child, state), layout) in self
+                .children
+                .iter()
+                .zip(&tree.children)
+                .zip(layout.children())
+            {
+                child
+                    .as_widget()
+                    .draw(state, renderer, theme, style, layout, cursor, viewport);
+            }
+            for drag in self.dividers(bounds) {
+                fill(renderer, across(drag.divider(), 1.0), self.divider);
+            }
+            let Some((pane, color)) = self.border else {
+                return;
+            };
+            let focused = self
+                .ids
+                .iter()
+                .zip(layout.children())
+                .find(|(id, _)| **id == pane);
+            if let Some((_, layout)) = focused {
+                let quad = Quad {
+                    bounds: layout.bounds().expand(BORDER),
+                    border: Border {
+                        color,
+                        width: BORDER,
+                        radius: 0.0.into(),
+                    },
+                    ..Quad::default()
+                };
+                renderer::Renderer::fill_quad(renderer, quad, Color::TRANSPARENT);
+            }
+        };
+        let Some(backdrop) = &self.backdrop else {
+            content(renderer);
             return;
         };
-        let focused = self
-            .ids
-            .iter()
-            .zip(layout.children())
-            .find(|(id, _)| **id == pane);
-        if let Some((_, layout)) = focused {
-            let quad = Quad {
-                bounds: layout.bounds().expand(BORDER),
-                border: Border {
-                    color,
-                    width: BORDER,
-                    radius: 0.0.into(),
-                },
-                ..Quad::default()
-            };
-            renderer::Renderer::fill_quad(renderer, quad, Color::TRANSPARENT);
-        }
+        // A layer of its own: it clips (a covering image overhangs the area) and iced draws a
+        // layer's images after its quads and text, so the panes go on a layer above.
+        let area = rectangle(self.areas(bounds).0);
+        renderer::Renderer::with_layer(renderer, area, |renderer| backdrop.draw(renderer, area));
+        renderer::Renderer::with_layer(renderer, bounds, content);
     }
 
     fn overlay<'b>(

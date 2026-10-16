@@ -6,6 +6,7 @@ use fogu_term::input::KeyInput;
 use fogu_term::{Scroll, SelectionType};
 use iced::Point;
 
+use crate::background_menu::BgMsg;
 use crate::metrics::CellPos;
 use crate::profile_picker::PickerMsg;
 use crate::prompt::PromptMsg;
@@ -121,6 +122,8 @@ pub enum Message {
     MenuSubmit,
     /// Set (or clear) the active tab's colour.
     SetTabColor(Option<RgbColor>),
+    /// The tab background menu, and image decodes finishing.
+    Background(BgMsg),
     /// `×` on toast `.0` (or "Deny" on an OSC 52 toast).
     DismissToast(u64),
     /// "Copy" on the OSC 52 toast `.0`.

@@ -4,7 +4,8 @@
 
 use fogu_core::{Action, RgbColor};
 use iced::widget::{
-    Id, button, column, container, mouse_area, opaque, row, rule, space, stack, text, text_input,
+    Id, button, column, container, mouse_area, opaque, row, rule, slider, space, stack, text,
+    text_input, tooltip,
 };
 use iced::{Alignment, Border, Color, Element, Length, Padding, Point, Size};
 
@@ -57,6 +58,8 @@ pub struct MenuItem {
     pub separator: bool,
     /// Colour square shown before the label.
     pub swatch: Option<RgbColor>,
+    /// Hint shown on hover (e.g. why the item is disabled).
+    pub tooltip: Option<&'static str>,
 }
 
 impl MenuItem {
@@ -68,17 +71,29 @@ impl MenuItem {
             enabled: true,
             separator: false,
             swatch: None,
+            tooltip: None,
         }
     }
 }
 
-/// A single-line text field at the bottom of the menu (e.g. "Custom hex…").
-#[derive(Clone, Debug, Default)]
+/// A single-line "Custom hex…" field at the bottom of the menu.
+#[derive(Clone, Debug)]
 pub struct MenuInput {
     pub placeholder: &'static str,
     pub value: String,
     /// The last submit was rejected.
     pub invalid: bool,
+    /// What a valid colour does.
+    pub submit: fn(RgbColor) -> Message,
+}
+
+/// A labelled slider at the bottom of the menu (background opacity, in percent).
+#[derive(Clone, Debug)]
+pub struct MenuSlider {
+    pub label: String,
+    pub range: std::ops::RangeInclusive<f32>,
+    pub value: f32,
+    pub on_change: fn(f32) -> Message,
 }
 
 /// An open context menu.
@@ -88,6 +103,7 @@ pub struct ContextMenu {
     pub anchor: Point,
     pub items: Vec<MenuItem>,
     pub input: Option<MenuInput>,
+    pub slider: Option<MenuSlider>,
 }
 
 impl ContextMenu {
@@ -99,6 +115,10 @@ impl ContextMenu {
         let mut items = vec![
             MenuItem::new("Rename…", MenuAction::Run(Action::RenameTab)),
             MenuItem::new("Color ▸", MenuAction::Ui(Message::MenuColors)),
+            MenuItem::new(
+                "Background ▸",
+                MenuAction::Ui(Message::Background(crate::background_menu::BgMsg::Menu)),
+            ),
         ];
         if ssh {
             items.push(MenuItem::new(
@@ -107,41 +127,62 @@ impl ContextMenu {
             ));
         }
         items.push(close);
+        Self::new(anchor, items)
+    }
+
+    /// A menu of plain items.
+    pub fn new(anchor: Point, items: Vec<MenuItem>) -> Self {
         Self {
             anchor,
             items,
             input: None,
+            slider: None,
         }
     }
 
     /// The tab colour palette: presets, "None" and a custom hex field.
     pub fn tab_colors(anchor: Point) -> Self {
-        let mut items: Vec<MenuItem> = PRESET_COLORS
+        let presets = PRESET_COLORS.map(|(name, hex)| (name, RgbColor::from_hex(hex)));
+        Self::palette(anchor, &presets, Some(Message::SetTabColor(None)), |c| {
+            Message::SetTabColor(Some(c))
+        })
+    }
+
+    /// A colour palette: `presets` as swatches, an optional "None" item and a custom hex
+    /// field; picking a colour sends `pick(colour)`.
+    pub fn palette(
+        anchor: Point,
+        presets: &[(&str, RgbColor)],
+        none: Option<Message>,
+        pick: fn(RgbColor) -> Message,
+    ) -> Self {
+        let mut items: Vec<MenuItem> = presets
             .iter()
-            .map(|&(name, hex)| {
-                let color = RgbColor::from_hex(hex);
-                let mut item =
-                    MenuItem::new(name, MenuAction::Ui(Message::SetTabColor(Some(color))));
+            .map(|&(name, color)| {
+                let mut item = MenuItem::new(name, MenuAction::Ui(pick(color)));
                 item.swatch = Some(color);
                 item
             })
             .collect();
-        let mut none = MenuItem::new("None", MenuAction::Ui(Message::SetTabColor(None)));
-        none.separator = true;
-        items.push(none);
-        Self {
-            anchor,
-            items,
-            input: Some(MenuInput {
-                placeholder: "Custom hex… #RRGGBB",
-                ..MenuInput::default()
-            }),
+        if let Some(none) = none {
+            let mut none = MenuItem::new("None", MenuAction::Ui(none));
+            none.separator = true;
+            items.push(none);
         }
+        let mut menu = Self::new(anchor, items);
+        menu.input = Some(MenuInput {
+            placeholder: "Custom hex… #RRGGBB",
+            value: String::new(),
+            invalid: false,
+            submit: pick,
+        });
+        menu
     }
 
     /// Top-left corner clamped so the menu stays inside `window`.
     fn position(&self, window: Size) -> Point {
-        let rows = self.items.len() + usize::from(self.input.is_some()) * 2;
+        let extra = usize::from(self.input.is_some()) + usize::from(self.slider.is_some());
+        let rows = self.items.len() + extra * 2;
         let height = crate::metrics::cells_f32(rows) * ROW_H + 8.0;
         Point::new(
             self.anchor.x.min(window.width - MENU_W).max(0.0),
@@ -189,12 +230,22 @@ fn item_view(item: &MenuItem) -> Element<'_, Message> {
         label = label.push(swatch(item.swatch));
     }
     label = label.push(text(item.label.as_str()).size(13));
-    button(label)
+    let button = button(label)
         .width(Length::Fill)
         .padding([4, 10])
         .style(button::text)
-        .on_press_maybe(item.enabled.then(|| item.action.message()))
-        .into()
+        .on_press_maybe(item.enabled.then(|| item.action.message()));
+    match item.tooltip {
+        Some(hint) => tooltip(
+            button,
+            container(text(hint).size(12))
+                .padding(6)
+                .style(container::bordered_box),
+            tooltip::Position::Bottom,
+        )
+        .into(),
+        None => button.into(),
+    }
 }
 
 fn menu_box(menu: &ContextMenu) -> Element<'_, Message> {
@@ -204,6 +255,16 @@ fn menu_box(menu: &ContextMenu) -> Element<'_, Message> {
             col = col.push(rule::horizontal(1));
         }
         col = col.push(item_view(item));
+    }
+    if let Some(s) = &menu.slider {
+        col = col.push(rule::horizontal(1)).push(
+            column![
+                text(s.label.as_str()).size(13),
+                slider(s.range.clone(), s.value, s.on_change).step(5.0_f32),
+            ]
+            .spacing(4)
+            .padding([4, 10]),
+        );
     }
     if let Some(input) = &menu.input {
         col = col.push(rule::horizontal(1)).push(

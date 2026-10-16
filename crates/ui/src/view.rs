@@ -36,6 +36,7 @@ impl App {
             wheel_lines: self.config.terminal.wheel_lines,
             paste_on_middle_click: self.config.terminal.paste_on_middle_click,
         };
+        let (backdrop, terminal_alpha) = self.backdrop(tab);
         let panes = tab
             .layout
             .leaves()
@@ -60,6 +61,7 @@ impl App {
                 .status(pane.status.as_deref())
                 .hotkeys(&self.config.hotkeys)
                 .cursor_on(self.blink.on)
+                .default_bg_alpha(terminal_alpha)
                 .into();
                 let view = view.map(move |message| message.for_pane(id));
                 // A prompt is modal over the pane that asked, not over the whole window.
@@ -77,7 +79,8 @@ impl App {
             panes,
             to_iced(self.colors.background()),
             divider,
-        );
+        )
+        .backdrop(backdrop);
         // Focused pane border: the tab colour, else the accent once there is more than one pane.
         let border = tab
             .color

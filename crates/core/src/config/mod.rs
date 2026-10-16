@@ -6,7 +6,7 @@ mod io;
 pub mod sftp;
 pub mod ssh_opts;
 
-pub use io::{ConfigError, ConfigIssue, config_dir, load, save, validate};
+pub use io::{ConfigError, ConfigIssue, config_dir, load, set_profile_background, validate};
 pub use sftp::SftpCfg;
 
 use serde::{Deserialize, Serialize};
@@ -75,6 +75,9 @@ pub struct Appearance {
     pub color_scheme: String,
     /// Tab bar placement.
     pub tabs_location: TabsLocation,
+    /// Alpha (0..=1) of the terminal's default background over a tab background; unset = 0.75
+    /// over an image, 0 over a solid colour. Explicit SGR backgrounds always stay opaque.
+    pub terminal_bg_alpha: Option<f32>,
 }
 
 impl Default for Appearance {
@@ -88,6 +91,7 @@ impl Default for Appearance {
             cursor_blink: true,
             color_scheme: "Fogu Dark".to_owned(),
             tabs_location: TabsLocation::default(),
+            terminal_bg_alpha: None,
         }
     }
 }

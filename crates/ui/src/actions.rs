@@ -415,13 +415,15 @@ impl App {
         Task::none()
     }
 
-    /// "Custom hex…": a valid colour applies to the active tab, anything else marks the field.
+    /// "Custom hex…": a valid colour is applied (tab colour or background), anything else marks
+    /// the field.
     fn submit_menu_input(&mut self) -> Task<Message> {
         let Some(input) = self.menu.as_mut().and_then(|m| m.input.as_mut()) else {
             return Task::none();
         };
         if let Some(color) = parse_color(&input.value) {
-            return self.update(Message::SetTabColor(Some(color)));
+            let message = (input.submit)(color);
+            return self.update(message);
         }
         input.invalid = true;
         Task::none()

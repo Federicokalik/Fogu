@@ -31,6 +31,7 @@ mod transfer_view;
 pub mod transfers;
 
 pub use desktop::{Desktop, DesktopMsg};
+pub(crate) use desktop::{no_picker_note, picker_available};
 pub use dialogs::dialog;
 
 use std::collections::HashMap;

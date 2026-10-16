@@ -22,7 +22,7 @@ use crate::message::Message;
 use crate::metrics::{CellMetrics, cells_f32 as cells, grid_size};
 use crate::mouse::{Grid, MouseConfig, MouseState};
 use crate::palette::{Colors, to_iced};
-use crate::runs::{Style, Underline, cell_style, row_runs};
+use crate::runs::{Style, Underline, cell_style, explicit_bg, row_runs};
 use crate::tab::PaneId;
 
 /// The terminal widget. Borrowed from the pane for one `view`.
@@ -39,6 +39,8 @@ pub struct TerminalView<'a> {
     hotkeys: Option<&'a Hotkeys>,
     /// Blink phase: `false` hides the focused pane's cursor.
     cursor_on: bool,
+    /// Alpha of the scheme's default background (below 1 over a tab background).
+    default_bg_alpha: f32,
 }
 
 impl<'a> TerminalView<'a> {
@@ -63,6 +65,7 @@ impl<'a> TerminalView<'a> {
             mouse_config,
             hotkeys: None,
             cursor_on: true,
+            default_bg_alpha: 1.0,
         }
     }
 
@@ -77,6 +80,14 @@ impl<'a> TerminalView<'a> {
     #[must_use]
     pub fn cursor_on(mut self, on: bool) -> Self {
         self.cursor_on = on;
+        self
+    }
+
+    /// Draws cells with the scheme's default background at `alpha` (0..=1) so a tab background
+    /// shows through; explicit SGR backgrounds stay opaque.
+    #[must_use]
+    pub fn default_bg_alpha(mut self, alpha: f32) -> Self {
+        self.default_bg_alpha = alpha;
         self
     }
 
@@ -141,8 +152,8 @@ impl<'a> TerminalView<'a> {
             row_runs(cells, self.colors, &mut runs);
             for run in &runs {
                 let rect = self.cell_rect(origin, run.col, row, run.cols);
-                if run.style.bg != default_bg {
-                    fill(renderer, rect, run.style.bg);
+                if let Some(bg) = explicit_bg(&run.style, default_bg) {
+                    fill(renderer, rect, bg);
                 }
                 if !run.style.hidden && !run.text.trim_end().is_empty() {
                     let color = run.style.fg;
@@ -456,7 +467,15 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
         _viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        fill(renderer, bounds, self.colors.background());
+        if self.default_bg_alpha > 0.0 {
+            let mut bg = to_iced(self.colors.background());
+            bg.a = self.default_bg_alpha;
+            let quad = Quad {
+                bounds,
+                ..Quad::default()
+            };
+            renderer::Renderer::fill_quad(renderer, quad, bg);
+        }
         let origin = bounds.position();
         self.draw_runs(renderer, origin, bounds);
         self.draw_selection(renderer, origin);

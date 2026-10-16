@@ -14,6 +14,7 @@ use iced::{Point, Task, clipboard, window};
 
 use crate::RunOptions;
 use crate::appearance::resolve_scheme;
+use crate::background;
 use crate::blink::{self, Blink};
 use crate::context_menu::ContextMenu;
 use crate::lifecycle::PendingClipboard;
@@ -61,7 +62,7 @@ pub struct App {
     default_font_size_pt: f32,
     pub(crate) resolved: ResolvedFont,
     pub(crate) metrics: CellMetrics,
-    scale: f32,
+    pub(crate) scale: f32,
     pub(crate) colors: Colors,
     pub(crate) focused: bool,
     pub(crate) pending_paste: Option<PendingPaste>,
@@ -77,6 +78,8 @@ pub struct App {
     pub(crate) modifiers: keyboard::Modifiers,
     /// Dropped files and desktop hints (SFTP panel).
     pub(crate) desktop: sftp::Desktop,
+    /// Decoded tab background images.
+    pub(crate) backgrounds: background::Cache,
     pub(crate) exit_after_first_frame: bool,
     /// Test builds: input ends of the stub sessions (what the UI sent) and the effective
     /// profile each stub session was opened with.
@@ -134,6 +137,7 @@ impl App {
             config_dir: None,
             modifiers: keyboard::Modifiers::default(),
             desktop: sftp::Desktop::default(),
+            backgrounds: background::Cache::default(),
             exit_after_first_frame: false,
             config,
             #[cfg(test)]
@@ -196,7 +200,7 @@ impl App {
         ) {
             self.blink.activity(now);
         }
-        let task = self.dispatch(message);
+        let task = Task::batch([self.dispatch(message), self.sync_backgrounds()]);
         let blink = &self.config.appearance;
         if self.blink.arm(now, blink.cursor_blink, self.focused) {
             return Task::batch([task, self.after(blink::PERIOD, Message::BlinkTick)]);
@@ -229,6 +233,7 @@ impl App {
             Message::ConfirmClose(confirmed) => self.on_confirm_close(confirmed),
             Message::Sftp(message) => self.on_sftp(message),
             Message::Desktop(message) => self.on_desktop(message),
+            Message::Background(message) => self.on_background(message),
             Message::KeyIgnored(key, modified, mods) => self.on_key_ignored(&key, &modified, mods),
             Message::Modifiers(mods) => {
                 self.modifiers = mods;

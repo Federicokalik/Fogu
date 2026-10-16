@@ -167,12 +167,12 @@ async fn xdg_open(path: &Path) -> Result<(), String> {
 
 /// Whether a file picker can open: `zenity` on `PATH`, or a session bus with the desktop
 /// portal service installed.
-pub(super) fn picker_available() -> bool {
+pub(crate) fn picker_available() -> bool {
     in_path("zenity") || portal_installed()
 }
 
 /// The toast shown instead of a picker that cannot open.
-pub(super) fn no_picker_note() -> Notification {
+pub(crate) fn no_picker_note() -> Notification {
     Notification::new(Level::Error, "No file picker available").detail(
         "Install xdg-desktop-portal (with a backend such as xdg-desktop-portal-gtk) or zenity. \
          Double-click downloads still work, and on X11 files can be dropped onto the panel.",

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use super::Config;
 use crate::action::Action;
+use crate::background::{Background, Fit};
 use crate::keychord::KeyChord;
 use crate::profile::ProfileId;
 use crate::scheme::ColorScheme;
@@ -38,10 +39,14 @@ pub enum ConfigError {
         /// `toml::de::Error`'s message (line/column included for syntax errors).
         message: String,
     },
-    /// The config could not be serialised back to TOML (should not happen for a valid `Config`,
-    /// but a library bug here must not panic).
-    #[error("failed to serialise config: {0}")]
-    Serialize(String),
+    /// The profile to edit is not in the config file.
+    #[error("{path}: no profile with id {id:?}")]
+    NoSuchProfile {
+        /// The config file that was searched.
+        path: PathBuf,
+        /// The profile id that was not found.
+        id: String,
+    },
 }
 
 impl ConfigError {
@@ -101,18 +106,102 @@ fn migrate(table: toml::Table) -> toml::Table {
     table
 }
 
-/// Saves `config` to `dir/config.toml` atomically (temp file, `fsync`, rename), mode `0600`,
-/// keeping the previous file as `config.toml.bak`.
-pub fn save(config: &Config, dir: &Path) -> Result<(), ConfigError> {
-    crate::fsutil::create_private_dir(dir).map_err(|err| ConfigError::io(dir, err))?;
-    let text =
-        toml::to_string_pretty(config).map_err(|err| ConfigError::Serialize(err.to_string()))?;
+/// Sets (`Some`) or removes (`None`) the `background` key of the `[[profiles]]` entry with `id`
+/// in `dir/config.toml`, leaving every other byte of the file (comments, order, spacing)
+/// untouched. The file must already exist, parse as TOML and contain the profile: nothing is
+/// ever created or rewritten from the typed `Config`. Written atomically (temp file, `fsync`,
+/// rename), mode `0600`, keeping the previous file as `config.toml.bak`.
+pub fn set_profile_background(
+    dir: &Path,
+    id: &str,
+    background: Option<&Background>,
+) -> Result<(), ConfigError> {
+    let path = dir.join(FILE_NAME);
+    let text = std::fs::read_to_string(&path).map_err(|err| ConfigError::io(&path, err))?;
+    let parse_error = |message: String| ConfigError::Parse {
+        path: path.clone(),
+        message,
+    };
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e: toml_edit::TomlError| parse_error(e.to_string()))?;
+    let profile = doc
+        .get_mut("profiles")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .and_then(|profiles| {
+            profiles
+                .iter_mut()
+                .find(|p| p.get("id").and_then(toml_edit::Item::as_str) == Some(id))
+        })
+        .ok_or_else(|| ConfigError::NoSuchProfile {
+            path: path.clone(),
+            id: id.to_owned(),
+        })?;
+    match background {
+        None => {
+            profile.remove("background");
+        }
+        Some(background) => {
+            let mut value = background_value(background);
+            // Keep a trailing `# comment` on the line being replaced.
+            if let Some(old) = profile
+                .get("background")
+                .and_then(toml_edit::Item::as_value)
+            {
+                *value.decor_mut() = old.decor().clone();
+            }
+            profile.insert("background", toml_edit::Item::Value(value));
+        }
+    }
+    write_atomic(dir, doc.to_string().as_bytes())
+}
+
+/// `background` as the inline table the docs show: `{ color = "#rrggbb" }` or
+/// `{ image = { path = "…", opacity = 0.6, fit = "contain" } }` (`blur` only when on).
+fn background_value(background: &Background) -> toml_edit::Value {
+    let mut outer = toml_edit::InlineTable::new();
+    match background {
+        Background::Color(color) => {
+            outer.insert("color", color.to_string().into());
+        }
+        Background::Image {
+            path,
+            opacity,
+            fit,
+            blur,
+        } => {
+            let mut image = toml_edit::InlineTable::new();
+            image.insert("path", path.to_string_lossy().as_ref().into());
+            // Through the shortest decimal form: 0.6_f32 as f64 would print 0.6000000238418579.
+            let opacity = opacity.to_string().parse::<f64>().unwrap_or(1.0);
+            image.insert("opacity", opacity.into());
+            let fit = match fit {
+                Fit::Cover => "cover",
+                Fit::Contain => "contain",
+                Fit::Tile => "tile",
+            };
+            image.insert("fit", fit.into());
+            if *blur {
+                image.insert("blur", true.into());
+            }
+            outer.insert("image", toml_edit::Value::InlineTable(image));
+        }
+    }
+    toml_edit::Value::InlineTable(outer)
+}
+
+fn write_atomic(dir: &Path, contents: &[u8]) -> Result<(), ConfigError> {
     let dest = dir.join(FILE_NAME);
     let tmp = dir.join(format!("{FILE_NAME}.tmp"));
-    write_new_file(&tmp, text.as_bytes())?;
+    write_new_file(&tmp, contents)?;
     let bak = dir.join(format!("{FILE_NAME}.bak"));
     match std::fs::rename(&dest, &bak) {
-        Ok(()) => {}
+        // The user's original may have been created 0644; the backup is private too.
+        Ok(()) => {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&bak, std::fs::Permissions::from_mode(FILE_MODE))
+                .map_err(|err| ConfigError::io(&bak, err))?;
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(ConfigError::io(&dest, err)),
     }
@@ -255,26 +344,139 @@ mod tests {
         assert!(message.contains("line"), "{message}");
     }
 
-    #[test]
-    fn save_then_load_round_trips_with_0600_and_a_backup() {
-        let tmp = tempdir();
-        let mut config = Config::default();
-        config.appearance.font_size = 20.0;
-        save(&config, tmp.path()).unwrap();
+    const FIXTURE: &str = "\
+# my hand-written config
+version = 1
 
+[appearance]
+font_size = 14   # big enough
+color_scheme = \"Dracula\"
+
+
+# --- work ---
+[[profiles]]
+name = \"Work\"   # shown in the menu
+id = \"work\"
+type = \"local\"
+
+# --- play ---
+[[profiles]]
+type = \"local\"
+id = \"play\"
+name = \"Play\"
+background = { color = \"#112233\" }   # keep me
+";
+
+    fn fixture(tmp: &TempDir) -> PathBuf {
         let path = tmp.path().join(FILE_NAME);
-        let perms = std::fs::metadata(&path).unwrap().permissions();
-        assert_eq!(perms.mode() & 0o777, FILE_MODE);
+        std::fs::write(&path, FIXTURE).unwrap();
+        path
+    }
 
-        let (loaded, err) = load(tmp.path());
+    fn differing_lines(before: &str, after: &str) -> (Vec<String>, Vec<String>) {
+        let b: Vec<&str> = before.lines().collect();
+        let a: Vec<&str> = after.lines().collect();
+        let prefix = b.iter().zip(&a).take_while(|(x, y)| x == y).count();
+        let suffix = b[prefix..]
+            .iter()
+            .rev()
+            .zip(a[prefix..].iter().rev())
+            .take_while(|(x, y)| x == y)
+            .count();
+        let owned = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect();
+        (
+            owned(&b[prefix..b.len() - suffix]),
+            owned(&a[prefix..a.len() - suffix]),
+        )
+    }
+
+    #[test]
+    fn set_background_adds_only_that_key_and_keeps_a_0600_backup() {
+        let tmp = tempdir();
+        let path = fixture(&tmp);
+        let bg = Background::Image {
+            path: PathBuf::from("~/wall.jpg"),
+            opacity: 0.6,
+            fit: Fit::Contain,
+            blur: false,
+        };
+        set_profile_background(tmp.path(), "work", Some(&bg)).unwrap();
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        let (removed, added) = differing_lines(FIXTURE, &after);
+        assert!(removed.is_empty(), "{removed:?}");
+        assert_eq!(
+            added,
+            [
+                "background = { image = { path = \"~/wall.jpg\", opacity = 0.6, fit = \"contain\" } }"
+            ]
+        );
+        // Everything else is byte-identical: removing the added line gives the original back.
+        let restored = after.replace(&format!("{}\n", added[0]), "");
+        assert_eq!(restored, FIXTURE);
+
+        let (config, err) = load(tmp.path());
         assert!(err.is_none());
-        assert_eq!(loaded, config);
+        assert_eq!(config.profiles[0].background, Some(bg));
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&path), FILE_MODE);
+        let bak = tmp.path().join(format!("{FILE_NAME}.bak"));
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), FIXTURE);
+        assert_eq!(mode(&bak), FILE_MODE);
+    }
 
-        // A second save keeps the previous content as `.bak`.
-        config.appearance.font_size = 22.0;
-        save(&config, tmp.path()).unwrap();
-        let bak = std::fs::read_to_string(tmp.path().join(format!("{FILE_NAME}.bak"))).unwrap();
-        assert!(bak.contains("font_size = 20"), "{bak}");
+    #[test]
+    fn set_background_replaces_in_place_and_keeps_the_trailing_comment() {
+        let tmp = tempdir();
+        let path = fixture(&tmp);
+        let bg = Background::Color(crate::RgbColor::from_hex(0x00_aa_bb));
+        set_profile_background(tmp.path(), "play", Some(&bg)).unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        let (removed, added) = differing_lines(FIXTURE, &after);
+        assert_eq!(
+            removed,
+            ["background = { color = \"#112233\" }   # keep me"]
+        );
+        assert_eq!(added, ["background = { color = \"#00aabb\" }   # keep me"]);
+    }
+
+    #[test]
+    fn remove_background_deletes_only_that_line() {
+        let tmp = tempdir();
+        let path = fixture(&tmp);
+        set_profile_background(tmp.path(), "play", None).unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        let (removed, added) = differing_lines(FIXTURE, &after);
+        assert_eq!(
+            removed,
+            ["background = { color = \"#112233\" }   # keep me"]
+        );
+        assert!(added.is_empty(), "{added:?}");
+    }
+
+    #[test]
+    fn unknown_profile_or_unparsable_or_missing_file_is_an_error_and_untouched() {
+        let tmp = tempdir();
+        let path = fixture(&tmp);
+        let bg = Background::Color(crate::RgbColor::from_hex(1));
+        let err = set_profile_background(tmp.path(), "gone", Some(&bg)).unwrap_err();
+        assert!(matches!(err, ConfigError::NoSuchProfile { .. }), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), FIXTURE);
+        assert!(!tmp.path().join(format!("{FILE_NAME}.bak")).exists());
+
+        std::fs::write(&path, "not valid toml [[[").unwrap();
+        let err = set_profile_background(tmp.path(), "work", Some(&bg)).unwrap_err();
+        assert!(matches!(err, ConfigError::Parse { .. }), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "not valid toml [[["
+        );
+        assert!(!tmp.path().join(format!("{FILE_NAME}.bak")).exists());
+
+        std::fs::remove_file(&path).unwrap();
+        let err = set_profile_background(tmp.path(), "work", Some(&bg)).unwrap_err();
+        assert!(matches!(err, ConfigError::Io { .. }), "{err}");
+        assert!(!path.exists());
     }
 
     #[test]

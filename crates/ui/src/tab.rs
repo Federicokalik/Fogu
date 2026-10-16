@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use fogu_core::{Profile, ProfileKind, RgbColor, Size, SplitTree};
+use fogu_core::{Profile, ProfileKind, RgbColor, Size, SplitTree, TabBackground};
 use fogu_session::{
     ExitInfo, SessionHandle, SessionInput, SessionOutput, SessionWarning, SftpEvent, SftpRequest,
 };
@@ -255,6 +255,10 @@ pub struct Tab {
     pub focused: PaneId,
     /// The SFTP side panel (SSH tabs), kept while hidden so transfers stay listed.
     pub sftp: Option<SftpPanelState>,
+    /// The profile the tab was opened with (background, "Save to profile").
+    pub profile: Profile,
+    /// The tab's own background choice (wins over `profile.background`).
+    pub background: TabBackground,
 }
 
 impl Tab {
@@ -263,6 +267,8 @@ impl Tab {
         Self {
             id,
             color: pane.profile.color,
+            profile: pane.profile.clone(),
+            background: TabBackground::default(),
             title_override: None,
             layout: SplitTree::new(pane.id),
             focused: pane.id,

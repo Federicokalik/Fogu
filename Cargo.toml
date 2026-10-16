@@ -22,7 +22,10 @@ version = "0.1.0"
 # regardless of this feature; add it only if iced ever needs to drive a tokio runtime.
 # `advanced`: the custom `Widget` trait, `fill_quad`/`fill_text` and the cosmic-text/fontdb
 # re-exports the terminal widget draws and measures with.
-iced = { version = "=0.14.0", features = ["wgpu", "tiny-skia", "advanced"] }
+# `image-without-codecs`: image handles + the renderer's image pipeline for tab background
+# images; we decode ourselves (bounded, off the UI thread) and hand iced raw RGBA, so iced's
+# default codec set (gif, tiff, exr, …) is not pulled in.
+iced = { version = "=0.14.0", features = ["wgpu", "tiny-skia", "advanced", "image-without-codecs"] }
 # why: structured logging, used by `fogu`'s main().
 tracing = "0.1.44"
 # why: tracing subscriber with env-filter so `RUST_LOG` controls verbosity; `tracing-log` (a default
@@ -54,6 +57,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 # why: native config file format: human-editable, comments allowed, no YAML
 # type-coercion surprises.
 toml = "1.1.8"
+# why: edit config.toml in place, keeping the user's comments and order (a whole-file `toml`
+# round trip would drop them). Default features only (parse + display), pure Rust.
+toml_edit = "0.25.17"
 # why: `$XDG_CONFIG_HOME/fogu` path. Chose `xdg` over
 # `directories`: this is a Linux-only app, so `directories`' macOS/Windows path
 # logic is dead code we would carry for nothing; `xdg` is the smaller, Linux-specific crate for
@@ -86,6 +92,11 @@ rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] 
 # why: the XDG download directory (`~/Downloads`, honours `user-dirs.dirs`) for SFTP double-click
 # downloads; `xdg` covers only the base-directory spec, not user dirs.
 dirs = "7.0.0"
+
+# why: decoding tab background images with size/dimension limits and downscaling; the same
+# 0.25 crate iced's image feature already depends on (one version in the tree), only the three
+# formats we accept (PNG, JPEG, WebP; all pure-Rust decoders).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 
 # why: command-line flags (`--config-dir`, `--software-render`, `--version`).
 # `derive` keeps the flag definitions declarative; default features (help, usage, errors) only.
