@@ -1,10 +1,11 @@
 //! A session under test plus the plumbing to drive it synchronously: prompts answered by a
 //! closure, "wait until the screen shows X" with a timeout instead of sleeps.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use fogu_core::{EffectiveSsh, Size};
+use fogu_core::{EffectiveSsh, ProfileId, Size};
 use fogu_session::{
     PromptKind, PromptReply, SessionHandle, SessionInput, SessionOutput, SessionRuntime, SshPaths,
     open_ssh,
@@ -23,7 +24,7 @@ pub const SIZE: Size = Size {
 pub const WAIT: Duration = Duration::from_secs(15);
 
 pub struct Client<F> {
-    pub rt: SessionRuntime,
+    pub rt: Arc<SessionRuntime>,
     pub session: SessionHandle,
     /// The UI's view of the terminal the session feeds.
     pub view: TermHandle,
@@ -33,10 +34,32 @@ pub struct Client<F> {
 impl<F: FnMut(&PromptKind) -> PromptReply> Client<F> {
     /// Opens `ssh` with `paths`; `answer` replies to every prompt.
     pub fn connect(ssh: &EffectiveSsh, paths: SshPaths, answer: F) -> Self {
-        let rt = SessionRuntime::new().expect("runtime");
+        let rt = Arc::new(SessionRuntime::new().expect("runtime"));
         let term = TermHandle::new(SIZE.cols, SIZE.rows, 100, WORD_SEPARATORS);
         let view = term.share();
         let session = open_ssh(rt.handle(), ssh, paths, SIZE, term);
+        Self {
+            rt,
+            session,
+            view,
+            prompter: Prompter::new(answer),
+        }
+    }
+
+    /// Opens `ssh` as profile `profile` on `rt`, reusing `rt`'s live connection of that
+    /// profile (`reuse_session`), like the UI does.
+    pub fn connect_shared(
+        rt: &Arc<SessionRuntime>,
+        profile: &str,
+        ssh: &EffectiveSsh,
+        paths: SshPaths,
+        answer: F,
+    ) -> Self {
+        let rt = Arc::clone(rt);
+        let term = TermHandle::new(SIZE.cols, SIZE.rows, 100, WORD_SEPARATORS);
+        let view = term.share();
+        let profile = ProfileId(profile.to_owned());
+        let session = rt.open_ssh_shared(&profile, ssh, paths, SIZE, term);
         Self {
             rt,
             session,

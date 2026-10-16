@@ -2,44 +2,59 @@
 //! loop shaped like `run_local`'s: input first, pending writes in ≤ 4 KiB chunks through the
 //! channel's `AsyncWrite` (which waits for window space without blocking reads), one channel
 //! message per iteration into the shared [`Pump`](crate::pipeline::Pump), debounced
-//! `window-change`, and the synchronized-update timer. The SFTP engine starts here too (it
-//! shares the connection) and is stopped before the connection is closed.
+//! `window-change`, and the synchronized-update timer. The connection itself (forwards,
+//! closing) belongs to the pool's driver ([`super::pool`]); this tab holds a lease on it. The
+//! tab's SFTP engine starts here (a channel on the same connection) and is stopped before the
+//! lease is released.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use fogu_core::{EffectiveSsh, Size};
-use russh::{ChannelMsg, Disconnect, Sig};
+use russh::{ChannelMsg, Sig};
 use tokio::io::AsyncWriteExt as _;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument as _;
 
-use super::connect::{Connection, ssh_error};
-use super::forward::ForwardSet;
+use super::connect::ssh_error;
+use super::pool::Lease;
 use super::{Stop, Ui};
 use crate::pipeline::WRITE_CHUNK;
-use crate::{ExitInfo, SessionInput, SessionOutput};
+use crate::{ExitInfo, SessionInput, SessionOutput, SessionWarning};
 
 /// Quiet time before a resize is sent (resize storms during split drags).
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(50);
 
-/// Opens the shell and runs it until the channel closes or the user closes the tab.
+/// Opens the shell on the lease's connection and runs it until the channel closes, the
+/// connection goes away or the user closes the tab. `driver` (an unshared connection's task)
+/// is awaited after the lease is released, so the connection is closed when this returns.
 pub(crate) async fn run(
-    mut conn: Connection,
+    lease: Lease,
+    driver: Option<tokio::task::JoinHandle<()>>,
     ssh: &EffectiveSsh,
     ui: &mut Ui,
     ready: Duration,
 ) -> Result<ExitInfo, Stop> {
-    let channel = open_channel(&conn, ssh, ui.size, ready).await?;
-    conn.drain_events(ssh, ui).await?;
-    let ssh_handle = Arc::new(conn.handle);
-    let route = conn.route;
-    let mut forwarded = conn.forwarded;
-    let mut forwards = ForwardSet::new(Arc::clone(&ssh_handle), ui.pump.sender());
-    for forward in &ssh.forwarded_ports {
-        forwards.add(forward.clone());
+    let end = shell(&lease, ssh, ui, ready).await;
+    drop(lease);
+    if let Some(driver) = driver
+        && let Err(err) = driver.await
+    {
+        tracing::warn!(error = %err, "SSH connection task failed");
     }
+    end
+}
+
+async fn shell(
+    lease: &Lease,
+    ssh: &EffectiveSsh,
+    ui: &mut Ui,
+    ready: Duration,
+) -> Result<ExitInfo, Stop> {
+    let shared = lease.shared();
+    let channel = open_channel(lease, ssh, ui, ready).await?;
+    let ssh_handle = Arc::clone(&shared.handle);
     let sftp_stop = CancellationToken::new();
     let sftp_task = ui.sftp.take().map(|ends| {
         let engine = super::sftp::run(
@@ -75,10 +90,10 @@ pub(crate) async fn run(
                 Some(SessionInput::PromptReply(id, _)) => tracing::debug!(?id, "stale prompt reply"),
                 // The remote cwd comes from OSC 7 only; nothing to query locally.
                 Some(SessionInput::QueryCwd) => {}
-                Some(SessionInput::Forward(cmd)) => forwards.command(cmd),
+                Some(SessionInput::Forward(cmd)) => lease.forward(cmd),
                 Some(SessionInput::Close) | None => break Err(Stop::Closed),
             },
-            Some(incoming) = forwarded.recv() => forwards.route(incoming),
+            () = shared.gone.cancelled() => break Ok(status),
             written = writer.write(pump.pending.get(..chunk).unwrap_or_default()), if chunk > 0 => {
                 match written {
                     Ok(n) => pump.written(n),
@@ -116,7 +131,6 @@ pub(crate) async fn run(
         let _eof = write_half.eof().await;
         let _close = write_half.close().await;
     }
-    forwards.stop().await;
     // The SFTP engine cancels its transfers (cleaning up partial files) before the connection
     // goes away (bounded by its grace period).
     sftp_stop.cancel();
@@ -126,22 +140,21 @@ pub(crate) async fn run(
             tracing::warn!("SFTP engine did not stop in time");
         }
     }
-    let _bye = ssh_handle
-        .disconnect(Disconnect::ByApplication, "", "en")
-        .await;
-    route.close().await;
     end
 }
 
-/// `pty-req` → `env COLORTERM` → `shell` on a new session channel, within `ready`.
+/// `pty-req` → `env COLORTERM` → agent / X11 forwarding requests → `shell` on a new session
+/// channel, within `ready`. Forwarding that was requested is reported as a warning (tab badge).
 async fn open_channel(
-    conn: &Connection,
+    lease: &Lease,
     ssh: &EffectiveSsh,
-    size: Size,
+    ui: &mut Ui,
     ready: Duration,
 ) -> Result<russh::Channel<russh::client::Msg>, Stop> {
+    let shared = lease.shared();
+    let size = ui.size;
     let setup = async {
-        let channel = conn.handle.channel_open_session().await?;
+        let channel = shared.handle.channel_open_session().await?;
         channel
             .request_pty(
                 false,
@@ -157,14 +170,35 @@ async fn open_channel(
         if let Err(err) = channel.set_env(false, "COLORTERM", "truecolor").await {
             tracing::debug!(error = %ssh_error(&err), "COLORTERM not sent");
         }
+        if shared.agent_forward {
+            channel.agent_forward(false).await?;
+        }
+        if let Some(x11) = &shared.x11 {
+            let cookie = x11.fake_hex();
+            let screen = x11.display.screen;
+            channel
+                .request_x11(false, false, super::x11::MIT_COOKIE, cookie, screen)
+                .await?;
+        }
         channel.request_shell(false).await?;
         Ok::<_, russh::Error>(channel)
     };
-    match tokio::time::timeout(ready, setup).await {
-        Ok(Ok(channel)) => Ok(channel),
-        Ok(Err(err)) => Err(ssh_error(&err).into()),
-        Err(_elapsed) => Err(crate::SessionError::Timeout.into()),
+    let channel = match tokio::time::timeout(ready, setup).await {
+        Ok(Ok(channel)) => channel,
+        Ok(Err(err)) => return Err(ssh_error(&err).into()),
+        Err(_elapsed) => return Err(crate::SessionError::Timeout.into()),
+    };
+    if shared.agent_forward {
+        ui.pump
+            .emit(SessionOutput::Warning(SessionWarning::AgentForwarded))
+            .await?;
     }
+    if shared.x11.is_some() {
+        ui.pump
+            .emit(SessionOutput::Warning(SessionWarning::X11Forwarded))
+            .await?;
+    }
+    Ok(channel)
 }
 
 async fn window_change<S>(channel: &russh::ChannelWriteHalf<S>, size: Size)

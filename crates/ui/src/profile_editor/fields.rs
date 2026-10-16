@@ -51,6 +51,7 @@ pub enum FieldId {
     WarnOnClose,
     Weight,
     ReuseSession,
+    ReuseLinger,
     // SSH: authentication.
     Auth,
     PrivateKeys,
@@ -134,6 +135,7 @@ fn range(id: FieldId) -> Option<(i64, i64)> {
         FieldId::ReadyTimeout => (1, ms_day),
         FieldId::KeepaliveCountMax => (0, 10_000),
         FieldId::AgentKeyLifetime => (0, i64::from(u32::MAX)),
+        FieldId::ReuseLinger => (0, 3600),
         FieldId::Weight => (i64::from(i32::MIN), i64::from(i32::MAX)),
         FieldId::BgOpacity => (0, 100),
         _ => return None,
@@ -226,6 +228,7 @@ impl ProfileEditor {
             FieldId::AgentKeyLifetime => {
                 ssh.agent_key_lifetime = n.and_then(|n| u32::try_from(n).ok());
             }
+            FieldId::ReuseLinger => ssh.reuse_linger = n.and_then(|n| u32::try_from(n).ok()),
             FieldId::Weight => ssh.weight = n.and_then(|n| i32::try_from(n).ok()),
             FieldId::Forward(row, col) => {
                 if let Some(forward) = ssh.forwarded_ports.as_mut().and_then(|f| f.get_mut(row)) {

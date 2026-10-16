@@ -151,3 +151,57 @@ fn statuses_fill_the_list_the_badge_and_remove() {
     send(&mut app, ForwardsMsg::Close);
     assert!(app.forwards.is_none());
 }
+
+/// Feeds `pane` its connection id and two listening forwards (ids 1, 2).
+fn on_connection(app: &mut App, pane: crate::tab::PaneId, connection: u64) {
+    let _task = app.update(Message::Session(
+        pane,
+        SessionOutput::Connection(fogu_session::ConnectionId(connection)),
+    ));
+    for id in [1, 2] {
+        let status = ForwardStatus {
+            id: ForwardId(id),
+            forward: PortForward {
+                port: 8000 + u16::try_from(id).unwrap(),
+                ..PortForward::default()
+            },
+            state: ForwardState::Listening,
+            active_connections: 0,
+        };
+        let _task = app.update(Message::Session(pane, SessionOutput::ForwardStatus(status)));
+    }
+}
+
+fn close_body(app: &mut App) -> String {
+    let _task = app.update(Message::Action(fogu_core::Action::CloseTab));
+    let body = app.close_modal().unwrap().body;
+    let _task = app.update(Message::ConfirmClose(false));
+    body
+}
+
+#[test]
+fn the_close_confirmation_counts_only_forwards_that_stop() {
+    let t = tmp();
+    let mut app = box_app(&t.0);
+    send(&mut app, ForwardsMsg::Close);
+    let first = app.active_pane().unwrap().id;
+    on_connection(&mut app, first, 7);
+    let body = close_body(&mut app);
+    assert!(body.contains("closing ends it"), "{body}");
+    assert!(body.contains("2 port forwards will stop."), "{body}");
+
+    // A second tab on the same connection: closing either stops nothing.
+    let profile = app.pane(first).unwrap().profile.clone();
+    app.open_tab(&profile, None);
+    let second = app.active_pane().unwrap().id;
+    on_connection(&mut app, second, 7);
+    let body = close_body(&mut app);
+    assert!(
+        body.contains("Other tabs keep using the connection."),
+        "{body}"
+    );
+    assert!(!body.contains("will stop"), "{body}");
+    // Both panes show the connection's two forwards once.
+    let panes = app.tabs.iter().flat_map(|t| t.panes.values());
+    assert_eq!(listening(panes), 2);
+}

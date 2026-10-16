@@ -1,7 +1,8 @@
-//! `run_ssh`: an interactive SSH shell, one task per tab. Every russh call
-//! lives in this module (russh is 0.x and breaks per minor): `connect.rs` (handler, host-key
-//! prompts, transport config), `hostkeys.rs` (`known_hosts`), `auth.rs` (authentication methods),
-//! `shell.rs` (PTY channel through the shared [`Pump`] pipeline).
+//! `run_ssh`: an interactive SSH shell, one task per tab. Every russh call lives in this module
+//! (russh is 0.x and breaks per minor): `connect.rs` (handler, host-key prompts, transport config),
+//! `hostkeys.rs` (`known_hosts`), `auth.rs` (authentication methods), `shell.rs` (PTY channel
+//! through the shared [`Pump`] pipeline), `pool.rs` (the connection's driver, shared by tabs with
+//! `reuse_session`), `x11.rs` / `agent.rs` (forwarding).
 //!
 //! Attacker input here: everything the server sends (banner, keyboard-interactive texts, error
 //! strings, channel data) and, for imported profiles, the host name. Service lines and prompt
@@ -14,10 +15,12 @@ mod auth;
 mod connect;
 mod forward;
 mod hostkeys;
+pub(crate) mod pool;
 mod proxy;
 pub(crate) mod sftp;
 mod shell;
 mod transport;
+mod x11;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -27,6 +30,7 @@ use fogu_term::TermHandle;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::timeout;
 
+use self::pool::Pooled;
 use self::sftp::SftpEnds;
 use crate::pipeline::{Gone, Pump};
 use crate::prompt::{PROMPT_TEXT_MAX_CHARS, sanitize_remote};
@@ -177,11 +181,17 @@ impl Ui {
     }
 }
 
-/// Session task for an SSH shell. Errors are shown as a service line and reported as
+/// Session task for an SSH shell; with `pooled` (and the profile's `reuse_session`) it reuses
+/// a live connection of the same profile. Errors are shown as a service line and reported as
 /// `SessionOutput::Error`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the task's inputs, passed once by `open_ssh_in`"
+)]
 pub(crate) async fn run_ssh(
     ssh: EffectiveSsh,
     paths: SshPaths,
+    pooled: Option<Pooled>,
     size: Size,
     term: TermHandle,
     in_rx: Receiver<SessionInput>,
@@ -197,7 +207,8 @@ pub(crate) async fn run_ssh(
         sftp: Some(sftp),
         via: None,
     };
-    let out = match session(&ssh, &paths, &mut ui).await {
+    let pooled = pooled.filter(|_| ssh.reuse_session);
+    let out = match session(&ssh, &paths, pooled, &mut ui).await {
         Ok(info) => SessionOutput::Exited(info),
         Err(Stop::Gone) => return,
         Err(Stop::Closed) => SessionOutput::Exited(ExitInfo {
@@ -215,7 +226,12 @@ pub(crate) async fn run_ssh(
     let _gone = ui.pump.emit(out).await;
 }
 
-async fn session(ssh: &EffectiveSsh, paths: &SshPaths, ui: &mut Ui) -> Result<ExitInfo, Stop> {
+async fn session(
+    ssh: &EffectiveSsh,
+    paths: &SshPaths,
+    pooled: Option<Pooled>,
+    ui: &mut Ui,
+) -> Result<ExitInfo, Stop> {
     let unsupported = ssh.unsupported();
     if !unsupported.is_empty() {
         let list = unsupported.join(", ");
@@ -229,7 +245,23 @@ async fn session(ssh: &EffectiveSsh, paths: &SshPaths, ui: &mut Ui) -> Result<Ex
             .await?;
     }
     let ready = ssh.ready_timeout.unwrap_or(DEFAULT_READY_TIMEOUT);
+    if let Some(Pooled { pool, profile }) = &pooled {
+        let key = pool::key(profile.clone(), ssh);
+        if let Some(lease) = pool.lease(&key, ui.pump.sender()) {
+            ui.service(&format!(
+                "Reusing the connection to {}@{}:{}",
+                ssh.user, ssh.host, ssh.port
+            ))
+            .await?;
+            return shell::run(lease, None, ssh, ui, ready).await;
+        }
+    }
     let mut conn = connect::connect(ssh, paths, ui, ready, 0).await?;
     auth::authenticate(&mut conn, ssh, ui, ready).await?;
-    shell::run(conn, ssh, ui, ready).await
+    conn.drain_events(ssh, ui).await?;
+    let shared = pooled.is_some();
+    let (lease, driver) = pool::start(conn, ssh, pooled, ui.pump.sender());
+    // An unshared connection closes with this tab; a pooled one when its last tab is gone.
+    let driver = (!shared).then_some(driver);
+    shell::run(lease, driver, ssh, ui, ready).await
 }

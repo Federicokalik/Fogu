@@ -133,8 +133,16 @@ impl App {
                 .closes(state.is_clean_exit());
         // A question the session can no longer take an answer to.
         pane.prompt = None;
-        // The session stopped its forwards.
+        // The session stopped its forwards (or left them to the tabs still on the connection)
+        // and its agent / X11 forwarding ended.
         pane.forwards.clear();
+        pane.connection = None;
+        pane.warnings.retain(|w| {
+            !matches!(
+                w,
+                SessionWarning::AgentForwarded | SessionWarning::X11Forwarded
+            )
+        });
         pane.status = state.status_line(pane.is_ssh());
         pane.state = state;
         pane.refresh();
@@ -231,6 +239,7 @@ impl App {
             SessionOutput::ForwardStatus(status) => {
                 crate::forwards_dialog::apply_status(&mut pane.forwards, status);
             }
+            SessionOutput::Connection(id) => pane.connection = Some(id),
             SessionOutput::Warning(warning) => {
                 if !pane.warnings.contains(&warning) {
                     pane.warnings.push(warning.clone());
@@ -286,6 +295,10 @@ pub(crate) fn warning_title(warning: &SessionWarning) -> &'static str {
         SessionWarning::HostKeyNotVerified => "Host key not verified",
         SessionWarning::Unsupported(_) => "SSH options ignored",
         SessionWarning::ForwardExposed(_) => "Port forward reachable from other machines",
+        SessionWarning::AgentForwarded => "Agent forwarded",
+        SessionWarning::X11Forwarded => "X11 forwarded",
+        SessionWarning::UnknownAlgorithms(_) => "Unknown SSH algorithms ignored",
+        SessionWarning::WeakAlgorithms(_) => "Weaker SSH algorithms enabled",
     }
 }
 
@@ -300,6 +313,18 @@ pub(crate) fn warning_detail(warning: &SessionWarning) -> String {
         }
         SessionWarning::ForwardExposed(label) => {
             format!("{label} listens on a non-loopback address.")
+        }
+        SessionWarning::AgentForwarded => {
+            "The server can use your SSH agent's keys while this session is open.".to_owned()
+        }
+        SessionWarning::X11Forwarded => "Remote X programs show here and can read your \
+             keyboard and screen (the real X cookie stays on this computer)."
+            .to_owned(),
+        SessionWarning::UnknownAlgorithms(names) => {
+            format!("Not known to this build: {}", names.join(", "))
+        }
+        SessionWarning::WeakAlgorithms(names) => {
+            format!("Outside the secure defaults: {}", names.join(", "))
         }
     }
 }

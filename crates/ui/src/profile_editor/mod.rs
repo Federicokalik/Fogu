@@ -179,6 +179,17 @@ impl ProfileEditor {
             .into_iter()
             .filter(|i| i.profile() == Some(&self.draft.id))
             .collect();
+        if let ProfileKind::Ssh(ssh) = &self.draft.kind
+            && let Some(algorithms) = &ssh.algorithms
+        {
+            let names = view_lists::unknown(algorithms);
+            if !names.is_empty() {
+                issues.push(ConfigIssue::UnknownAlgorithms {
+                    profile: self.draft.id.clone(),
+                    names,
+                });
+            }
+        }
         issues.dedup();
         issues
     }

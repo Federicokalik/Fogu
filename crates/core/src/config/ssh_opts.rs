@@ -26,20 +26,13 @@ pub const DEFAULT_TERM: &str = "xterm-256color";
 pub const DEFAULT_PROMPT_TIMEOUT_MS: u64 = 120_000;
 /// Seconds an RSA key added to the agent by Fogu stays there.
 pub const DEFAULT_AGENT_KEY_LIFETIME_S: u32 = 3600;
+/// Seconds a reused connection stays open after its last tab closed.
+pub const DEFAULT_REUSE_LINGER_S: u32 = 10;
 
 /// Stored option names whose behaviour is not implemented yet: the profile editor marks them
-/// "not supported yet".
-/// [`EffectiveSsh::unsupported`] warns about the same options at connect time when they are set.
-pub const NOT_SUPPORTED_YET: &[&str] = &[
-    "input_backspace",
-    "agent_forward",
-    "x11",
-    "algorithms",
-    "reuse_session",
-    "scripts",
-    "cwd",
-    "remember_cwd",
-];
+/// "not supported yet". [`EffectiveSsh::unsupported`] warns about the same options at connect
+/// time when they are set.
+pub const NOT_SUPPORTED_YET: &[&str] = &["input_backspace", "scripts", "cwd", "remember_cwd"];
 
 /// Which authentication methods to try.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,7 +165,9 @@ impl PortForward {
     }
 }
 
-/// Per-profile algorithm allow-lists; empty list = russh's defaults.
+/// Per-profile algorithm allow-lists in preference order; an empty list = russh's defaults.
+/// Names the SSH library doesn't know are reported (editor issue, connect-time warning) and
+/// never sent.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Algorithms {
@@ -192,6 +187,12 @@ impl Algorithms {
     /// `true` when no list overrides russh's defaults.
     #[must_use]
     pub fn is_default(&self) -> bool {
+        self.lists().iter().all(|list| list.is_empty())
+    }
+
+    /// The lists in category order: kex, cipher, hmac, server host key, compression.
+    #[must_use]
+    pub fn lists(&self) -> [&Vec<String>; 5] {
         [
             &self.kex,
             &self.cipher,
@@ -199,8 +200,21 @@ impl Algorithms {
             &self.server_host_key,
             &self.compression,
         ]
-        .iter()
-        .all(|list| list.is_empty())
+    }
+
+    /// Names not in `known` (the transport's names, same category order as [`Self::lists`]),
+    /// once each, in order.
+    #[must_use]
+    pub fn unknown(&self, known: &[Vec<String>; 5]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (list, known) in self.lists().into_iter().zip(known) {
+            for name in list {
+                if !known.contains(name) && !out.contains(name) {
+                    out.push(name.clone());
+                }
+            }
+        }
+        out
     }
 }
 
@@ -265,14 +279,17 @@ pub struct SshOpts {
     pub http_proxy_port: Option<u16>,
     /// Auto-started port forwards.
     pub forwarded_ports: Option<Vec<PortForward>>,
-    /// Agent forwarding.
+    /// Forward the local SSH agent to the server (`false`; tab badge while on).
     pub agent_forward: Option<bool>,
-    /// X11 forwarding.
+    /// X11 forwarding with a fake cookie, OpenSSH-style (`false`; tab badge while on).
     pub x11: Option<bool>,
-    /// Algorithm allow-lists.
+    /// Algorithm allow-lists; an empty list keeps russh's defaults.
     pub algorithms: Option<Algorithms>,
-    /// Open new tabs of this profile on the existing connection (`true`).
+    /// Open new tabs, splits and SFTP of this profile on its live connection (`true`).
     pub reuse_session: Option<bool>,
+    /// Seconds a reused connection stays open after its last tab closed (10); 0 = close at
+    /// once.
+    pub reuse_linger: Option<u32>,
     /// Login scripts.
     pub scripts: Option<Vec<LoginScript>>,
     /// Remote directory to `cd` into after login.
@@ -358,6 +375,8 @@ pub struct EffectiveSsh {
     pub algorithms: Algorithms,
     /// See [`SshOpts::reuse_session`].
     pub reuse_session: bool,
+    /// See [`SshOpts::reuse_linger`].
+    pub reuse_linger: Duration,
     /// See [`SshOpts::scripts`].
     pub scripts: Vec<LoginScript>,
     /// See [`SshOpts::cwd`].
@@ -406,10 +425,6 @@ impl EffectiveSsh {
                 self.input_backspace != Backspace::Backspace,
                 "input_backspace",
             ),
-            (self.agent_forward, "agent_forward"),
-            (self.x11, "x11"),
-            (!self.algorithms.is_default(), "algorithms"),
-            (!self.reuse_session, "reuse_session = false"),
             (!self.scripts.is_empty(), "scripts"),
             (self.cwd.is_some(), "cwd"),
             (self.remember_cwd, "remember_cwd"),
@@ -459,6 +474,9 @@ pub fn resolve_ssh(p: &SshOpts, d: &SshOpts) -> EffectiveSsh {
         x11: pick!(x11).unwrap_or(false),
         algorithms: pick!(algorithms).unwrap_or_default(),
         reuse_session: pick!(reuse_session).unwrap_or(true),
+        reuse_linger: Duration::from_secs(
+            pick!(reuse_linger).map_or(u64::from(DEFAULT_REUSE_LINGER_S), u64::from),
+        ),
         scripts: pick!(scripts).unwrap_or_default(),
         cwd: pick!(cwd),
         remember_cwd: pick!(remember_cwd).unwrap_or(false),
@@ -521,6 +539,7 @@ pub fn strip_ssh(p: &SshOpts, d: &SshOpts) -> SshOpts {
         x11,
         algorithms,
         reuse_session,
+        reuse_linger,
         scripts,
         cwd,
         remember_cwd,

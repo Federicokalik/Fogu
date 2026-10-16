@@ -38,6 +38,7 @@ http_proxy_port = 3128
 agent_forward = true
 x11 = true
 reuse_session = false
+reuse_linger = 0
 cwd = "/srv"
 remember_cwd = true
 clear_service_messages_on_connect = false
@@ -105,18 +106,11 @@ fn every_field_resolves_and_is_reported_unsupported() {
     assert_eq!(ssh.http_proxy, Some(("proxy.lan".to_owned(), 3128)));
     assert!(!ssh.verify_host_keys && !ssh.clear_service_messages_on_connect);
     assert!(!ssh.warn_on_close);
+    assert!(ssh.agent_forward && ssh.x11 && !ssh.reuse_session);
+    assert_eq!(ssh.reuse_linger, Duration::ZERO);
     assert_eq!(
         ssh.unsupported(),
-        [
-            "input_backspace",
-            "agent_forward",
-            "x11",
-            "algorithms",
-            "reuse_session = false",
-            "scripts",
-            "cwd",
-            "remember_cwd",
-        ]
+        ["input_backspace", "scripts", "cwd", "remember_cwd",]
     );
 }
 
@@ -131,6 +125,7 @@ fn builtin_defaults() {
     assert_eq!(ssh.ready_timeout, None);
     assert_eq!(ssh.term, "xterm-256color");
     assert!(ssh.reuse_session && ssh.verify_host_keys && ssh.clear_service_messages_on_connect);
+    assert_eq!(ssh.reuse_linger, Duration::from_secs(10));
     assert!(ssh.warn_on_close && ssh.socks_remote_dns);
     assert!(!ssh.skip_banner && !ssh.agent_forward && !ssh.x11 && !ssh.remember_cwd);
     assert_eq!(ssh.unsupported(), Vec::<&str>::new());
@@ -309,11 +304,7 @@ fn not_supported_yet_names_every_option_unsupported_warns_about() {
         assert!(keys.contains_key(*name), "{name} is not an SshOpts key");
     }
     for warned in ssh.unsupported() {
-        let key = match warned.as_str() {
-            "reuse_session = false" => "reuse_session",
-            other => other,
-        };
-        assert!(NOT_SUPPORTED_YET.contains(&key), "{warned}");
+        assert!(NOT_SUPPORTED_YET.contains(&warned.as_str()), "{warned}");
     }
 }
 
@@ -350,4 +341,23 @@ fn forward_bind_host_exposure_and_problems() {
     let socks = fwd(ForwardKind::Dynamic, "", 1080, "", 0);
     assert_eq!(socks.problem(), None);
     assert_eq!(socks.label(), "D 127.0.0.1:1080 (SOCKS)");
+}
+
+#[test]
+fn unknown_algorithm_names_are_listed_once_per_category_order() {
+    let known = [
+        vec!["curve25519-sha256".to_owned()],
+        vec!["aes256-gcm@openssh.com".to_owned()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ];
+    let algorithms = Algorithms {
+        kex: vec!["curve25519-sha256".to_owned(), "bogus".to_owned()],
+        cipher: vec!["bogus".to_owned(), "aes256-gcm@openssh.com".to_owned()],
+        hmac: vec!["hmac-md5".to_owned()],
+        ..Algorithms::default()
+    };
+    assert_eq!(algorithms.unknown(&known), ["bogus", "hmac-md5"]);
+    assert_eq!(Algorithms::default().unknown(&known), Vec::<String>::new());
 }

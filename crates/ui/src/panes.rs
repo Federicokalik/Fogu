@@ -1,6 +1,7 @@
 //! Pane-level operations inside a tab's split tree: split, close, navigate, focus,
 //! divider ratios and the per-pane resize path.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -151,12 +152,52 @@ impl App {
         }
     }
 
+    /// What closing `target` stops: whether an SSH connection ends, and how many listening
+    /// port forwards stop. A connection other open panes still use keeps its forwards.
+    fn close_effects(&self, target: CloseTarget) -> (bool, usize) {
+        let closing: Vec<&Pane> = match target {
+            CloseTarget::Tab(id) => self
+                .tabs
+                .iter()
+                .filter(|t| t.id == id)
+                .flat_map(|t| t.panes.values())
+                .collect(),
+            CloseTarget::Pane(id) => self.pane(id).into_iter().collect(),
+        };
+        let closing_ids: Vec<PaneId> = closing.iter().map(|p| p.id).collect();
+        let still_used = |conn| {
+            self.tabs.iter().flat_map(|t| t.panes.values()).any(|p| {
+                !closing_ids.contains(&p.id) && p.state.is_running() && p.connection == Some(conn)
+            })
+        };
+        let ending: Vec<&Pane> = closing
+            .into_iter()
+            .filter(|p| p.is_ssh() && p.state.is_running())
+            .filter(|p| p.connection.is_none_or(|c| !still_used(c)))
+            .collect();
+        let forwards = crate::forwards_dialog::listening(ending.iter().copied());
+        (!ending.is_empty(), forwards)
+    }
+
     /// The "close live SSH session?" modal, if one is pending.
     pub(crate) fn close_modal(&self) -> Option<Modal> {
-        self.pending_close?;
+        let target = self.pending_close?;
+        let (ends, forwards) = self.close_effects(target);
+        let mut body = if ends {
+            "The connection is still open; closing ends it.".to_owned()
+        } else {
+            "Other tabs keep using the connection.".to_owned()
+        };
+        match forwards {
+            0 => {}
+            1 => body.push_str("\n1 port forward will stop."),
+            n => {
+                let _infallible = write!(body, "\n{n} port forwards will stop.");
+            }
+        }
         Some(Modal {
             title: "Close SSH session?",
-            body: "The connection is still open; closing ends it.".to_owned(),
+            body,
             buttons: vec![
                 ModalButton {
                     label: "Close",

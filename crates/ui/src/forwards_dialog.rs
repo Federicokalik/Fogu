@@ -80,12 +80,23 @@ pub fn apply_status(list: &mut Vec<ForwardStatus>, status: ForwardStatus) {
     }
 }
 
-/// Forwards of the tab's SSH panes that are listening (the tab bar badge).
+/// Forwards of the given SSH panes that are listening (the tab bar badge, the close
+/// confirmation), each connection's forwards counted once (panes can share one).
 pub fn listening<'a>(panes: impl Iterator<Item = &'a Pane>) -> usize {
-    panes
-        .flat_map(|p| &p.forwards)
-        .filter(|s| s.state == ForwardState::Listening)
-        .count()
+    let mut seen = Vec::new();
+    for pane in panes {
+        for s in pane
+            .forwards
+            .iter()
+            .filter(|s| s.state == ForwardState::Listening)
+        {
+            let key = (pane.connection.ok_or(pane.id), s.id);
+            if !seen.contains(&key) {
+                seen.push(key);
+            }
+        }
+    }
+    seen.len()
 }
 
 /// The form's draft as a forward, or why it isn't one.

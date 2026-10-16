@@ -60,7 +60,7 @@ fn run(ssh: &EffectiveSsh, name: &str) -> (SessionOutput, Vec<SessionWarning>, S
 #[test]
 fn missing_host_fails_with_no_host_after_warning_unsupported_options() {
     let mut ssh = EffectiveSsh::new("");
-    ssh.x11 = true;
+    ssh.remember_cwd = true;
     ssh.cwd = Some("/srv".into());
     let (end, warnings, grid) = run(&ssh, "nohost");
     assert!(
@@ -70,12 +70,12 @@ fn missing_host_fails_with_no_host_after_warning_unsupported_options() {
     assert_eq!(
         warnings,
         [SessionWarning::Unsupported(vec![
-            "x11".to_owned(),
-            "cwd".to_owned()
+            "cwd".to_owned(),
+            "remember_cwd".to_owned()
         ])]
     );
     assert!(
-        grid.contains("Not supported yet (ignored): x11, cwd"),
+        grid.contains("Not supported yet (ignored): cwd, remember_cwd"),
         "{grid}"
     );
     assert!(grid.contains("Error: no host configured"), "{grid}");

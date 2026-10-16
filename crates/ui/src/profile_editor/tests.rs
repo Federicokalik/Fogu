@@ -80,6 +80,7 @@ fn every_ssh_field_is_set_through_the_reducer() {
         (FieldId::KeepaliveCountMax, "3"),
         (FieldId::ReadyTimeout, "9000"),
         (FieldId::PromptTimeout, "30000"),
+        (FieldId::ReuseLinger, "30"),
         (FieldId::Weight, "-5"),
         (FieldId::ProxyCommand, "nc %h %p"),
         (FieldId::SocksHost, "127.0.0.1"),
@@ -211,6 +212,7 @@ fn every_ssh_field_is_set_through_the_reducer() {
             compression: vec!["none".into()],
         }),
         reuse_session: Some(false),
+        reuse_linger: Some(30),
         scripts: Some(vec![LoginScript {
             expect: "Password:".into(),
             send: "x\\n".into(),
@@ -514,4 +516,23 @@ fn closing_an_editor_tab_needs_no_session() {
     let tab = editor_tab(&app);
     let _ = app.update(Message::CloseTab(tab));
     assert_eq!(app.tabs.len(), tabs);
+}
+
+#[test]
+fn unknown_algorithm_names_block_save_until_unticked() {
+    let t = tmp();
+    let mut app = app_in(&t.0);
+    profiles(&mut app, ProfilesMsg::Edit(id("pi")));
+    let toggle = |name: &str| V::Toggle(name.to_owned());
+    field(&mut app, FieldId::Alg(AlgKind::Cipher), toggle("bogus"));
+    assert!(
+        matches!(&editor(&app).issues[..], [ConfigIssue::UnknownAlgorithms { names, .. }] if names == &["bogus"]),
+        "{:?}",
+        editor(&app).issues
+    );
+    assert!(!editor(&app).can_save());
+    field(&mut app, FieldId::Alg(AlgKind::Cipher), toggle("bogus"));
+    // A known but weaker name is allowed (the form shows a warning instead).
+    field(&mut app, FieldId::Alg(AlgKind::Hmac), toggle("hmac-sha1"));
+    assert!(editor(&app).can_save(), "{:?}", editor(&app).issues);
 }

@@ -17,6 +17,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
+#[cfg(feature = "ssh")]
+use fogu_core::ProfileId;
 use fogu_core::{EffectiveProfile, EffectiveSsh, PortForward, Size};
 use fogu_term::{ClipboardType, PromptMark, TermHandle};
 use tokio::runtime::{Handle, Runtime};
@@ -30,7 +32,12 @@ pub use prompt::{
 };
 pub use sftp::{SftpCmd, SftpEvent, SftpHandle, SftpRequest, display_name, validate_name};
 #[cfg(feature = "ssh")]
-pub use ssh::algorithms::{Supported as SupportedAlgorithms, supported as supported_algorithms};
+pub use ssh::algorithms::{
+    Supported as SupportedAlgorithms, non_default as non_default_algorithms,
+    supported as supported_algorithms,
+};
+#[cfg(feature = "ssh")]
+pub use ssh::pool::ConnectionPool;
 #[cfg(feature = "ssh")]
 pub use ssh::{PROMPT_TIMEOUT, SshPaths};
 pub use supervise::supervise;
@@ -40,10 +47,13 @@ const INPUT_CAPACITY: usize = 64;
 /// Capacity of the session → UI event channel.
 const OUTPUT_CAPACITY: usize = 256;
 
-/// Owns the tokio runtime that runs every session task (2 worker threads).
+/// Owns the tokio runtime that runs every session task (2 worker threads) and the SSH
+/// connections tabs share (`reuse_session`).
 #[derive(Debug)]
 pub struct SessionRuntime {
     rt: Runtime,
+    #[cfg(feature = "ssh")]
+    pool: ConnectionPool,
 }
 
 impl SessionRuntime {
@@ -54,12 +64,34 @@ impl SessionRuntime {
             .thread_name("fogu-session")
             .enable_all()
             .build()?;
-        Ok(Self { rt })
+        Ok(Self {
+            rt,
+            #[cfg(feature = "ssh")]
+            pool: ConnectionPool::default(),
+        })
     }
 
     /// Handle to pass to [`open`].
     pub fn handle(&self) -> &Handle {
         self.rt.handle()
+    }
+
+    /// [`open_ssh`], reusing a live connection of the same profile (same id and same resolved
+    /// options) when `ssh.reuse_session`: no second login, the tab gets a new channel.
+    #[cfg(feature = "ssh")]
+    pub fn open_ssh_shared(
+        &self,
+        profile: &ProfileId,
+        ssh: &EffectiveSsh,
+        paths: SshPaths,
+        size: Size,
+        term: TermHandle,
+    ) -> SessionHandle {
+        let pooled = ssh::pool::Pooled {
+            pool: self.pool.clone(),
+            profile: profile.clone(),
+        };
+        open_ssh_in(self.handle(), ssh, paths, Some(pooled), size, term)
     }
 }
 
@@ -136,6 +168,8 @@ pub enum SessionOutput {
     ClipboardStore(ClipboardRequest),
     /// A port forward started, failed, changed its connection count or stopped.
     ForwardStatus(ForwardStatus),
+    /// SSH: the connection this tab runs on (tabs sharing a connection report the same id).
+    Connection(ConnectionId),
     /// The transport ended.
     Exited(ExitInfo),
     /// The session failed.
@@ -152,7 +186,19 @@ pub enum SessionWarning {
     /// A port forward listens on an address other machines can reach (sanitized label,
     /// e.g. `L 0.0.0.0:8080 → web:80`).
     ForwardExposed(String),
+    /// The local SSH agent is forwarded: the server can use its keys (persistent badge).
+    AgentForwarded,
+    /// X11 is forwarded: remote programs can read this display's input (persistent badge).
+    X11Forwarded,
+    /// Algorithm names the SSH library doesn't know; ignored (sanitized).
+    UnknownAlgorithms(Vec<String>),
+    /// Algorithms outside the library's defaults (weaker or legacy) are enabled.
+    WeakAlgorithms(Vec<String>),
 }
+
+/// Identifies one SSH connection of this process (never reused).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ConnectionId(pub u64);
 
 /// Identifies one port forward of a session (assigned by the session, never reused).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -323,6 +369,7 @@ pub fn open(
 }
 
 /// [`open`] for an SSH profile with explicit `known_hosts` locations (`--config-dir`, tests).
+/// The connection is never shared; see [`SessionRuntime::open_ssh_shared`].
 #[cfg(feature = "ssh")]
 pub fn open_ssh(
     rt: &Handle,
@@ -331,10 +378,31 @@ pub fn open_ssh(
     size: Size,
     term: TermHandle,
 ) -> SessionHandle {
+    open_ssh_in(rt, ssh, paths, None, size, term)
+}
+
+#[cfg(feature = "ssh")]
+fn open_ssh_in(
+    rt: &Handle,
+    ssh: &EffectiveSsh,
+    paths: SshPaths,
+    pooled: Option<ssh::pool::Pooled>,
+    size: Size,
+    term: TermHandle,
+) -> SessionHandle {
     let (sftp, sftp_ends) = ssh::sftp::channels();
     let mut handle = spawn(rt, |in_rx, out_tx| {
         let span = tracing::info_span!("session", kind = "ssh");
-        let task = ssh::run_ssh(ssh.clone(), paths, size, term, in_rx, out_tx, sftp_ends);
+        let task = ssh::run_ssh(
+            ssh.clone(),
+            paths,
+            pooled,
+            size,
+            term,
+            in_rx,
+            out_tx,
+            sftp_ends,
+        );
         rt.spawn(task.instrument(span))
     });
     handle.sftp = Some(sftp);

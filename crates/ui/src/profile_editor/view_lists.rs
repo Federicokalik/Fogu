@@ -1,7 +1,7 @@
 //! The list-like parts of the SSH form: the port forwards and login scripts tables and the
 //! algorithm multi-selects (from russh's supported lists).
 
-use fogu_core::SshOpts;
+use fogu_core::{Algorithms, SshOpts};
 use iced::widget::{Column, checkbox, row, text, text_input};
 use iced::{Alignment, Length};
 
@@ -133,9 +133,17 @@ pub(super) fn algorithms<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, look: Look
         "algorithms",
         line(
             look.dim,
-            "Nothing ticked in a list = the built-in defaults.",
+            "Nothing ticked in a list = the built-in defaults (strict key exchange always on).",
         ),
     )];
+    let weak = weak(&chosen);
+    if !weak.is_empty() {
+        let names: Vec<String> = weak.iter().map(|n| fogu_term::sanitize_title(n)).collect();
+        rows.push(line(
+            WARN,
+            &format!("Weaker than the defaults: {}", names.join(", ")),
+        ));
+    }
     for (kind, label, chosen, supported) in kinds {
         let mut options: Vec<(String, String, bool)> = supported
             .iter()
@@ -159,10 +167,8 @@ type Lists = [Vec<String>; 5];
 
 #[cfg(feature = "ssh")]
 fn supported() -> &'static Lists {
-    static LISTS: std::sync::LazyLock<Lists> = std::sync::LazyLock::new(|| {
-        let s = fogu_session::supported_algorithms();
-        [s.kex, s.cipher, s.hmac, s.server_host_key, s.compression]
-    });
+    static LISTS: std::sync::LazyLock<Lists> =
+        std::sync::LazyLock::new(|| fogu_session::supported_algorithms().lists());
     &LISTS
 }
 
@@ -170,6 +176,29 @@ fn supported() -> &'static Lists {
 fn supported() -> &'static Lists {
     static EMPTY: Lists = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     &EMPTY
+}
+
+/// Chosen names outside russh's defaults.
+#[cfg(feature = "ssh")]
+fn weak(chosen: &Algorithms) -> Vec<String> {
+    fogu_session::non_default_algorithms(chosen)
+}
+
+#[cfg(not(feature = "ssh"))]
+fn weak(_: &Algorithms) -> Vec<String> {
+    Vec::new()
+}
+
+/// Names in `algorithms` this build doesn't know (sanitized); none without SSH support.
+pub(super) fn unknown(algorithms: &Algorithms) -> Vec<String> {
+    if cfg!(not(feature = "ssh")) {
+        return Vec::new();
+    }
+    algorithms
+        .unknown(supported())
+        .iter()
+        .map(|n| fogu_term::sanitize_title(n))
+        .collect()
 }
 
 pub(super) fn scripts<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, look: Look) -> Row<'a> {

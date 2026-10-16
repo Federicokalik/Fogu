@@ -9,7 +9,7 @@ use fogu_core::{Background, Config, LocalOpts, ProfileKind};
 use iced::widget::{Column, button, column, container, row, scrollable, space, text};
 use iced::{Alignment, Element, Length};
 
-use super::fields::{BG_FIT, BG_KIND, FieldId, OSC52, SESSION_END};
+use super::fields::{AlgKind, BG_FIT, BG_KIND, FieldId, OSC52, SESSION_END};
 use super::handlers::EditorMsg;
 use super::{ProfileEditor, Source};
 use crate::forms::{self, ERROR, Field, WARN};
@@ -105,6 +105,7 @@ fn issue_field(issue: &ConfigIssue) -> FieldId {
         ConfigIssue::MissingHost(_) => FieldId::Host,
         ConfigIssue::JumpHostCycle { .. } => FieldId::JumpHost,
         ConfigIssue::BadForward { .. } => FieldId::Forwards,
+        ConfigIssue::UnknownAlgorithms { .. } => FieldId::Alg(AlgKind::Kex),
         ConfigIssue::UnknownGroup { .. } => FieldId::Group,
         _ => FieldId::Name,
     }

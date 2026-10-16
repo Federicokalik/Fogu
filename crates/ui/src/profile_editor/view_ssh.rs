@@ -4,7 +4,7 @@
 
 use fogu_core::config::ssh_opts::{
     DEFAULT_AGENT_KEY_LIFETIME_S, DEFAULT_KEEPALIVE_COUNT_MAX, DEFAULT_KEEPALIVE_INTERVAL_MS,
-    DEFAULT_PROMPT_TIMEOUT_MS, DEFAULT_SSH_PORT, DEFAULT_TERM, resolve_ssh,
+    DEFAULT_PROMPT_TIMEOUT_MS, DEFAULT_REUSE_LINGER_S, DEFAULT_SSH_PORT, DEFAULT_TERM, resolve_ssh,
 };
 use fogu_core::{Config, EffectiveSsh, SshOpts};
 
@@ -163,13 +163,6 @@ fn connection<'a>(
             "Ask before closing a connected tab",
             eff.warn_on_close,
         ),
-        toggle_row(
-            ed,
-            look,
-            (FieldId::ReuseSession, "reuse_session"),
-            "Reuse the connection for new tabs",
-            eff.reuse_session,
-        ),
         number_row(
             ed,
             look,
@@ -180,7 +173,36 @@ fn connection<'a>(
         ),
     ];
     rows.splice(4..4, timing_rows(ed, ssh, d, look));
+    let at = rows.len() - 1;
+    rows.splice(at..at, reuse_rows(ed, ssh, d, eff, look));
     forms::section(look, "Connection", rows)
+}
+
+/// Session reuse: the toggle and how long an unused connection stays open.
+fn reuse_rows<'a>(
+    ed: &ProfileEditor,
+    ssh: &SshOpts,
+    d: &SshOpts,
+    eff: &EffectiveSsh,
+    look: Look,
+) -> Vec<Row<'a>> {
+    vec![
+        toggle_row(
+            ed,
+            look,
+            (FieldId::ReuseSession, "reuse_session"),
+            "Reuse the connection for new tabs",
+            eff.reuse_session,
+        ),
+        number_row(
+            ed,
+            look,
+            (FieldId::ReuseLinger, "reuse_linger"),
+            "Keep a reused connection after its last tab (s)",
+            ssh.reuse_linger,
+            &d.reuse_linger.unwrap_or(DEFAULT_REUSE_LINGER_S),
+        ),
+    ]
 }
 
 /// Keepalive and timeouts (milliseconds, like the config file).
@@ -340,7 +362,9 @@ fn network<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, eff: &EffectiveSsh, look
     );
     let x11 = forms::note(
         toggle_row(ed, look, (FieldId::X11, "x11"), "X11 forwarding", eff.x11),
-        "Remote programs can read your keyboard and screen.",
+        "Remote X programs can read your keyboard and screen. The real X cookie stays here \
+         (the server gets a fake one), but that does not stop a forwarded program from \
+         watching your display.",
         look.dim,
     );
     let rows = vec![

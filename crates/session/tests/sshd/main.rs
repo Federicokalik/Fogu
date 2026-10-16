@@ -21,6 +21,7 @@ mod auth;
 mod forward;
 mod hostile;
 mod hostkeys;
+mod reuse;
 mod route;
 mod sftp;
 mod shell;

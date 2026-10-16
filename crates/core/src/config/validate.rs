@@ -41,6 +41,15 @@ pub enum ConfigIssue {
         /// What is wrong.
         reason: &'static str,
     },
+    /// Algorithm names the SSH library doesn't know (`Algorithms::unknown`). Reported by the
+    /// profile editor, which knows the library's lists; [`validate`] itself can't.
+    #[error("unknown algorithms: {}", .names.join(", "))]
+    UnknownAlgorithms {
+        /// The profile.
+        profile: ProfileId,
+        /// The unknown names.
+        names: Vec<String>,
+    },
     /// Following `jump_host` from this profile comes back to it.
     #[error("jump host loop: {}", .chain.join(" → "))]
     JumpHostCycle {
@@ -79,6 +88,7 @@ impl ConfigIssue {
             | Self::EmptyProfileName(id)
             | Self::MissingHost(id)
             | Self::BadForward { profile: id, .. }
+            | Self::UnknownAlgorithms { profile: id, .. }
             | Self::DuplicateProfileName { profile: id, .. }
             | Self::JumpHostCycle { profile: id, .. }
             | Self::UnknownGroup { profile: id, .. } => Some(id),

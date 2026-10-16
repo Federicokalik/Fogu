@@ -185,7 +185,7 @@ pub(crate) fn canonical_dir(path: &Path) -> Option<PathBuf> {
 
 /// This machine's hostname (`/proc/sys/kernel/hostname`), for [`is_local_host`]. Empty on
 /// failure, which only ever widens what counts as "local" by one fewer alias, never narrows it.
-fn local_hostname() -> String {
+pub(crate) fn local_hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|s| s.trim().to_owned())
         .unwrap_or_default()

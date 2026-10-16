@@ -66,8 +66,15 @@ pub(crate) fn owned_sockets(dir: &Path, uid: u32) -> Vec<PathBuf> {
 
 /// The configured agent (`agent_path`), else the first live candidate.
 pub(crate) async fn connect(configured: Option<&Path>) -> Option<Agent> {
+    find(configured).await.map(|(_, agent)| agent)
+}
+
+/// [`connect`], also returning the socket path (agent forwarding connects to it per channel).
+pub(crate) async fn find(configured: Option<&Path>) -> Option<(PathBuf, Agent)> {
     if let Some(path) = configured {
-        return try_connect(path).await;
+        return try_connect(path)
+            .await
+            .map(|agent| (path.to_owned(), agent));
     }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let uid = home
@@ -85,10 +92,30 @@ pub(crate) async fn connect(configured: Option<&Path>) -> Option<Agent> {
         dir_sockets,
     ) {
         if let Some(agent) = try_connect(&path).await {
-            return Some(agent);
+            return Some((path, agent));
         }
     }
     None
+}
+
+/// Serves one `auth-agent@openssh.com` channel: a fresh connection to the agent at `socket`,
+/// then [`pump`](super::forward::pump). The channel is accepted only once the agent answered.
+pub(crate) async fn serve_forward(
+    channel: russh::Channel<russh::client::Msg>,
+    reply: russh::client::ChannelOpenHandle,
+    socket: &Path,
+) {
+    match tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(socket)).await {
+        Ok(Ok(mut agent)) => {
+            reply.accept().await;
+            let mut stream = channel.into_stream();
+            let _totals = super::forward::pump(&mut stream, &mut agent).await;
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(error = %err, "forwarded agent request refused: agent unreachable");
+        }
+        Err(_elapsed) => tracing::warn!("forwarded agent request refused: agent timed out"),
+    }
 }
 
 async fn try_connect(path: &Path) -> Option<Agent> {

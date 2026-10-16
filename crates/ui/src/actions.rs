@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use fogu_core::{Action, EffectiveProfile, Profile, Side, Size, resolve};
+use fogu_core::{Action, EffectiveProfile, Profile, ProfileId, Side, Size, resolve};
 use fogu_session::{SessionHandle, SessionInput};
 use fogu_term::{Scroll, TermHandle, input, sanitize_title};
 use iced::widget::operation;
@@ -130,33 +130,45 @@ impl App {
             EffectiveProfile::Ssh(ssh) => sanitize_title(&format!("{}@{}", ssh.user, ssh.host)),
             EffectiveProfile::Local(_) => profile.name.clone(),
         };
-        let handle = self.open_session(&effective, size, term.share());
+        let handle = self.open_session(&profile.id, &effective, size, term.share());
         let id = PaneId(self.take_id());
         Pane::new(id, profile.clone(), default_title, term, handle)
     }
 
-    /// SSH sessions keep their `known_hosts` next to the config (`--config-dir`).
+    /// SSH sessions keep their `known_hosts` next to the config (`--config-dir`) and reuse a
+    /// live connection of the same profile (`reuse_session`).
     #[cfg(not(test))]
     fn open_session(
         &mut self,
+        id: &ProfileId,
         profile: &EffectiveProfile,
         size: Size,
         term: TermHandle,
     ) -> SessionHandle {
-        let rt = self.runtime.handle();
         #[cfg(feature = "ssh")]
-        if let (EffectiveProfile::Ssh(ssh), Some(dir)) = (profile, &self.config_dir) {
-            let paths = fogu_session::SshPaths::in_config_dir(dir);
-            return fogu_session::open_ssh(rt, ssh, paths, size, term);
+        if let EffectiveProfile::Ssh(ssh) = profile {
+            let paths = self.config_dir.as_deref().map_or_else(
+                fogu_session::SshPaths::default_for_user,
+                fogu_session::SshPaths::in_config_dir,
+            );
+            return self.runtime.open_ssh_shared(id, ssh, paths, size, term);
         }
-        fogu_session::open(rt, profile, size, term)
+        #[cfg(not(feature = "ssh"))]
+        let _ = id;
+        fogu_session::open(self.runtime.handle(), profile, size, term)
     }
 
     /// Test builds: an inert session (no process). Its input end is kept in `stub_inputs`; its
     /// event sender is dropped, so the event stream is empty. SSH stubs get an SFTP handle whose
     /// command end is kept in `stub_sftp`.
     #[cfg(test)]
-    fn open_session(&mut self, p: &EffectiveProfile, _: Size, _: TermHandle) -> SessionHandle {
+    fn open_session(
+        &mut self,
+        _: &ProfileId,
+        p: &EffectiveProfile,
+        _: Size,
+        _: TermHandle,
+    ) -> SessionHandle {
         self.stub_profiles.push(p.clone());
         let (input, input_rx) = tokio::sync::mpsc::channel(8);
         let (_, events) = tokio::sync::mpsc::channel(8);

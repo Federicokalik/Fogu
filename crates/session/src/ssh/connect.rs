@@ -7,6 +7,7 @@
 //! key, re-key exchanges must present the same key or are refused without asking.
 
 use std::borrow::Cow;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,11 +17,13 @@ use russh::client;
 use russh::keys::{Algorithm, PublicKey, PublicKeyOrCertificate};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until};
+use tracing::Instrument as _;
 
 use super::forward::Forwarded;
 use super::hostkeys::{self, Lookup};
 use super::transport::{self, Route};
-use super::{SshPaths, Stop, Ui};
+use super::x11::X11Fwd;
+use super::{SshPaths, Stop, Ui, agent, algorithms};
 use crate::{HostKeyFailure, PromptKind, PromptReply, SessionError, SessionOutput, SessionWarning};
 
 /// Messages from the russh handler (running inside russh's session task) to our task.
@@ -42,6 +45,11 @@ pub(crate) struct Client {
     forwarded: mpsc::Sender<Forwarded>,
     /// The key accepted for this connection; re-keys must match it.
     accepted: Option<PublicKey>,
+    /// Agent socket for `auth-agent@openssh.com` channels; `None` = agent forwarding is off
+    /// and such channels are rejected.
+    agent: Option<PathBuf>,
+    /// X11 forwarding state; `None` = `x11` channels are rejected.
+    x11: Option<Arc<X11Fwd>>,
 }
 
 impl client::Handler for Client {
@@ -113,6 +121,45 @@ impl client::Handler for Client {
         }
         std::future::ready(Ok(()))
     }
+
+    fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        match self.agent.clone() {
+            Some(socket) => {
+                let serve = async move { agent::serve_forward(channel, reply, &socket).await };
+                tokio::spawn(serve.in_current_span());
+            }
+            // Dropping the handle rejects: we never asked for agent forwarding.
+            None => {
+                tracing::warn!("agent channel opened by the server without forwarding; rejected");
+            }
+        }
+        std::future::ready(Ok(()))
+    }
+
+    fn server_channel_open_x11(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        if let Some(x11) = self.x11.clone() {
+            let serve = async move {
+                reply.accept().await;
+                super::x11::serve(channel.into_stream(), &x11).await;
+            };
+            tokio::spawn(serve.in_current_span());
+        } else {
+            tracing::warn!("X11 channel opened by the server without forwarding; rejected");
+        }
+        std::future::ready(Ok(()))
+    }
 }
 
 /// An established, not yet authenticated connection.
@@ -122,6 +169,10 @@ pub(crate) struct Connection {
     pub(crate) events: mpsc::Receiver<HandlerEvent>,
     /// Server-opened remote-forward channels (see [`Client`]).
     pub(crate) forwarded: mpsc::Receiver<Forwarded>,
+    /// Request agent forwarding on each shell channel (an agent was found).
+    pub(crate) agent_forward: bool,
+    /// Request X11 forwarding (`x11-req`) on each shell channel with this fake cookie.
+    pub(crate) x11: Option<Arc<X11Fwd>>,
     /// The jump host connection / proxy command under this one; declared last, so it is
     /// dropped (closed) after `handle`.
     pub(crate) route: Route,
@@ -184,16 +235,26 @@ pub(crate) async fn connect(
     let (stream, mut route) = transport::open(ssh, paths, ui, ready, depth).await?;
     let files = paths.files();
     let (kh_host, kh_port) = known_hosts_name(ssh);
+    let preferred = checked_algorithms(ssh, ui).await?;
     let config = Arc::new(config(
         ssh,
+        preferred,
         &hostkeys::known_algorithms(&files, kh_host, kh_port),
     ));
+    let (agent, x11) = if depth == 0 {
+        forwarding(ssh, ui).await?
+    } else {
+        (None, None)
+    };
     let (tx, mut events) = mpsc::channel(8);
     let (forwarded_tx, forwarded) = mpsc::channel(FORWARDED_QUEUE);
+    let agent_forward = agent.is_some();
     let handler = Client {
         events: tx,
         forwarded: forwarded_tx,
         accepted: None,
+        agent,
+        x11: x11.clone(),
     };
     let fut = client::connect_stream(config, stream, handler);
     tokio::pin!(fut);
@@ -203,7 +264,14 @@ pub(crate) async fn connect(
         tokio::select! {
             result = &mut fut => {
                 return match result {
-                    Ok(handle) => Ok(Connection { handle, events, forwarded, route }),
+                    Ok(handle) => Ok(Connection {
+                        handle,
+                        events,
+                        forwarded,
+                        agent_forward,
+                        x11,
+                        route,
+                    }),
                     Err(err) => {
                         let proxy = match refused {
                             None => route.proxy_failure().await,
@@ -251,11 +319,71 @@ pub(crate) fn connect_boxed<'a>(
     Box::pin(connect(ssh, paths, ui, ready, depth))
 }
 
-/// The transport config: keepalives from the profile, `TCP_NODELAY`, and the host-key
-/// algorithms we already have records for moved to the front (OpenSSH does the same), so a
-/// server with several host keys presents the one we know instead of a false "changed".
-fn config(ssh: &EffectiveSsh, known: &[Algorithm]) -> client::Config {
-    let mut preferred = russh::Preferred::default();
+/// The profile's algorithm lists as russh preferences; unknown names (ignored) and names
+/// outside russh's defaults are shown and reported as warnings.
+async fn checked_algorithms(ssh: &EffectiveSsh, ui: &mut Ui) -> Result<russh::Preferred, Stop> {
+    let mapped = algorithms::preferred(&ssh.algorithms);
+    if !mapped.unknown.is_empty() {
+        let list = mapped.unknown.join(", ");
+        ui.service(&format!("Unknown algorithms ignored: {list}"))
+            .await?;
+        ui.pump
+            .emit(SessionOutput::Warning(SessionWarning::UnknownAlgorithms(
+                mapped.unknown,
+            )))
+            .await?;
+    }
+    if !mapped.weak.is_empty() {
+        let list = mapped.weak.join(", ");
+        tracing::warn!(algorithms = %list, "algorithms outside the defaults enabled");
+        ui.service(&format!(
+            "Weaker algorithms enabled by this profile: {list}"
+        ))
+        .await?;
+        ui.pump
+            .emit(SessionOutput::Warning(SessionWarning::WeakAlgorithms(
+                mapped.weak,
+            )))
+            .await?;
+    }
+    Ok(mapped.preferred)
+}
+
+/// Agent socket and X11 state for the target connection, when the profile asks for them;
+/// why one can't be forwarded is shown and the connection goes on without it.
+async fn forwarding(
+    ssh: &EffectiveSsh,
+    ui: &mut Ui,
+) -> Result<(Option<PathBuf>, Option<Arc<X11Fwd>>), Stop> {
+    let mut agent_socket = None;
+    if ssh.agent_forward {
+        match agent::find(ssh.agent_path.as_deref()).await {
+            Some((socket, _agent)) => agent_socket = Some(socket),
+            None => {
+                ui.service("Agent forwarding off: no SSH agent found")
+                    .await?;
+            }
+        }
+    }
+    let mut x11 = None;
+    if ssh.x11 {
+        match X11Fwd::from_env() {
+            Ok(fwd) => x11 = Some(Arc::new(fwd)),
+            Err(why) => ui.service(&format!("X11 forwarding off: {why}")).await?,
+        }
+    }
+    Ok((agent_socket, x11))
+}
+
+/// The transport config: keepalives from the profile, `TCP_NODELAY`, the profile's algorithm
+/// preferences, and the host-key algorithms we already have records for moved to the front
+/// (OpenSSH does the same), so a server with several host keys presents the one we know
+/// instead of a false "changed".
+fn config(
+    ssh: &EffectiveSsh,
+    mut preferred: russh::Preferred,
+    known: &[Algorithm],
+) -> client::Config {
     if !known.is_empty() {
         let is_known = |alg: &Algorithm| {
             known.iter().any(|k| {

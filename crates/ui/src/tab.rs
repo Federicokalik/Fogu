@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fogu_core::{Profile, ProfileKind, RgbColor, Size, SplitTree, TabBackground};
 use fogu_session::{
-    ExitInfo, ForwardStatus, SessionHandle, SessionInput, SessionOutput, SessionWarning, SftpEvent,
-    SftpRequest,
+    ConnectionId, ExitInfo, ForwardStatus, SessionHandle, SessionInput, SessionOutput,
+    SessionWarning, SftpEvent, SftpRequest,
 };
 use fogu_term::{RenderSnapshot, Scroll, TermHandle};
 use tokio::sync::mpsc::Sender;
@@ -142,6 +142,8 @@ pub struct Pane {
     pub remote_cwd: Option<String>,
     /// SSH panes: the session's port forwards (latest status of each; stopped ones dropped).
     pub forwards: Vec<ForwardStatus>,
+    /// SSH panes: the connection the session runs on (shared with `reuse_session`).
+    pub connection: Option<ConnectionId>,
 }
 
 impl Pane {
@@ -176,6 +178,7 @@ impl Pane {
             warnings: Vec::new(),
             remote_cwd: None,
             forwards: Vec::new(),
+            connection: None,
         }
     }
 
