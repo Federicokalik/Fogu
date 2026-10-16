@@ -13,6 +13,8 @@ pub struct Prompter<F> {
     answer: F,
     /// Every prompt seen, in order.
     pub asked: Vec<PromptKind>,
+    /// The jump host each of `asked` was for (`None` = the profile's own host).
+    pub via: Vec<Option<String>>,
 }
 
 impl<F: FnMut(&PromptKind) -> PromptReply> Prompter<F> {
@@ -21,6 +23,7 @@ impl<F: FnMut(&PromptKind) -> PromptReply> Prompter<F> {
         Self {
             answer,
             asked: Vec::new(),
+            via: Vec::new(),
         }
     }
 
@@ -37,9 +40,10 @@ impl<F: FnMut(&PromptKind) -> PromptReply> Prompter<F> {
         let pump = async {
             while let Some(event) = session.events.recv().await {
                 match event {
-                    SessionOutput::Prompt(id, kind) => {
+                    SessionOutput::Prompt(id, kind, via) => {
                         let reply = (self.answer)(&kind);
                         self.asked.push(kind);
+                        self.via.push(via);
                         if session
                             .input
                             .send(SessionInput::PromptReply(id, reply))

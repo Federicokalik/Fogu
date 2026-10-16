@@ -12,8 +12,10 @@ pub mod algorithms;
 mod auth;
 mod connect;
 mod hostkeys;
+mod proxy;
 pub(crate) mod sftp;
 mod shell;
+mod transport;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -105,6 +107,8 @@ pub(crate) struct Ui {
     prompt_timeout: Option<Duration>,
     /// The SFTP engine's channel ends, handed to the engine once the shell is up.
     pub(crate) sftp: Option<SftpEnds>,
+    /// `user@host:port` of the jump host being connected, sent with each prompt.
+    pub(crate) via: Option<String>,
 }
 
 impl Ui {
@@ -130,7 +134,9 @@ impl Ui {
         let id = PromptId(self.next_prompt);
         self.next_prompt += 1;
         tracing::debug!(?id, ?kind, "prompt");
-        self.pump.emit(SessionOutput::Prompt(id, kind)).await?;
+        self.pump
+            .emit(SessionOutput::Prompt(id, kind, self.via.clone()))
+            .await?;
         let limit = self.prompt_timeout;
         let wait = async {
             loop {
@@ -184,6 +190,7 @@ pub(crate) async fn run_ssh(
         next_prompt: 0,
         prompt_timeout: ssh.prompt_timeout,
         sftp: Some(sftp),
+        via: None,
     };
     let out = match session(&ssh, &paths, &mut ui).await {
         Ok(info) => SessionOutput::Exited(info),
@@ -216,22 +223,8 @@ async fn session(ssh: &EffectiveSsh, paths: &SshPaths, ui: &mut Ui) -> Result<Ex
             )))
             .await?;
     }
-    if ssh.host.is_empty() {
-        return Err(SessionError::NoHost.into());
-    }
-    let route = ssh.unsupported_route();
-    if !route.is_empty() {
-        return Err(SessionError::RouteNotSupported(crate::sanitize_remote(
-            &route.join(", "),
-            300,
-            false,
-        ))
-        .into());
-    }
     let ready = ssh.ready_timeout.unwrap_or(DEFAULT_READY_TIMEOUT);
-    ui.service(&format!("Connecting to {}:{}…", ssh.host, ssh.port))
-        .await?;
-    let mut conn = connect::connect(ssh, paths, ui, ready).await?;
+    let mut conn = connect::connect(ssh, paths, ui, ready, 0).await?;
     auth::authenticate(&mut conn, ssh, ui, ready).await?;
     shell::run(conn, ssh, ui, ready).await
 }

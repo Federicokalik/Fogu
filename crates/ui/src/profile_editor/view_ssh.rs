@@ -12,13 +12,13 @@ use super::ProfileEditor;
 use super::fields::{AUTH, BACKSPACE, FieldId};
 use super::view::{Row, index_of, labels, shown, with_notes};
 use super::view_lists::{algorithms, forwards, line, scripts};
-use crate::forms::{self, ERROR, WARN};
+use crate::forms::{self, ERROR};
 use crate::sftp::panel::Look;
 
-/// Shown at the top of Network while jump hosts and proxies are not implemented.
-const ROUTE_BANNER: &str = "Jump hosts and proxies are not supported yet. A profile that sets \
-     one refuses to connect (it never connects directly instead, which could reach another \
-     machine).";
+/// Shown at the top of Network.
+const ROUTE_NOTE: &str = "Reach the host through at most one of: a jump host, a proxy command, \
+     a SOCKS5 proxy or an HTTP proxy. A profile that sets more than one refuses to connect. \
+     Every jump host's key is checked like any other host's.";
 const NO_PASSWORDS: &str = "Stored passwords are not available yet: you are asked when connecting.";
 
 pub(super) fn sections<'a>(
@@ -308,7 +308,7 @@ fn network<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, eff: &EffectiveSsh, look
             ssh.proxy_command.as_deref(),
             "e.g. nc %h %p",
         ),
-        "Runs on this computer with your rights.",
+        "Runs on this computer with your rights (through $SHELL). %h, %p, %r = host, port, user.",
         look.dim,
     );
     let agent = forms::note(
@@ -328,7 +328,7 @@ fn network<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, eff: &EffectiveSsh, look
         look.dim,
     );
     let rows = vec![
-        line(WARN, ROUTE_BANNER),
+        line(look.dim, ROUTE_NOTE),
         jump_row,
         proxy,
         text_row(
@@ -346,6 +346,13 @@ fn network<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, eff: &EffectiveSsh, look
             "SOCKS5 proxy port",
             ssh.socks_proxy_port,
             &1080,
+        ),
+        toggle_row(
+            ed,
+            look,
+            (FieldId::SocksRemoteDns, "socks_proxy_remote_dns"),
+            "Let the SOCKS5 proxy look up the host name",
+            eff.socks_remote_dns,
         ),
         text_row(
             ed,

@@ -100,6 +100,8 @@ pub enum PromptMsg {
 pub(crate) struct PromptState {
     pub id: PromptId,
     pub kind: PromptKind,
+    /// The jump host (`user@host:port`) this prompt is for; `None` = the pane's own host.
+    pub via: Option<String>,
     answers: Vec<SecretString>,
     replace_armed: bool,
 }
@@ -109,6 +111,7 @@ impl fmt::Debug for PromptState {
         f.debug_struct("PromptState")
             .field("id", &self.id)
             .field("kind", &self.kind)
+            .field("via", &self.via)
             .field("answers", &self.answers.len())
             .field("replace_armed", &self.replace_armed)
             .finish()
@@ -116,7 +119,7 @@ impl fmt::Debug for PromptState {
 }
 
 impl PromptState {
-    pub fn new(id: PromptId, kind: PromptKind) -> Self {
+    pub fn new(id: PromptId, kind: PromptKind, via: Option<String>) -> Self {
         let fields = match &kind {
             PromptKind::Password { .. } | PromptKind::KeyPassphrase { .. } => 1,
             PromptKind::KeyboardInteractive { prompts, .. } => prompts.len(),
@@ -125,6 +128,7 @@ impl PromptState {
         Self {
             id,
             kind,
+            via,
             answers: (0..fields).map(|_| SecretString::default()).collect(),
             replace_armed: false,
         }
@@ -181,13 +185,14 @@ impl App {
         pane_id: PaneId,
         id: PromptId,
         kind: PromptKind,
+        via: Option<String>,
     ) -> Task<Message> {
         let in_front = self.active_pane().is_some_and(|p| p.id == pane_id);
         let Some(pane) = self.pane_mut(pane_id) else {
             return Task::none();
         };
-        tracing::info!(?id, ?kind, "session prompt");
-        let state = PromptState::new(id, kind);
+        tracing::info!(?id, ?kind, ?via, "session prompt");
+        let state = PromptState::new(id, kind, via);
         let has_field = state.fields() > 0;
         if let Some(old) = pane.prompt.replace(state) {
             pane.control(SessionInput::PromptReply(old.id, PromptReply::Reject));
@@ -433,6 +438,20 @@ pub(crate) fn view(pane: PaneId, state: &PromptState) -> Element<'_, Message> {
             }
             col.push(submit_row(pane, "Submit")).into()
         }
+    };
+    // A jump host's prompt says so above everything else (its host differs from the tab's).
+    let content = match &state.via {
+        Some(via) => column![
+            text(format!(
+                "Jump host {} (on the way to this tab's host)",
+                safe(via)
+            ))
+            .size(13),
+            content
+        ]
+        .spacing(8)
+        .into(),
+        None => content,
     };
     modal::frame(scrollable(content).into(), DIALOG_W)
 }

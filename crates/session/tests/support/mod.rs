@@ -4,5 +4,6 @@
 pub mod client;
 pub mod fake_server;
 pub mod prompter;
+pub mod proxy;
 pub mod sshd;
 pub mod tmp;

@@ -123,8 +123,10 @@ pub enum SessionOutput {
     /// per backlog.
     InputDropped,
     /// The session needs an answer from the user (SSH): reply with
-    /// [`SessionInput::PromptReply`] carrying the same id within [`PROMPT_TIMEOUT`].
-    Prompt(PromptId, PromptKind),
+    /// [`SessionInput::PromptReply`] carrying the same id within [`PROMPT_TIMEOUT`]. The
+    /// third field names the jump host (`user@host:port`) the prompt is for; `None` = the
+    /// profile's own host.
+    Prompt(PromptId, PromptKind, Option<String>),
     /// Something the user should know about this session (warning badge / toast).
     Warning(SessionWarning),
     /// OSC 52 clipboard write; the UI applies the policy.
@@ -230,12 +232,22 @@ pub enum SessionError {
     /// The server's host key was not accepted.
     #[error(transparent)]
     HostKey(HostKeyFailure),
-    /// The profile reaches its host through a jump host or proxy, which is not implemented
-    /// yet; a direct connection could reach a different machine, so none is made.
-    #[error(
-        "not connecting: {0} not supported yet (a direct connection could reach a different machine)"
-    )]
-    RouteNotSupported(String),
+    /// The profile's route (jump host, proxy) can't be followed exactly (see
+    /// `EffectiveSsh::route_problems`); a direct connection could reach a different machine,
+    /// so none is made.
+    #[error("not connecting: {0} (a direct connection could reach a different machine)")]
+    Route(String),
+    /// The SOCKS5 / HTTP proxy or the proxy command failed (sanitized text).
+    #[error("proxy: {0}")]
+    Proxy(String),
+    /// Connecting or logging in to a jump host failed.
+    #[error("jump host {hop}: {error}")]
+    Jump {
+        /// `user@host:port` of the hop (sanitized).
+        hop: String,
+        /// What went wrong there.
+        error: Box<SessionError>,
+    },
     /// Every allowed authentication method failed.
     #[error("authentication failed")]
     AuthFailed,

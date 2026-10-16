@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::route::Jump;
 use crate::profile::{Osc52Policy, ProfileId};
 
 /// Default SSH port.
@@ -29,12 +30,6 @@ pub const DEFAULT_PROMPT_TIMEOUT_MS: u64 = 120_000;
 /// [`EffectiveSsh::unsupported`] warns about the same options at connect time when they are set.
 pub const NOT_SUPPORTED_YET: &[&str] = &[
     "input_backspace",
-    "jump_host",
-    "proxy_command",
-    "socks_proxy_host",
-    "socks_proxy_port",
-    "http_proxy_host",
-    "http_proxy_port",
     "forwarded_ports",
     "agent_forward",
     "x11",
@@ -43,17 +38,6 @@ pub const NOT_SUPPORTED_YET: &[&str] = &[
     "scripts",
     "cwd",
     "remember_cwd",
-];
-
-/// The subset of [`NOT_SUPPORTED_YET`] that changes how the host is reached: a profile setting
-/// one refuses to connect (see [`EffectiveSsh::unsupported_route`]).
-pub const ROUTE_NOT_SUPPORTED_YET: &[&str] = &[
-    "jump_host",
-    "proxy_command",
-    "socks_proxy_host",
-    "socks_proxy_port",
-    "http_proxy_host",
-    "http_proxy_port",
 ];
 
 /// Which authentication methods to try.
@@ -195,14 +179,19 @@ pub struct SshOpts {
     pub term: Option<String>,
     /// Backspace encoding.
     pub input_backspace: Option<Backspace>,
-    /// Profile to jump through.
+    /// Profile to connect through first; the target is reached over a `direct-tcpip` channel
+    /// of that connection.
     pub jump_host: Option<ProfileId>,
-    /// Command whose stdio is the transport, `%h`/`%p` substituted.
+    /// Command whose stdio is the transport, run by `$SHELL -c` with `%h`/`%p`/`%r`/`%%`
+    /// substituted.
     pub proxy_command: Option<String>,
     /// SOCKS5 proxy host.
     pub socks_proxy_host: Option<String>,
     /// SOCKS5 proxy port.
     pub socks_proxy_port: Option<u16>,
+    /// Let the SOCKS5 proxy resolve the host name (`true`); `false` resolves it here and sends
+    /// the address (leaks the name to the local DNS resolver).
+    pub socks_proxy_remote_dns: Option<bool>,
     /// HTTP CONNECT proxy host.
     pub http_proxy_host: Option<String>,
     /// HTTP CONNECT proxy port.
@@ -282,6 +271,8 @@ pub struct EffectiveSsh {
     pub proxy_command: Option<String>,
     /// SOCKS5 proxy `(host, port)`; port defaults to 1080.
     pub socks_proxy: Option<(String, u16)>,
+    /// See [`SshOpts::socks_proxy_remote_dns`].
+    pub socks_remote_dns: bool,
     /// HTTP proxy `(host, port)`; port defaults to 8080.
     pub http_proxy: Option<(String, u16)>,
     /// See [`SshOpts::forwarded_ports`].
@@ -314,6 +305,9 @@ pub struct EffectiveSsh {
     pub agent_path: Option<PathBuf>,
     /// See [`SshOpts::ignored_ssh_config`].
     pub ignored_ssh_config: Vec<String>,
+    /// The `jump_host` chain, filled by [`resolve_jumps`](super::route::resolve_jumps) (the
+    /// session never looks profiles up itself).
+    pub jump: Jump,
 }
 
 impl EffectiveSsh {
@@ -323,29 +317,6 @@ impl EffectiveSsh {
         let mut ssh = resolve_ssh(&SshOpts::default(), &SshOpts::default());
         ssh.host = host.into();
         ssh
-    }
-
-    /// Set options that change *how the host is reached* (jump host, proxy command, SOCKS/HTTP
-    /// proxy, an unresolvable `~/.ssh/config` `ProxyJump`). Not implemented yet, and connecting
-    /// directly instead could reach a different machine, so the session refuses to connect.
-    #[must_use]
-    pub fn unsupported_route(&self) -> Vec<String> {
-        let checks = [
-            (self.jump_host.is_some(), "jump_host"),
-            (self.proxy_command.is_some(), "proxy_command"),
-            (self.socks_proxy.is_some(), "socks_proxy"),
-            (self.http_proxy.is_some(), "http_proxy"),
-        ];
-        let from_ssh_config = self.ignored_ssh_config.iter().filter(|o| {
-            let key = o.split_whitespace().next().unwrap_or_default();
-            key.eq_ignore_ascii_case("ProxyJump") || key.eq_ignore_ascii_case("ProxyCommand")
-        });
-        checks
-            .into_iter()
-            .filter(|(set, _)| *set)
-            .map(|(_, name)| name.to_owned())
-            .chain(from_ssh_config.cloned())
-            .collect()
     }
 
     /// Options that are set but whose behaviour is not implemented yet, then the ignored
@@ -358,10 +329,6 @@ impl EffectiveSsh {
                 self.input_backspace != Backspace::Backspace,
                 "input_backspace",
             ),
-            (self.jump_host.is_some(), "jump_host"),
-            (self.proxy_command.is_some(), "proxy_command"),
-            (self.socks_proxy.is_some(), "socks_proxy"),
-            (self.http_proxy.is_some(), "http_proxy"),
             (!self.forwarded_ports.is_empty(), "forwarded_ports"),
             (self.agent_forward, "agent_forward"),
             (self.x11, "x11"),
@@ -408,6 +375,7 @@ pub fn resolve_ssh(p: &SshOpts, d: &SshOpts) -> EffectiveSsh {
         proxy_command: pick!(proxy_command),
         socks_proxy: pick!(socks_proxy_host)
             .map(|host| (host, pick!(socks_proxy_port).unwrap_or(1080))),
+        socks_remote_dns: pick!(socks_proxy_remote_dns).unwrap_or(true),
         http_proxy: pick!(http_proxy_host)
             .map(|host| (host, pick!(http_proxy_port).unwrap_or(8080))),
         forwarded_ports: pick!(forwarded_ports).unwrap_or_default(),
@@ -427,6 +395,7 @@ pub fn resolve_ssh(p: &SshOpts, d: &SshOpts) -> EffectiveSsh {
             .map(ms),
         agent_path: pick!(agent_path),
         ignored_ssh_config: p.ignored_ssh_config.clone(),
+        jump: Jump::None,
     }
 }
 
@@ -465,6 +434,7 @@ pub fn strip_ssh(p: &SshOpts, d: &SshOpts) -> SshOpts {
         proxy_command,
         socks_proxy_host,
         socks_proxy_port,
+        socks_proxy_remote_dns,
         http_proxy_host,
         http_proxy_port,
         forwarded_ports,

@@ -4,7 +4,7 @@
 use std::fmt::Display;
 
 use fogu_core::config::ConfigIssue;
-use fogu_core::config::ssh_opts::{NOT_SUPPORTED_YET, ROUTE_NOT_SUPPORTED_YET};
+use fogu_core::config::ssh_opts::NOT_SUPPORTED_YET;
 use fogu_core::{Background, Config, LocalOpts, ProfileKind};
 use iced::widget::{Column, button, column, container, row, scrollable, space, text};
 use iced::{Alignment, Element, Length};
@@ -24,9 +24,6 @@ pub(super) type Row<'a> = Element<'a, Field<FieldId>>;
 const MAX_W: f32 = 920.0;
 /// Next to an option whose behaviour is not implemented yet.
 pub(super) const NOT_YET: &str = "Not supported yet: saved, but has no effect for now.";
-/// Next to a jump host / proxy option (see `ROUTE_NOT_SUPPORTED_YET`).
-pub(super) const ROUTE_NOT_YET: &str =
-    "Not supported yet: while this is set, the profile refuses to connect.";
 
 /// The page of editor tab `tab`.
 pub fn page<'a>(
@@ -131,8 +128,6 @@ pub(super) fn with_notes<'a>(ed: &ProfileEditor, id: FieldId, key: &str, row: Ro
         Some((error.as_str(), ERROR))
     } else if let Some(issue) = &issue {
         Some((issue.as_str(), ERROR))
-    } else if ROUTE_NOT_SUPPORTED_YET.contains(&key) {
-        Some((ROUTE_NOT_YET, WARN))
     } else if NOT_SUPPORTED_YET.contains(&key) {
         Some((NOT_YET, WARN))
     } else {

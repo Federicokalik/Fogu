@@ -105,6 +105,7 @@ fn every_ssh_field_is_set_through_the_reducer() {
         FieldId::ReuseSession,
         FieldId::ClearServiceMessages,
         FieldId::VerifyHostKeys,
+        FieldId::SocksRemoteDns,
     ] {
         field(&mut app, id, V::Bool(false));
     }
@@ -189,6 +190,7 @@ fn every_ssh_field_is_set_through_the_reducer() {
         proxy_command: Some("nc %h %p".into()),
         socks_proxy_host: Some("127.0.0.1".into()),
         socks_proxy_port: Some(9050),
+        socks_proxy_remote_dns: Some(false),
         http_proxy_host: Some("proxy.lan".into()),
         http_proxy_port: Some(3128),
         forwarded_ports: Some(vec![PortForward {

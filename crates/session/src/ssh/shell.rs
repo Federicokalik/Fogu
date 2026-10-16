@@ -33,6 +33,7 @@ pub(crate) async fn run(
     let channel = open_channel(&conn, ssh, ui.size, ready).await?;
     conn.drain_events(ssh, ui).await?;
     let ssh_handle = Arc::new(conn.handle);
+    let route = conn.route;
     let sftp_stop = CancellationToken::new();
     let sftp_task = ui.sftp.take().map(|ends| {
         let engine = super::sftp::run(
@@ -119,6 +120,7 @@ pub(crate) async fn run(
     let _bye = ssh_handle
         .disconnect(Disconnect::ByApplication, "", "en")
         .await;
+    route.close().await;
     end
 }
 

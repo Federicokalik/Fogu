@@ -145,7 +145,11 @@ impl ProfileEditor {
             && let Some(jump) = &ssh.jump_host
             && !self.jumps.iter().any(|(j, _)| j.as_ref() == Some(jump))
         {
-            let label = format!("unknown: {}", fogu_term::sanitize_title(&jump.0));
+            // `ssh-config:a,b` (a `ProxyJump` chain) is valid without being a listed host.
+            let label = match jump.0.strip_prefix(fogu_core::ssh_config::ID_PREFIX) {
+                Some(spec) => format!("ssh config: {}", fogu_term::sanitize_title(spec)),
+                None => format!("unknown: {}", fogu_term::sanitize_title(&jump.0)),
+            };
             self.jumps.push((Some(jump.clone()), label));
         }
         self.issues = self.validate(config);

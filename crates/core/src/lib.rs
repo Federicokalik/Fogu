@@ -20,6 +20,7 @@ pub mod ssh_config;
 pub use action::{Action, Dir, Hotkeys};
 pub use background::{Background, EffectiveBackground, Fit, TabBackground, effective_background};
 pub use config::Config;
+pub use config::route::{Jump, MAX_JUMP_HOPS, resolve_jumps};
 pub use config::ssh_opts::{
     Algorithms, Backspace, EffectiveSsh, ForwardKind, LoginScript, PortForward, SshAuth, SshOpts,
 };

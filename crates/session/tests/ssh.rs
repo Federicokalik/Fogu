@@ -82,17 +82,58 @@ fn missing_host_fails_with_no_host_after_warning_unsupported_options() {
 }
 
 #[test]
-fn proxied_profile_refuses_to_connect_directly() {
+fn unresolved_or_ambiguous_routes_refuse_to_connect_directly() {
     // Port 1 would be refused if a connection were attempted: the error must come first.
     let mut ssh = EffectiveSsh::new("127.0.0.1");
     ssh.port = 1;
-    ssh.proxy_command = Some("ssh -W %h:%p bastion".into());
-    let (end, _warnings, grid) = run(&ssh, "proxied");
-    let SessionOutput::Error(SessionError::RouteNotSupported(what)) = end else {
-        panic!("expected RouteNotSupported, got {end:?}");
+    ssh.jump_host = Some(fogu_core::ProfileId("bastion".into()));
+    let (end, _warnings, grid) = run(&ssh, "unresolved");
+    let SessionOutput::Error(SessionError::Route(what)) = end else {
+        panic!("expected Route, got {end:?}");
     };
-    assert_eq!(what, "proxy_command");
+    assert_eq!(what, "jump_host bastion was not resolved");
     assert!(!grid.contains("Connecting to"), "{grid}");
+
+    ssh.jump_host = None;
+    ssh.proxy_command = Some("nc %h %p".into());
+    ssh.http_proxy = Some(("127.0.0.1".into(), 1));
+    let (end, _warnings, _grid) = run(&ssh, "ambiguous");
+    let SessionOutput::Error(SessionError::Route(what)) = end else {
+        panic!("expected Route, got {end:?}");
+    };
+    assert_eq!(what, "only one of proxy_command, http_proxy may be set");
+}
+
+#[test]
+fn a_refused_proxy_port_is_a_clear_proxy_error() {
+    let mut ssh = EffectiveSsh::new("example.invalid");
+    ssh.socks_proxy = Some(("127.0.0.1".into(), 1));
+    let (end, _warnings, grid) = run(&ssh, "socks-refused");
+    let SessionOutput::Error(SessionError::Proxy(what)) = end else {
+        panic!("expected Proxy, got {end:?}");
+    };
+    assert!(
+        what.starts_with("SOCKS5 proxy 127.0.0.1:1: could not connect: Connection refused"),
+        "{what}"
+    );
+    assert!(
+        grid.contains("Connecting to example.invalid:22 via proxy socks5://127.0.0.1:1"),
+        "{grid}"
+    );
+}
+
+#[test]
+fn a_failing_proxy_command_reports_its_last_stderr_line_sanitized() {
+    let mut ssh = EffectiveSsh::new("127.0.0.1");
+    ssh.proxy_command = Some("printf 'noise\\n\\033]0;pwned\\007bad %h\\n' >&2".into());
+    let (end, _warnings, _grid) = run(&ssh, "proxy-fails");
+    let SessionOutput::Error(SessionError::Proxy(what)) = end else {
+        panic!("expected Proxy, got {end:?}");
+    };
+    assert_eq!(
+        what,
+        "the proxy command ended (exit status: 0): ]0;pwnedbad 127.0.0.1"
+    );
 }
 
 #[test]

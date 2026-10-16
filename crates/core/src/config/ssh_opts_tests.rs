@@ -32,6 +32,7 @@ jump_host = "ssh:bastion"
 proxy_command = "nc %h %p"
 socks_proxy_host = "127.0.0.1"
 socks_proxy_port = 9050
+socks_proxy_remote_dns = false
 http_proxy_host = "proxy.lan"
 http_proxy_port = 3128
 agent_forward = true
@@ -100,6 +101,7 @@ fn every_field_resolves_and_is_reported_unsupported() {
     assert_eq!(ssh.keepalive_interval, Some(Duration::from_secs(15)));
     assert_eq!(ssh.ready_timeout, Some(Duration::from_secs(9)));
     assert_eq!(ssh.socks_proxy, Some(("127.0.0.1".to_owned(), 9050)));
+    assert!(!ssh.socks_remote_dns);
     assert_eq!(ssh.http_proxy, Some(("proxy.lan".to_owned(), 3128)));
     assert!(!ssh.verify_host_keys && !ssh.clear_service_messages_on_connect);
     assert!(!ssh.warn_on_close);
@@ -107,10 +109,6 @@ fn every_field_resolves_and_is_reported_unsupported() {
         ssh.unsupported(),
         [
             "input_backspace",
-            "jump_host",
-            "proxy_command",
-            "socks_proxy",
-            "http_proxy",
             "forwarded_ports",
             "agent_forward",
             "x11",
@@ -134,7 +132,7 @@ fn builtin_defaults() {
     assert_eq!(ssh.ready_timeout, None);
     assert_eq!(ssh.term, "xterm-256color");
     assert!(ssh.reuse_session && ssh.verify_host_keys && ssh.clear_service_messages_on_connect);
-    assert!(ssh.warn_on_close);
+    assert!(ssh.warn_on_close && ssh.socks_remote_dns);
     assert!(!ssh.skip_banner && !ssh.agent_forward && !ssh.x11 && !ssh.remember_cwd);
     assert_eq!(ssh.unsupported(), Vec::<&str>::new());
 }
@@ -156,18 +154,6 @@ fn profile_overrides_defaults_and_zero_keepalive_disables() {
     assert_eq!(ssh.user, "ops");
     assert_eq!(ssh.term, "xterm");
     assert_eq!(ssh.keepalive_interval, None);
-}
-
-#[test]
-fn unsupported_route_lists_proxies_and_unresolved_proxyjump() {
-    let mut ssh = EffectiveSsh::new("h");
-    assert_eq!(ssh.unsupported_route(), Vec::<String>::new());
-    ssh.socks_proxy = Some(("p".into(), 1080));
-    ssh.ignored_ssh_config = vec!["ProxyJump bob@gw:2200".into(), "Ciphers aes".into()];
-    assert_eq!(
-        ssh.unsupported_route(),
-        ["socks_proxy", "ProxyJump bob@gw:2200"]
-    );
 }
 
 #[test]
@@ -320,19 +306,14 @@ fn not_supported_yet_names_every_option_unsupported_warns_about() {
         panic!("expected ssh");
     };
     let keys = toml::Table::try_from(opts).unwrap();
-    for name in NOT_SUPPORTED_YET.iter().chain(ROUTE_NOT_SUPPORTED_YET) {
+    for name in NOT_SUPPORTED_YET {
         assert!(keys.contains_key(*name), "{name} is not an SshOpts key");
     }
-    for warned in ssh.unsupported().iter().chain(&ssh.unsupported_route()) {
+    for warned in ssh.unsupported() {
         let key = match warned.as_str() {
-            "socks_proxy" => "socks_proxy_host",
-            "http_proxy" => "http_proxy_host",
             "reuse_session = false" => "reuse_session",
             other => other,
         };
         assert!(NOT_SUPPORTED_YET.contains(&key), "{warned}");
-    }
-    for name in ROUTE_NOT_SUPPORTED_YET {
-        assert!(NOT_SUPPORTED_YET.contains(name), "{name}");
     }
 }

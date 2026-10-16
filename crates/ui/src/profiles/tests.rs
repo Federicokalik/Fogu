@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use fogu_core::config::load;
 use fogu_core::recent::Recent;
-use fogu_core::{Action, EffectiveProfile, Group};
+use fogu_core::{Action, EffectiveProfile, Group, resolve};
 use fogu_session::SessionRuntime;
 
 use super::*;
@@ -423,4 +423,55 @@ fn keyboard_focus_survives_the_opening_click_and_returns_on_a_pane_click() {
     // The next press over the sidebar counts again.
     let _ = app.update(Message::MousePressed);
     assert!(app.sidebar_has_keys());
+}
+
+#[test]
+fn jump_hosts_resolve_through_stored_profiles_and_bad_ones_are_kept_as_reasons() {
+    let t = tmp();
+    let mut app = app_in(&t.0);
+    let mut config = (*app.config).clone();
+    let with_jump = |name: &str, jump: &str| {
+        let mut p = ssh(name, &format!("{name}.lan"), None);
+        if let ProfileKind::Ssh(opts) = &mut p.kind {
+            opts.jump_host = Some(id(jump));
+        }
+        p
+    };
+    config.profiles.extend([
+        with_jump("inner", "pi"),
+        with_jump("to-local", "fish"),
+        with_jump("to-nowhere", "gone"),
+        with_jump("loop-a", "loop-b"),
+        with_jump("loop-b", "loop-a"),
+    ]);
+    app.config = Arc::new(config);
+    let resolved = |app: &App, name: &str| {
+        let profile = app.config.profiles.iter().find(|p| p.id.0 == name).unwrap();
+        let EffectiveProfile::Ssh(mut ssh) = resolve(profile, &app.config.profile_defaults) else {
+            panic!("ssh")
+        };
+        app.resolve_jumps(&profile.id, &mut ssh);
+        ssh
+    };
+    let inner = resolved(&app, "inner");
+    let fogu_core::Jump::Via(hop) = &inner.jump else {
+        panic!("{:?}", inner.jump)
+    };
+    assert_eq!((hop.host.as_str(), hop.port), ("10.0.0.7", 2222));
+    for (name, want) in [
+        ("to-local", "jump_host fish: Fish is not an SSH profile"),
+        ("to-nowhere", "jump_host gone: no profile with id gone"),
+        (
+            "loop-a",
+            "jump_host loop-b: jump host loop: loop-a → loop-b → loop-a",
+        ),
+    ] {
+        assert_eq!(resolved(&app, name).route_problems(), [want], "{name}");
+    }
+    // Opening a tab resolves the chain before the session starts.
+    send(&mut app, ProfilesMsg::Open(id("inner"), Launch::Tab));
+    let EffectiveProfile::Ssh(opened) = app.stub_profiles.last().unwrap() else {
+        panic!("ssh")
+    };
+    assert!(matches!(opened.jump, fogu_core::Jump::Via(_)));
 }

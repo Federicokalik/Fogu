@@ -140,6 +140,35 @@ impl SshConfig {
         self.stamps.iter().any(|(path, seen)| &stamp(path) != seen)
     }
 
+    /// The options of one jump hop named by a `ProxyJump` value (`jump_host =
+    /// "ssh-config:<spec>"`): the last `[user@]host[:port]` of `spec`, configured like OpenSSH
+    /// configures a `-J` destination (the host's own `Host` blocks, then the given user/port).
+    /// With earlier hops, it jumps through `ssh-config:<the earlier hops>` instead of its own
+    /// `ProxyJump`/`ProxyCommand`.
+    ///
+    /// # Errors
+    /// The reason when the last hop is not `[user@]host[:port]`.
+    pub fn jump_opts(&self, spec: &str, env: &Env) -> Result<crate::SshOpts, String> {
+        let (outer, last) = match spec.rsplit_once(',') {
+            Some((outer, last)) => (Some(outer), last),
+            None => (None, spec),
+        };
+        let (user, host, port) =
+            profiles::parse_hop(last).ok_or_else(|| format!("invalid ProxyJump hop {last}"))?;
+        let mut opts = self.ssh_opts(&host, env);
+        if user.is_some() {
+            opts.user = user;
+        }
+        if port.is_some() {
+            opts.port = port;
+        }
+        if let Some(outer) = outer {
+            opts.jump_host = Some(crate::ProfileId(format!("{ID_PREFIX}{outer}")));
+            opts.proxy_command = None;
+        }
+        Ok(opts)
+    }
+
     /// The plain `Host` aliases, in file order.
     #[must_use]
     pub fn aliases(&self) -> &[String] {

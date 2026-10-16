@@ -117,8 +117,9 @@ impl App {
         if let (Some(cwd), EffectiveProfile::Local(local)) = (cwd, &mut effective) {
             local.cwd = Some(cwd);
         }
-        if let (true, EffectiveProfile::Ssh(ssh)) = (kept_history, &mut effective) {
-            ssh.clear_service_messages_on_connect = false;
+        if let EffectiveProfile::Ssh(ssh) = &mut effective {
+            ssh.clear_service_messages_on_connect &= !kept_history;
+            self.resolve_jumps(&profile.id, ssh);
         }
         let size = Size {
             px_w: size.cols.saturating_mul(self.metrics.cell_w_px),

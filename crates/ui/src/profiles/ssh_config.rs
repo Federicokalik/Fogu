@@ -4,8 +4,10 @@
 
 use std::path::PathBuf;
 
-use fogu_core::Profile;
-use fogu_core::ssh_config::{Env, Issue, SshConfig};
+use fogu_core::ssh_config::{Env, ID_PREFIX, Issue, SshConfig};
+use fogu_core::{
+    EffectiveProfile, EffectiveSsh, Profile, ProfileId, ProfileKind, SshOpts, resolve,
+};
 use fogu_term::sanitize_title;
 use iced::Task;
 
@@ -58,6 +60,15 @@ impl SshHosts {
         self.loaded = Some(loaded);
         issues
     }
+
+    /// The options of the jump host `spec` names (`ssh-config:<spec>` ids; see
+    /// `SshConfig::jump_opts`). `Err` when the file isn't loaded or `spec` is unusable.
+    pub fn jump_opts(&self, spec: &str) -> Result<SshOpts, String> {
+        match (&self.source, &self.loaded) {
+            (Some((env, _)), Some(loaded)) => loaded.jump_opts(spec, env),
+            _ => Err("~/.ssh/config is not loaded".to_owned()),
+        }
+    }
 }
 
 /// `issue` with the home directory shown as `~`.
@@ -99,6 +110,37 @@ impl App {
             Some(note) => self.notify(note),
             None => Task::none(),
         }
+    }
+}
+
+impl App {
+    /// Fills `ssh.jump` (the `jump_host` chain) from the stored profiles and `~/.ssh/config`
+    /// hosts; an unknown, non-SSH or looping jump host leaves a reason the session reports
+    /// instead of connecting.
+    pub(crate) fn resolve_jumps(&self, id: &ProfileId, ssh: &mut EffectiveSsh) {
+        let lookup = |hop: &ProfileId| -> Result<EffectiveSsh, String> {
+            let stored = self.config.profiles.iter().find(|p| &p.id == hop);
+            let profile = match (stored, hop.0.strip_prefix(ID_PREFIX)) {
+                (Some(profile), _) => profile.clone(),
+                (None, Some(_)) if !self.config.ssh.read_ssh_config => {
+                    return Err("~/.ssh/config is off (ssh.read_ssh_config = false)".to_owned());
+                }
+                (None, Some(spec)) => Profile {
+                    id: hop.clone(),
+                    name: spec.to_owned(),
+                    kind: ProfileKind::Ssh(self.profiles.ssh_hosts.jump_opts(spec)?),
+                    ..Profile::default_shell()
+                },
+                (None, None) => return Err(format!("no profile with id {}", hop.0)),
+            };
+            match resolve(&profile, &self.config.profile_defaults) {
+                EffectiveProfile::Ssh(hop) => Ok(hop),
+                EffectiveProfile::Local(_) => {
+                    Err(format!("{} is not an SSH profile", profile.name))
+                }
+            }
+        };
+        fogu_core::resolve_jumps(id, ssh, lookup);
     }
 }
 

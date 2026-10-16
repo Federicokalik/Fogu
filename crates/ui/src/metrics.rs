@@ -2,7 +2,8 @@
 //!
 //! The family is resolved explicitly through cosmic-text's fontdb (it ignores fontconfig
 //! aliases), falling back to the first monospace face; `cell_w = advance('0')`,
-//! `cell_h = ascent + descent + line_gap`, both rounded to whole device pixels.
+//! `cell_h = ascent + descent + line_gap`, both rounded to whole device pixels; glyphs are drawn
+//! at the size whose advance is exactly `cell_w`, so text stays on the grid.
 
 use fogu_term::{Column, Line, Point, Side};
 use iced::advanced::graphics::text::cosmic_text::fontdb::{self, Database, Query};
@@ -65,7 +66,9 @@ pub struct ResolvedFont {
 /// Cell size for one font size and scale factor.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CellMetrics {
-    /// Text size in logical px.
+    /// Text size in logical px: the requested size nudged (by under half a device px of
+    /// advance) so a glyph's advance is exactly `cell_w`. Otherwise a run of N cells drawn at
+    /// the font's own advance drifts off the grid (a few cells on a long line).
     pub font_size: f32,
     /// Cell width in logical px (a whole number of device px).
     pub cell_w: f32,
@@ -87,8 +90,13 @@ impl CellMetrics {
         };
         let (width, width_px) = round_to_device(units.advance * font_size, scale);
         let (height, height_px) = round_to_device(units.line_height * font_size, scale);
+        let fitted = width / units.advance;
         Self {
-            font_size,
+            font_size: if fitted.is_finite() && fitted > 0.0 {
+                fitted
+            } else {
+                font_size
+            },
             cell_w: width,
             cell_h: height,
             cell_w_px: width_px,
@@ -342,8 +350,11 @@ mod tests {
         let m = CellMetrics::new(units, 16.0, 1.0);
         assert_eq!((m.cell_w_px, m.cell_h_px), (10, 19));
         assert!((m.cell_w - 10.0).abs() < f32::EPSILON);
+        // Glyphs are drawn at the size whose advance is exactly one cell (10 px, not 9.6).
+        assert!((m.font_size * units.advance - m.cell_w).abs() < 1e-4);
         let hidpi = CellMetrics::new(units, 16.0, 2.0);
         assert_eq!((hidpi.cell_w_px, hidpi.cell_h_px), (19, 37));
+        assert!((hidpi.font_size * units.advance - hidpi.cell_w).abs() < 1e-4);
         // A broken scale factor falls back to 1.0.
         assert_eq!(CellMetrics::new(units, 16.0, 0.0), m);
     }

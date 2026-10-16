@@ -225,7 +225,7 @@ impl App {
                 return self.on_remote_cwd(pane_id, &path);
             }
             SessionOutput::Cwd { path, remote } => self.on_cwd(pane_id, path, remote),
-            SessionOutput::Prompt(id, kind) => return self.on_prompt(pane_id, id, kind),
+            SessionOutput::Prompt(id, kind, via) => return self.on_prompt(pane_id, id, kind, via),
             SessionOutput::Warning(warning) => {
                 if !pane.warnings.contains(&warning) {
                     pane.warnings.push(warning.clone());

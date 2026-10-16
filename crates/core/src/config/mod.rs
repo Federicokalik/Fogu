@@ -4,6 +4,7 @@
 
 mod edit;
 mod io;
+pub mod route;
 pub mod sftp;
 pub mod ssh_opts;
 mod validate;

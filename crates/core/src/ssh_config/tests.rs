@@ -253,7 +253,7 @@ fn unusable_values_are_reported_not_dropped() {
     let env = home("unusable");
     let config = load(
         &env,
-        "Host a\n  Port nope\n  ProxyJump me@hop:2222,other\n  ProxyCommand nc %h %p\n  \
+        "Host a\n  Port nope\n  ProxyJump -oops\n  ProxyCommand nc %h %p\n  \
          LocalForward /tmp/sock host:1\n  ForwardAgent $SSH_AUTH_SOCK\n  IdentityFile ~/k_%C\n  \
          StrictHostKeyChecking ask\n  UserKnownHostsFile ~/.ssh/known_hosts\n",
     );
@@ -265,16 +265,95 @@ fn unusable_values_are_reported_not_dropped() {
         a.ignored_ssh_config,
         [
             "Port nope (invalid value)",
-            "ProxyJump me@hop:2222,other",
+            "ProxyJump -oops (invalid value)",
             "LocalForward /tmp/sock host:1 (unsupported form)",
             "ForwardAgent $SSH_AUTH_SOCK (unsupported value)",
             "IdentityFile ~/k_%C (unsupported token %C)",
         ]
     );
     let effective = crate::config::ssh_opts::resolve_ssh(&a, &SshOpts::default());
-    let unsupported = effective.unsupported();
-    assert!(unsupported.contains(&"proxy_command".to_owned()));
-    assert!(unsupported.contains(&"ProxyJump me@hop:2222,other".to_owned()));
+    assert!(
+        effective
+            .unsupported()
+            .contains(&"ProxyJump -oops (invalid value)".to_owned())
+    );
+    assert_eq!(
+        effective.route_problems(),
+        ["ProxyJump -oops (invalid value)"]
+    );
+}
+
+#[test]
+fn proxy_jump_hops_and_proxy_command_tokens_map() {
+    let env = home("jumps");
+    let config = load(
+        &env,
+        "Host multi\n  ProxyJump me@hop:2222,Bastion\n\
+         Host uri\n  ProxyJump ssh://[::1]:2200\n\
+         Host first-cmd\n  ProxyCommand nc %h %p\n  ProxyJump bastion\n\
+         Host first-jump\n  ProxyJump bastion\n  ProxyCommand nc %h %p\n\
+         Host token\n  ProxyCommand ssh -W %h:%p %n\n\
+         Host bastion\n  HostName gw.example\n  User ops\n  ProxyJump none\n\
+         Host *.lan\n  Port 2022\n",
+    );
+    let jump = |alias: &str| opts(&config, &env, alias).jump_host.map(|j| j.0);
+    assert_eq!(
+        jump("multi").as_deref(),
+        Some("ssh-config:me@hop:2222,Bastion")
+    );
+    assert_eq!(jump("uri").as_deref(), Some("ssh-config:ssh://[::1]:2200"));
+    assert_eq!(jump("first-jump").as_deref(), Some("ssh-config:bastion"));
+    assert_eq!(opts(&config, &env, "first-jump").proxy_command, None);
+    let cmd = opts(&config, &env, "first-cmd");
+    assert_eq!(
+        (cmd.jump_host, cmd.proxy_command.as_deref()),
+        (None, Some("nc %h %p"))
+    );
+    let token = opts(&config, &env, "token");
+    assert_eq!(token.proxy_command, None);
+    assert_eq!(
+        token.ignored_ssh_config,
+        ["ProxyCommand ssh -W %h:%p %n (unsupported token %n)"]
+    );
+
+    // `multi` = hop.lan's options as me@:2222, through bastion (its own config).
+    let last = config.jump_opts("me@hop:2222,Bastion", &env).unwrap();
+    assert_eq!(last.host.as_deref(), Some("gw.example"));
+    assert_eq!(last.user.as_deref(), Some("ops"));
+    assert_eq!(
+        last.jump_host.as_ref().map(|j| j.0.as_str()),
+        Some("ssh-config:me@hop:2222")
+    );
+    let first = config.jump_opts("me@hop:2222", &env).unwrap();
+    assert_eq!(
+        (
+            first.host.as_deref(),
+            first.user.as_deref(),
+            first.port,
+            first.jump_host
+        ),
+        (Some("hop"), Some("me"), Some(2222), None)
+    );
+    let lan = config.jump_opts("box.lan", &env).unwrap();
+    assert_eq!(
+        (lan.host.as_deref(), lan.port),
+        (Some("box.lan"), Some(2022))
+    );
+    let v6 = config.jump_opts("ssh://[::1]:2200", &env).unwrap();
+    assert_eq!((v6.host.as_deref(), v6.port), (Some("::1"), Some(2200)));
+    for bad in [
+        "",
+        "-oProxyCommand=x",
+        "a b",
+        "u@",
+        "h:0",
+        "h:x",
+        "[::1",
+        "a/b",
+        "@h",
+    ] {
+        assert!(config.jump_opts(bad, &env).is_err(), "{bad:?}");
+    }
 }
 
 #[test]

@@ -20,6 +20,7 @@ mod support;
 mod auth;
 mod hostile;
 mod hostkeys;
+mod route;
 mod sftp;
 mod shell;
 

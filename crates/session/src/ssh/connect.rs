@@ -1,4 +1,5 @@
-//! TCP connect + SSH handshake with strict host-key verification.
+//! Transport (`transport.rs`) + SSH handshake with strict host-key verification: an unknown or
+//! changed key never connects without the user's explicit approval.
 //!
 //! russh calls [`Client::check_server_key`] inside its connection future; the handler forwards
 //! the key to [`connect`], which drives that future and answers from `known_hosts` or a prompt
@@ -6,6 +7,7 @@
 //! key, re-key exchanges must present the same key or are refused without asking.
 
 use std::borrow::Cow;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until};
 
 use super::hostkeys::{self, Lookup};
+use super::transport::{self, Route};
 use super::{SshPaths, Stop, Ui};
 use crate::{HostKeyFailure, PromptKind, PromptReply, SessionError, SessionOutput, SessionWarning};
 
@@ -87,6 +90,9 @@ pub(crate) struct Connection {
     pub(crate) handle: client::Handle<Client>,
     /// Banners (and refused late host-key checks) arriving after the handshake.
     pub(crate) events: mpsc::Receiver<HandlerEvent>,
+    /// The jump host connection / proxy command under this one; declared last, so it is
+    /// dropped (closed) after `handle`.
+    pub(crate) route: Route,
 }
 
 impl Connection {
@@ -118,14 +124,32 @@ async fn handle_late_event(
     Ok(())
 }
 
-/// Connects to `ssh.host:ssh.port`, verifying the host key. `ready` bounds the network part
-/// (time spent waiting for the user's host-key answer is not counted).
+/// Connects to `ssh.host:ssh.port` along the profile's route, verifying the host key.
+/// `ready` bounds each network step (time spent waiting for the user's answers is not
+/// counted). `depth` = jump hosts already on the way.
 pub(crate) async fn connect(
     ssh: &EffectiveSsh,
     paths: &SshPaths,
     ui: &mut Ui,
     ready: Duration,
+    depth: usize,
 ) -> Result<Connection, Stop> {
+    if ssh.host.is_empty() {
+        return Err(SessionError::NoHost.into());
+    }
+    let problems = ssh.route_problems();
+    if !problems.is_empty() {
+        let text = crate::sanitize_remote(&problems.join("; "), 300, false);
+        return Err(SessionError::Route(text).into());
+    }
+    ui.service(&format!(
+        "Connecting to {}:{}{}…",
+        ssh.host,
+        ssh.port,
+        transport::describe(ssh)
+    ))
+    .await?;
+    let (stream, mut route) = transport::open(ssh, paths, ui, ready, depth).await?;
     let files = paths.files();
     let config = Arc::new(config(
         ssh,
@@ -136,16 +160,23 @@ pub(crate) async fn connect(
         events: tx,
         accepted: None,
     };
-    let fut = client::connect(config, (ssh.host.clone(), ssh.port), handler);
+    let fut = client::connect_stream(config, stream, handler);
     tokio::pin!(fut);
     let mut deadline = Instant::now() + ready;
     let mut refused: Option<HostKeyFailure> = None;
     loop {
         tokio::select! {
             result = &mut fut => {
-                return result
-                    .map(|handle| Connection { handle, events })
-                    .map_err(|err| connect_error(err, refused, ssh).into());
+                return match result {
+                    Ok(handle) => Ok(Connection { handle, events, route }),
+                    Err(err) => {
+                        let proxy = match refused {
+                            None => route.proxy_failure().await,
+                            Some(_) => None,
+                        };
+                        Err(proxy.unwrap_or_else(|| connect_error(err, refused, ssh)).into())
+                    }
+                };
             }
             Some(event) = events.recv() => match event {
                 HandlerEvent::HostKey(key, reply) => {
@@ -166,9 +197,23 @@ pub(crate) async fn connect(
                 banner @ HandlerEvent::Banner(_) => handle_late_event(banner, ssh, ui).await?,
             },
             input = ui.in_rx.recv() => ui.idle_input(input.as_ref())?,
-            () = sleep_until(deadline) => return Err(SessionError::Timeout.into()),
+            () = sleep_until(deadline) => {
+                let proxy = route.proxy_failure().await;
+                return Err(proxy.unwrap_or(SessionError::Timeout).into());
+            }
         }
     }
+}
+
+/// [`connect`] boxed, for the jump-host recursion (`transport` → `connect` → `transport`).
+pub(crate) fn connect_boxed<'a>(
+    ssh: &'a EffectiveSsh,
+    paths: &'a SshPaths,
+    ui: &'a mut Ui,
+    ready: Duration,
+    depth: usize,
+) -> Pin<Box<dyn Future<Output = Result<Connection, Stop>> + Send + 'a>> {
+    Box::pin(connect(ssh, paths, ui, ready, depth))
 }
 
 /// The transport config: keepalives from the profile, `TCP_NODELAY`, and the host-key
@@ -195,7 +240,8 @@ fn config(ssh: &EffectiveSsh, known: &[Algorithm]) -> client::Config {
     }
 }
 
-/// Maps a failed handshake: a refused key reports why we refused it.
+/// Maps a failed handshake: a refused key reports why we refused it, an ended proxy command
+/// what it said.
 fn connect_error(
     err: russh::Error,
     refused: Option<HostKeyFailure>,

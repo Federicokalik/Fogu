@@ -97,7 +97,17 @@ fn hosts_show_in_their_own_section_and_connect_with_the_ignored_options_listed()
     let EffectiveProfile::Ssh(ssh) = app.stub_profiles.last().unwrap() else {
         panic!("ssh")
     };
-    assert_eq!(ssh.unsupported()[0], "ProxyJump me@hop:2222");
+    // `ProxyJump me@hop:2222` resolves to a hop configured from the same file.
+    let fogu_core::Jump::Via(hop) = &ssh.jump else {
+        panic!("jump not resolved: {:?}", ssh.jump)
+    };
+    assert_eq!(
+        (hop.user.as_str(), hop.host.as_str(), hop.port),
+        ("me", "hop", 2222)
+    );
+    assert!(hop.verify_host_keys);
+    assert_eq!(hop.jump, fogu_core::Jump::None);
+    assert_eq!(ssh.route_problems(), Vec::<String>::new());
 }
 
 #[test]

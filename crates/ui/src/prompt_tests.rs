@@ -65,7 +65,7 @@ fn ask(app: &mut App, id: u64, kind: PromptKind) {
     let pane = pane(app);
     send(
         app,
-        Message::Session(pane, SessionOutput::Prompt(PromptId(id), kind)),
+        Message::Session(pane, SessionOutput::Prompt(PromptId(id), kind, None)),
     );
 }
 
@@ -156,7 +156,7 @@ fn taking_the_answers_leaves_zero_buffers() {
             },
         ],
     };
-    let mut state = PromptState::new(PromptId(1), kind);
+    let mut state = PromptState::new(PromptId(1), kind, None);
     assert_eq!(state.fields(), 2);
     let Some(PromptReply::Secrets(answers)) = state.take_answers() else {
         panic!("expected secrets");

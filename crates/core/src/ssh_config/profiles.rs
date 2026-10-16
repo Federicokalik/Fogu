@@ -172,7 +172,7 @@ impl Mapper {
                 Err(_) => bad(self),
             },
             "proxycommand" if arg.eq_ignore_ascii_case("none") => {}
-            "proxycommand" => self.opts.proxy_command = Some(d.raw.clone()),
+            "proxycommand" => self.proxy_command(d),
             "proxyjump" => self.proxy_jump(d, config),
             "localforward" | "remoteforward" | "dynamicforward" => self.forward(d),
             "stricthostkeychecking" if arg.eq_ignore_ascii_case("ask") => {}
@@ -231,21 +231,51 @@ impl Mapper {
             .push(path);
     }
 
-    /// A single hop naming another `Host` alias becomes `jump_host = "ssh-config:<alias>"`;
-    /// anything else (user@, :port, several hops) is reported.
+    /// `ProxyJump` (`none`, or `[user@]host[:port]` hops separated by commas, first hop first)
+    /// becomes `jump_host = "ssh-config:<value>"`, followed hop by hop by
+    /// [`SshConfig::jump_opts`]; a single plain alias keeps that alias's own profile id.
+    /// Unusable values are reported (and refuse to connect). `ProxyJump` and `ProxyCommand`
+    /// exclude each other: the first one obtained wins, like OpenSSH.
     fn proxy_jump(&mut self, d: &Directive, config: &SshConfig) {
         let value = d.args.first().map_or("", String::as_str);
-        if value.eq_ignore_ascii_case("none") {
+        if value.eq_ignore_ascii_case("none") || self.opts.proxy_command.is_some() {
+            return;
+        }
+        if d.args.len() > 1 || value.split(',').any(|hop| parse_hop(hop).is_none()) {
+            self.note(&format!("{} {} (invalid value)", d.name, d.raw));
             return;
         }
         let alias = config
             .aliases
             .iter()
             .find(|a| a.eq_ignore_ascii_case(value));
-        match alias {
-            Some(alias) => self.opts.jump_host = Some(ProfileId(format!("{ID_PREFIX}{alias}"))),
-            None => self.note(&format!("{} {}", d.name, d.raw)),
+        let id = alias.map_or(value, String::as_str);
+        self.opts.jump_host = Some(ProfileId(format!("{ID_PREFIX}{id}")));
+    }
+
+    /// `ProxyCommand` keeps the `%h %p %r %%` tokens the session substitutes; any other token
+    /// is reported (and the profile refuses to connect).
+    fn proxy_command(&mut self, d: &Directive) {
+        if self.opts.jump_host.is_some() {
+            return;
         }
+        let mut chars = d.raw.chars();
+        while let Some(c) = chars.next() {
+            if c == '%' {
+                match chars.next() {
+                    Some('h' | 'p' | 'r' | '%') => {}
+                    other => {
+                        let token = other.map_or_else(String::new, String::from);
+                        self.note(&format!(
+                            "{} {} (unsupported token %{token})",
+                            d.name, d.raw
+                        ));
+                        return;
+                    }
+                }
+            }
+        }
+        self.opts.proxy_command = Some(d.raw.clone());
     }
 
     fn forward(&mut self, d: &Directive) {
@@ -290,6 +320,44 @@ fn listen_on(text: &str) -> Option<(String, u16)> {
         Ok(port) => Some(("127.0.0.1".to_owned(), port)),
         Err(_) => host_port(text),
     }
+}
+
+/// One `ProxyJump` hop: user, host, port.
+pub(super) type Hop = (Option<String>, String, Option<u16>);
+
+/// `[ssh://][user@]host[:port]` (IPv6 as `[v6]` or `[v6]:port`); `None` for anything else
+/// (empty parts, blanks, controls, a host starting with `-`, paths).
+pub(super) fn parse_hop(text: &str) -> Option<Hop> {
+    let text = text.strip_prefix("ssh://").unwrap_or(text);
+    if text.is_empty() || text.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return None;
+    }
+    let (user, rest) = match text.rsplit_once('@') {
+        Some((user, rest)) => (Some(user.to_owned()), rest),
+        None => (None, text),
+    };
+    let (host, port) = if let Some(v6) = rest.strip_prefix('[') {
+        let (host, after) = v6.split_once(']')?;
+        let port = match after {
+            "" => None,
+            _ => Some(after.strip_prefix(':')?),
+        };
+        (host, port)
+    } else {
+        match rest.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (rest, None),
+        }
+    };
+    let port = match port {
+        Some(p) => Some(p.parse::<u16>().ok().filter(|&p| p > 0)?),
+        None => None,
+    };
+    let bad = |s: &str| s.is_empty() || s.starts_with('-') || s.contains(['/', '[', ']', ',']);
+    if bad(host) || user.as_deref().is_some_and(|u| bad(u) || u.contains('@')) {
+        return None;
+    }
+    Some((user, host.to_owned(), port))
 }
 
 /// `host:port` or `[v6]:port`.

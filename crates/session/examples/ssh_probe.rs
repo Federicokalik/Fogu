@@ -61,7 +61,7 @@ fn main() -> Result<()> {
                         let _closed = session.input.send(SessionInput::Data(line)).await;
                     }
                 }
-                Some(SessionOutput::Prompt(id, kind)) => {
+                Some(SessionOutput::Prompt(id, kind, _via)) => {
                     let reply = answer(&kind);
                     let _closed = session
                         .input
