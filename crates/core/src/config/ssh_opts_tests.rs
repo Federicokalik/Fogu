@@ -5,6 +5,8 @@
     reason = "tests"
 )]
 
+use std::path::PathBuf;
+
 use super::*;
 use crate::profile::{EffectiveProfile, Profile, ProfileDefaults, ProfileKind, resolve};
 
@@ -41,6 +43,8 @@ clear_service_messages_on_connect = false
 verify_host_keys = false
 weight = -5
 osc52_write = "deny"
+prompt_timeout = 30000
+agent_path = "/run/agent.sock"
 
 [[forwarded_ports]]
 type = "dynamic"
@@ -164,4 +168,171 @@ fn unsupported_route_lists_proxies_and_unresolved_proxyjump() {
         ssh.unsupported_route(),
         ["socks_proxy", "ProxyJump bob@gw:2200"]
     );
+}
+
+#[test]
+fn prompt_timeout_defaults_to_two_minutes_and_zero_means_no_limit() {
+    assert_eq!(
+        EffectiveSsh::new("h").prompt_timeout,
+        Some(Duration::from_secs(120))
+    );
+    let profile: Profile = toml::from_str(EVERY_FIELD).unwrap();
+    let EffectiveProfile::Ssh(ssh) = resolve(&profile, &ProfileDefaults::default()) else {
+        panic!("expected ssh");
+    };
+    assert_eq!(ssh.prompt_timeout, Some(Duration::from_secs(30)));
+    assert_eq!(ssh.agent_path, Some(PathBuf::from("/run/agent.sock")));
+    let off = SshOpts {
+        prompt_timeout: Some(0),
+        ..SshOpts::default()
+    };
+    assert_eq!(resolve_ssh(&off, &SshOpts::default()).prompt_timeout, None);
+}
+
+/// Profiles to check `strip_defaults` on: every field set, every field set to its builtin
+/// default, and a local profile.
+fn strip_fixtures() -> Vec<Profile> {
+    let every: Profile = toml::from_str(EVERY_FIELD).unwrap();
+    let explicit_defaults: Profile = toml::from_str(
+        r#"
+        id = "d"
+        name = "Defaults spelled out"
+        type = "ssh"
+        host = "h"
+        port = 22
+        auth = "auto"
+        private_keys = []
+        keepalive_interval = 5000
+        keepalive_count_max = 10
+        skip_banner = false
+        warn_on_close = true
+        term = "xterm-256color"
+        input_backspace = "backspace"
+        forwarded_ports = []
+        agent_forward = false
+        x11 = false
+        algorithms = {}
+        reuse_session = true
+        scripts = []
+        remember_cwd = false
+        clear_service_messages_on_connect = true
+        verify_host_keys = true
+        weight = 0
+        identities_only = false
+        prompt_timeout = 120000
+    "#,
+    )
+    .unwrap();
+    let local: Profile = toml::from_str(
+        r#"
+        id = "l"
+        name = "Local"
+        type = "local"
+        program = "/bin/zsh"
+        args = []
+        env = {}
+        login = false
+        icon = " "
+    "#,
+    )
+    .unwrap();
+    vec![every, explicit_defaults, local]
+}
+
+#[test]
+fn strip_defaults_keeps_what_resolve_sees_and_is_idempotent() {
+    use crate::profile::{LocalOpts, strip_defaults};
+    let defaults = [
+        ProfileDefaults::default(),
+        ProfileDefaults {
+            local: LocalOpts {
+                program: Some("/bin/zsh".to_owned()),
+                ..LocalOpts::default()
+            },
+            ssh: SshOpts {
+                port: Some(2222),
+                term: Some("vt100".to_owned()),
+                x11: Some(true),
+                ..SshOpts::default()
+            },
+        },
+    ];
+    for d in &defaults {
+        for p in strip_fixtures() {
+            let stripped = strip_defaults(&p, d);
+            assert_eq!(resolve(&stripped, d), resolve(&p, d), "{}", p.name);
+            assert_eq!(strip_defaults(&stripped, d), stripped, "{}", p.name);
+        }
+    }
+}
+
+#[test]
+fn strip_defaults_drops_values_equal_to_what_would_be_inherited() {
+    use crate::profile::strip_defaults;
+    let fixtures = strip_fixtures();
+    let none = ProfileDefaults::default();
+    let ProfileKind::Ssh(ssh) = strip_defaults(&fixtures[1], &none).kind else {
+        panic!("expected ssh");
+    };
+    assert_eq!(
+        ssh,
+        SshOpts {
+            host: Some("h".to_owned()),
+            ..SshOpts::default()
+        }
+    );
+    // With `profile_defaults.ssh.port = 2222`, an explicit 22 is a real override.
+    let d = ProfileDefaults {
+        ssh: SshOpts {
+            port: Some(2222),
+            ..SshOpts::default()
+        },
+        ..ProfileDefaults::default()
+    };
+    let ProfileKind::Ssh(ssh) = strip_defaults(&fixtures[1], &d).kind else {
+        panic!("expected ssh");
+    };
+    assert_eq!(ssh.port, Some(22));
+    // The user (defaults to the local `$USER`) and osc52_write are kept as written.
+    let every = strip_defaults(&fixtures[0], &none);
+    let ProfileKind::Ssh(ssh) = &every.kind else {
+        panic!("expected ssh");
+    };
+    assert_eq!(ssh.user.as_deref(), Some("alice"));
+    assert_eq!(ssh.osc52_write, Some(crate::profile::Osc52Policy::Deny));
+    // A local profile: everything equal to the builtin default goes, a blank icon too.
+    let local = strip_defaults(&fixtures[2], &none);
+    assert_eq!(local.icon, None);
+    let text = toml::to_string(&local).unwrap();
+    assert_eq!(
+        text,
+        "id = \"l\"\nname = \"Local\"\ntype = \"local\"\nprogram = \"/bin/zsh\"\n"
+    );
+}
+
+#[test]
+fn not_supported_yet_names_every_option_unsupported_warns_about() {
+    let profile: Profile = toml::from_str(EVERY_FIELD).unwrap();
+    let EffectiveProfile::Ssh(ssh) = resolve(&profile, &ProfileDefaults::default()) else {
+        panic!("expected ssh");
+    };
+    let ProfileKind::Ssh(opts) = &profile.kind else {
+        panic!("expected ssh");
+    };
+    let keys = toml::Table::try_from(opts).unwrap();
+    for name in NOT_SUPPORTED_YET.iter().chain(ROUTE_NOT_SUPPORTED_YET) {
+        assert!(keys.contains_key(*name), "{name} is not an SshOpts key");
+    }
+    for warned in ssh.unsupported().iter().chain(&ssh.unsupported_route()) {
+        let key = match warned.as_str() {
+            "socks_proxy" => "socks_proxy_host",
+            "http_proxy" => "http_proxy_host",
+            "reuse_session = false" => "reuse_session",
+            other => other,
+        };
+        assert!(NOT_SUPPORTED_YET.contains(&key), "{warned}");
+    }
+    for name in ROUTE_NOT_SUPPORTED_YET {
+        assert!(NOT_SUPPORTED_YET.contains(name), "{name}");
+    }
 }

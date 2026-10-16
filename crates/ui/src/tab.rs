@@ -12,6 +12,7 @@ use fogu_term::{RenderSnapshot, Scroll, TermHandle};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
 
+use crate::profile_editor::ProfileEditor;
 use crate::prompt::PromptState;
 use crate::sftp::SftpPanelState;
 use crate::subscription::EventSlot;
@@ -259,6 +260,8 @@ pub struct Tab {
     pub profile: Profile,
     /// The tab's own background choice (wins over `profile.background`).
     pub background: TabBackground,
+    /// A profile editor tab: no panes, the editor page instead of the split container.
+    pub editor: Option<Box<ProfileEditor>>,
 }
 
 impl Tab {
@@ -274,6 +277,25 @@ impl Tab {
             focused: pane.id,
             panes: BTreeMap::from([(pane.id, pane)]),
             sftp: None,
+            editor: None,
+        }
+    }
+
+    /// A "Profile: …" tab showing `editor`. It has no pane (`layout` holds a placeholder id no
+    /// pane ever gets) and the built-in profile, so the tab menu's "Save to profile" is off.
+    pub fn editor(id: TabId, editor: ProfileEditor) -> Self {
+        let none = PaneId(0);
+        Self {
+            id,
+            title_override: None,
+            color: None,
+            layout: SplitTree::new(none),
+            panes: BTreeMap::new(),
+            focused: none,
+            sftp: None,
+            profile: Profile::default_shell(),
+            background: TabBackground::None,
+            editor: Some(Box::new(editor)),
         }
     }
 
@@ -289,6 +311,9 @@ impl Tab {
 
     /// The title shown in the header and the window title (the focused pane's OSC title).
     pub fn title(&self) -> &str {
+        if let Some(editor) = &self.editor {
+            return self.title_override.as_deref().unwrap_or(&editor.title);
+        }
         let Some(pane) = self.focused_pane() else {
             return self.title_override.as_deref().unwrap_or_default();
         };

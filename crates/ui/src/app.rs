@@ -257,6 +257,7 @@ impl App {
             Message::Prompt(message) => self.on_prompt_msg(message),
             Message::Picker(message) => self.on_picker(message),
             Message::Profiles(message) => self.on_profiles(message),
+            Message::Editor(tab, message) => self.on_editor(tab, message),
             Message::Enter => self.on_enter(),
             Message::ConfirmClose(confirmed) => self.on_confirm_close(confirmed),
             Message::Sftp(message) => self.on_sftp(message),

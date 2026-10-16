@@ -15,10 +15,11 @@ use super::{
     now_secs, quick_profile, rows, ssh_command,
 };
 use crate::app::App;
+use crate::context_menu::{ContextMenu, MenuAction, MenuItem};
 use crate::fuzzy_list;
 use crate::message::Message;
 use crate::modal::{Modal, ModalButton};
-use crate::notifications::{Level, Notification};
+use crate::notifications::{Level, Notification, ToastAction};
 
 /// Where a launched profile opens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +58,13 @@ pub enum ProfilesMsg {
     /// "New group…" submitted: create it and move the menu's profile into it.
     NewGroup(String),
     Duplicate(ProfileId),
+    /// Open the profile editor on this entry (read-only for `~/.ssh/config` hosts; built-in and
+    /// quick-connect ones are saved as a new profile).
+    Edit(ProfileId),
+    /// The sidebar's "+" button: the New ▸ menu.
+    NewMenu,
+    /// New ▸ SSH (`true`) / Local (`false`) profile.
+    New(bool),
     CopySsh(ProfileId),
     AskDelete(ProfileId),
     ConfirmDelete(bool),
@@ -176,14 +184,30 @@ impl App {
             ProfilesMsg::ConfirmDelete(yes) => {
                 let id = view.pending_delete.take();
                 if let (true, Some(id)) = (yes, id) {
-                    return self.save_edits(&[ProfileEdit::Delete(id)]);
+                    if let Err(task) = self.write_edits(&[ProfileEdit::Delete(id.clone())]) {
+                        return task;
+                    }
+                    return self.close_editors_of(&id);
                 }
             }
+            ProfilesMsg::NewMenu => {
+                let item = |label: &str, ssh| {
+                    let message = Message::Profiles(ProfilesMsg::New(ssh));
+                    MenuItem::new(label, MenuAction::Ui(message))
+                };
+                let items = vec![
+                    item("New SSH profile", true),
+                    item("New local profile", false),
+                ];
+                self.menu = Some(ContextMenu::new(view.cursor, items));
+            }
+            ProfilesMsg::New(ssh) => return self.new_profile(ssh),
             ProfilesMsg::Menu(..)
             | ProfilesMsg::MoveMenu
             | ProfilesMsg::SetGroup(_)
             | ProfilesMsg::NewGroup(_)
             | ProfilesMsg::Duplicate(_)
+            | ProfilesMsg::Edit(_)
             | ProfilesMsg::CopySsh(_)
             | ProfilesMsg::AskDelete(_) => return self.on_profile_menu(message),
         }
@@ -228,7 +252,11 @@ impl App {
         match quick_profile(&self.profiles.quick) {
             Ok(profile) => {
                 self.profiles.quick.clear();
-                self.launch(&profile, Launch::Tab)
+                let launched = self.launch(&profile, Launch::Tab);
+                let note = Notification::new(Level::Info, "Quick connect")
+                    .detail("Keep this connection as a profile?")
+                    .action(ToastAction::SaveAsProfile(profile.id));
+                Task::batch([launched, self.notify(note)])
             }
             Err(err) => {
                 self.profiles.quick_error = Some(err.to_string());
@@ -240,18 +268,23 @@ impl App {
     /// Writes `edits` to config.toml in place, then applies them to the running config; an
     /// error leaves both untouched and says why.
     pub(crate) fn save_edits(&mut self, edits: &[ProfileEdit]) -> Task<Message> {
+        self.write_edits(edits).err().unwrap_or_else(Task::none)
+    }
+
+    /// [`Self::save_edits`]; `Err` carries the error toast.
+    pub(crate) fn write_edits(&mut self, edits: &[ProfileEdit]) -> Result<(), Task<Message>> {
         self.menu = None;
         let dir = config::config_dir(self.config_dir.as_deref());
         if let Err(why) = config::edit_profiles(&dir, edits) {
             let note =
                 Notification::new(Level::Error, "Profiles not saved").detail(why.to_string());
-            return self.notify(note);
+            return Err(self.notify(note));
         }
         let config = Arc::make_mut(&mut self.config);
         for edit in edits {
             edit.apply(config);
         }
-        Task::none()
+        Ok(())
     }
 
     /// "Duplicate": a stored profile is copied in the file; a built-in or quick-connect one is
@@ -280,7 +313,7 @@ impl App {
         self.save_edits(&[edit])
     }
 
-    fn copy_from_ssh_config(&mut self, p: &Profile) -> Task<Message> {
+    pub(crate) fn copy_from_ssh_config(&mut self, p: &Profile) -> Task<Message> {
         let mut copy = Profile {
             id: unique_profile_id(&self.config, &slug(&p.name, "profile")),
             ..p.clone()

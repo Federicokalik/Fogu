@@ -37,6 +37,15 @@ pub enum ProfileEdit {
     AddGroup(Group),
     /// Remove a stored profile.
     Delete(ProfileId),
+    /// Save the profile editor: stored profile `old.id` becomes `new`. Only the keys whose value
+    /// differs between `old` (the profile as the editor opened it) and `new` are written, each
+    /// in place; keys Fogu doesn't know are never touched.
+    Update {
+        /// The profile as it was loaded.
+        old: Box<Profile>,
+        /// The edited profile (already passed through `strip_defaults`).
+        new: Box<Profile>,
+    },
 }
 
 impl ProfileEdit {
@@ -59,6 +68,11 @@ impl ProfileEdit {
             }
             Self::AddGroup(group) => config.groups.push(group.clone()),
             Self::Delete(id) => config.profiles.retain(|p| &p.id != id),
+            Self::Update { old, new } => {
+                if let Some(p) = config.profiles.iter_mut().find(|p| p.id == old.id) {
+                    *p = Profile::clone(new);
+                }
+            }
         }
     }
 }
@@ -152,8 +166,54 @@ fn apply_to_doc(doc: &mut DocumentMut, edit: &ProfileEdit) -> Result<(), DocErro
             let index = find(doc, id)?;
             profiles(doc)?.remove(index);
         }
+        ProfileEdit::Update { old, new } => update(doc, old, new)?,
     }
     Ok(())
+}
+
+/// Writes the keys that differ between `old` and `new` into `old`'s `[[profiles]]` entry: a
+/// changed key gets the new value where it was (keeping its trailing comment), a new key is
+/// appended to the entry, a key `new` no longer has is removed.
+fn update(doc: &mut DocumentMut, old: &Profile, new: &Profile) -> Result<(), DocError> {
+    let shape = |_| DocError::Shape("unserializable profile");
+    let before = toml::Table::try_from(old).map_err(shape)?;
+    let after = toml::Table::try_from(new).map_err(shape)?;
+    let index = find(doc, &old.id)?;
+    let entry = profiles(doc)?
+        .get_mut(index)
+        .ok_or_else(|| DocError::NoSuchProfile(old.id.0.clone()))?;
+    let keys = before
+        .keys()
+        .chain(after.keys().filter(|k| !before.contains_key(*k)));
+    for key in keys {
+        let value = after.get(key);
+        if before.get(key) == value {
+            continue;
+        }
+        let Some(value) = value else {
+            entry.remove(key);
+            continue;
+        };
+        let mut value = inline_value(value)?;
+        if let Some(old) = entry.get(key).and_then(Item::as_value) {
+            *value.decor_mut() = old.decor().clone();
+        }
+        entry.insert(key, Item::Value(value));
+    }
+    Ok(())
+}
+
+/// `value` written inline (`{ … }`, `[ … ]`), as one `key = value` line.
+fn inline_value(value: &toml::Value) -> Result<toml_edit::Value, DocError> {
+    let shape = DocError::Shape("unserializable profile");
+    let line: DocumentMut = format!("v = {value}").parse().map_err(|_| shape)?;
+    let mut value = line
+        .get("v")
+        .and_then(Item::as_value)
+        .cloned()
+        .ok_or(DocError::Shape("unserializable profile"))?;
+    value.decor_mut().clear();
+    Ok(value)
 }
 
 /// `[[profiles]]`, created when missing.

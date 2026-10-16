@@ -8,6 +8,7 @@ use iced::Point;
 
 use crate::background_menu::BgMsg;
 use crate::metrics::CellPos;
+use crate::profile_editor::EditorMsg;
 use crate::profile_picker::PickerMsg;
 use crate::profiles::ProfilesMsg;
 use crate::prompt::PromptMsg;
@@ -146,6 +147,8 @@ pub enum Message {
     Picker(PickerMsg),
     /// The profile manager sidebar.
     Profiles(ProfilesMsg),
+    /// The profile editor of tab `.0`.
+    Editor(TabId, EditorMsg),
     /// The "close live SSH session?" modal: `true` = close, `false` = keep it.
     ConfirmClose(bool),
     /// SFTP engine events and side-panel input.

@@ -1,7 +1,6 @@
-//! The profile row menu:
-//! Connect, Connect in split, Open SFTP, Edit… (not yet), Duplicate, Copy ssh command, Move to
-//! group ▸, Delete. Editing items are enabled for stored profiles only; a `~/.ssh/config` host
-//! offers "Copy to my profiles" instead of Duplicate.
+//! The profile row menu: Connect, Connect in split, Open SFTP, Edit… (the profile editor),
+//! Duplicate, Copy ssh command, Move to group ▸, Delete. Editing items are enabled for stored
+//! profiles only; a `~/.ssh/config` host offers "Copy to my profiles" instead of Duplicate.
 
 use fogu_core::config::ProfileEdit;
 use fogu_core::{Config, ProfileKind};
@@ -43,9 +42,13 @@ pub(super) fn row_menu(anchor: iced::Point, entry: &Entry, config: &Config) -> C
             true,
         ));
     }
-    let mut edit = item("Edit…", ProfilesMsg::Duplicate(id.clone()), false);
+    let edit_label = match entry.origin {
+        Origin::Stored => "Edit…",
+        Origin::SshConfig => "View…",
+        Origin::Builtin | Origin::Quick => "Save as profile…",
+    };
+    let mut edit = item(edit_label, ProfilesMsg::Edit(id.clone()), true);
     edit.separator = true;
-    edit.tooltip = Some("Coming with the profile editor");
     items.push(edit);
     let duplicate = if entry.origin == Origin::SshConfig {
         "Copy to my profiles"
@@ -109,6 +112,7 @@ impl App {
         let target = match &message {
             ProfilesMsg::Menu(id, _)
             | ProfilesMsg::Duplicate(id)
+            | ProfilesMsg::Edit(id)
             | ProfilesMsg::CopySsh(id)
             | ProfilesMsg::AskDelete(id) => Some(id.clone()),
             _ => self.profiles.menu_target.clone(),
@@ -142,6 +146,7 @@ impl App {
                 return self.new_group(&name);
             }
             ProfilesMsg::Duplicate(_) => return self.duplicate(&entry),
+            ProfilesMsg::Edit(_) => return self.edit_entry(&entry),
             ProfilesMsg::CopySsh(_) => return self.copy_ssh(&entry.profile),
             ProfilesMsg::AskDelete(_) if entry.origin == Origin::Stored => {
                 self.menu = None;

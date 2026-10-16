@@ -86,6 +86,15 @@ impl App {
 
     /// "Copy" on an OSC 52 toast: applies the write.
     pub(crate) fn accept_toast(&mut self, id: u64) -> Task<Message> {
+        // "Save as profile…" after a quick connect: the toast goes, the editor opens.
+        if let Some(crate::notifications::ToastAction::SaveAsProfile(profile)) =
+            self.toasts.get(id).and_then(|n| n.action.clone())
+        {
+            self.dismiss_toast(id);
+            return self.update(Message::Profiles(crate::profiles::ProfilesMsg::Edit(
+                profile,
+            )));
+        }
         let pending = self
             .pending_clipboard
             .iter()

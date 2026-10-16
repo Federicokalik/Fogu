@@ -21,6 +21,40 @@ pub const DEFAULT_KEEPALIVE_INTERVAL_MS: u64 = 5000;
 pub const DEFAULT_KEEPALIVE_COUNT_MAX: u32 = 10;
 /// Default PTY `TERM`.
 pub const DEFAULT_TERM: &str = "xterm-256color";
+/// How long a connect-time prompt (password, host key…) waits for an answer, in milliseconds.
+pub const DEFAULT_PROMPT_TIMEOUT_MS: u64 = 120_000;
+
+/// Stored option names whose behaviour is not implemented yet: the profile editor marks them
+/// "not supported yet".
+/// [`EffectiveSsh::unsupported`] warns about the same options at connect time when they are set.
+pub const NOT_SUPPORTED_YET: &[&str] = &[
+    "input_backspace",
+    "jump_host",
+    "proxy_command",
+    "socks_proxy_host",
+    "socks_proxy_port",
+    "http_proxy_host",
+    "http_proxy_port",
+    "forwarded_ports",
+    "agent_forward",
+    "x11",
+    "algorithms",
+    "reuse_session",
+    "scripts",
+    "cwd",
+    "remember_cwd",
+];
+
+/// The subset of [`NOT_SUPPORTED_YET`] that changes how the host is reached: a profile setting
+/// one refuses to connect (see [`EffectiveSsh::unsupported_route`]).
+pub const ROUTE_NOT_SUPPORTED_YET: &[&str] = &[
+    "jump_host",
+    "proxy_command",
+    "socks_proxy_host",
+    "socks_proxy_port",
+    "http_proxy_host",
+    "http_proxy_port",
+];
 
 /// Which authentication methods to try.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +234,10 @@ pub struct SshOpts {
     /// Offer only the agent identities whose `.pub` sits next to a configured key (OpenSSH
     /// `IdentitiesOnly`; `false`).
     pub identities_only: Option<bool>,
+    /// How long a connect-time prompt waits for an answer, in ms (120000); 0 = no limit.
+    pub prompt_timeout: Option<u64>,
+    /// SSH agent socket (`$SSH_AUTH_SOCK` when unset).
+    pub agent_path: Option<PathBuf>,
     /// `~/.ssh/config` options that apply to this host but are not used (unknown to Fogu,
     /// unusable values, or never obeyed like `StrictHostKeyChecking no`); listed in the
     /// connect-time warning. Only `ssh_config` profiles have them; never stored.
@@ -270,6 +308,10 @@ pub struct EffectiveSsh {
     pub weight: i32,
     /// See [`SshOpts::identities_only`].
     pub identities_only: bool,
+    /// See [`SshOpts::prompt_timeout`]; `None` = no limit.
+    pub prompt_timeout: Option<Duration>,
+    /// See [`SshOpts::agent_path`]; `None` = `$SSH_AUTH_SOCK`.
+    pub agent_path: Option<PathBuf>,
     /// See [`SshOpts::ignored_ssh_config`].
     pub ignored_ssh_config: Vec<String>,
 }
@@ -380,8 +422,67 @@ pub fn resolve_ssh(p: &SshOpts, d: &SshOpts) -> EffectiveSsh {
         verify_host_keys: pick!(verify_host_keys).unwrap_or(true),
         weight: pick!(weight).unwrap_or(0),
         identities_only: pick!(identities_only).unwrap_or(false),
+        prompt_timeout: Some(pick!(prompt_timeout).unwrap_or(DEFAULT_PROMPT_TIMEOUT_MS))
+            .filter(|&t| t > 0)
+            .map(ms),
+        agent_path: pick!(agent_path),
         ignored_ssh_config: p.ignored_ssh_config.clone(),
     }
+}
+
+/// `p` with every option that resolves to the same value without it set to `None` (the
+/// inverse of [`resolve_ssh`]): what the profile editor saves, so config.toml keeps only real
+/// overrides. `user` (its default is the local `$USER`, which differs between machines) and
+/// `osc52_write` (its default is a global setting) are kept as given.
+#[must_use]
+pub fn strip_ssh(p: &SshOpts, d: &SshOpts) -> SshOpts {
+    let full = resolve_ssh(p, d);
+    let mut out = p.clone();
+    macro_rules! strip {
+        ($($field:ident),* $(,)?) => {$(
+            if out.$field.is_some() {
+                let mut without = out.clone();
+                without.$field = None;
+                if resolve_ssh(&without, d) == full {
+                    out = without;
+                }
+            }
+        )*};
+    }
+    strip!(
+        host,
+        port,
+        auth,
+        private_keys,
+        keepalive_interval,
+        keepalive_count_max,
+        ready_timeout,
+        skip_banner,
+        warn_on_close,
+        term,
+        input_backspace,
+        jump_host,
+        proxy_command,
+        socks_proxy_host,
+        socks_proxy_port,
+        http_proxy_host,
+        http_proxy_port,
+        forwarded_ports,
+        agent_forward,
+        x11,
+        algorithms,
+        reuse_session,
+        scripts,
+        cwd,
+        remember_cwd,
+        clear_service_messages_on_connect,
+        verify_host_keys,
+        weight,
+        identities_only,
+        prompt_timeout,
+        agent_path,
+    );
+    out
 }
 
 /// `$USER`, else `root`.

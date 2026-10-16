@@ -30,6 +30,8 @@ pub use prompt::{
 };
 pub use sftp::{SftpCmd, SftpEvent, SftpHandle, SftpRequest, display_name, validate_name};
 #[cfg(feature = "ssh")]
+pub use ssh::algorithms::{Supported as SupportedAlgorithms, supported as supported_algorithms};
+#[cfg(feature = "ssh")]
 pub use ssh::{PROMPT_TIMEOUT, SshPaths};
 pub use supervise::supervise;
 

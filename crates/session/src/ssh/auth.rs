@@ -195,7 +195,11 @@ impl Auth<'_> {
     }
 
     async fn agent(&mut self) -> Result<Outcome, Stop> {
-        let mut agent = match AgentClient::connect_env().await {
+        let connected = match &self.ssh.agent_path {
+            Some(path) => AgentClient::connect_uds(expand_home(path)).await,
+            None => AgentClient::connect_env().await,
+        };
+        let mut agent = match connected {
             Ok(agent) => agent,
             Err(err) => {
                 tracing::debug!(error = %err, "no SSH agent");

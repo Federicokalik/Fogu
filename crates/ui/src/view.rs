@@ -27,6 +27,11 @@ impl App {
         let Some(tab) = self.active_tab() else {
             return column![].into();
         };
+        if let Some(editor) = &tab.editor {
+            let look = crate::sftp::panel::Look::new(&self.colors);
+            let page = crate::profile_editor::page(tab.id, editor, &self.config, look);
+            return self.chrome(page, None, None);
+        }
         let typing_elsewhere = self.renaming.is_some()
             || self.menu.is_some()
             || self.picker.is_some()
@@ -95,28 +100,40 @@ impl App {
         if let Some(panel) = sftp_panel {
             split = split.side(sftp::panel::view(tab.id, panel, &self.colors), panel.width);
         }
+        let sftp = tab
+            .panes
+            .values()
+            .any(|p| p.sftp.is_some())
+            .then_some(sftp_panel.is_some());
+        let dialog = sftp_panel.and_then(|p| sftp::dialog(tab.id, p));
+        self.chrome(split.into(), sftp, dialog)
+    }
+
+    /// The tab bar above `body` (the panes or an editor page), toasts, the profile sidebar and
+    /// the overlays.
+    fn chrome<'a>(
+        &'a self,
+        body: Element<'a, Message>,
+        sftp: Option<bool>,
+        dialog: Option<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
         let bar = TabBar {
             tabs: &self.tabs,
             active: self.active,
             hovered: self.hovered_tab,
             renaming: self.renaming.as_ref(),
             colors: &self.colors,
-            sftp: tab
-                .panes
-                .values()
-                .any(|p| p.sftp.is_some())
-                .then_some(sftp_panel.is_some()),
+            sftp,
             profiles: self.profiles.open,
         }
         .view();
         // Toasts are layered over the panes only, never over the tab bar.
-        let mut panes: Element<'_, Message> = split.into();
+        let mut panes = body;
         if let Some(toasts) = self.toasts.view(self.metrics.cell_h) {
             panes = iced::widget::stack![panes, toasts].into();
         }
         let main = column![bar, panes].into();
         let main = profiles::view::with_sidebar(main, &self.profiles, &self.config, &self.colors);
-        let dialog = sftp_panel.and_then(|p| sftp::dialog(tab.id, p));
         self.overlays(main, dialog)
     }
 

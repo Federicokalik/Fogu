@@ -245,3 +245,35 @@ fn keyboard_interactive_shows_sanitized_prompts_and_sends_the_answers() {
     });
     client.expect_text(fake_server::READY);
 }
+
+#[test]
+fn an_unanswered_prompt_ends_the_connection_after_the_profiles_prompt_timeout() {
+    use std::time::{Duration, Instant};
+    let server = FakeServer::start();
+    let dir = TempDir::new("prompt-timeout");
+    let mut ssh = fake_profile(&server, SshAuth::Password);
+    ssh.prompt_timeout = Some(Duration::from_millis(300));
+    let client = Client::connect(&ssh, fake_paths(&dir), no_prompts);
+    let Client {
+        rt, mut session, ..
+    } = client;
+    let started = Instant::now();
+    // Nobody answers the host-key prompt.
+    let end = rt.handle().block_on(async {
+        let wait = async {
+            while let Some(event) = session.events.recv().await {
+                if matches!(event, SessionOutput::Error(_) | SessionOutput::Exited(_)) {
+                    return Some(event);
+                }
+            }
+            None
+        };
+        tokio::time::timeout(Duration::from_secs(10), wait)
+            .await
+            .ok()
+            .flatten()
+    });
+    let err = error_of(end.expect("the session ended"));
+    assert!(matches!(err, SessionError::PromptTimeout), "{err:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}

@@ -52,6 +52,23 @@ pub(crate) fn with_sidebar<'a>(
         .into()
 }
 
+/// "Profiles", then "+" (New ▸) and "×" (close the sidebar).
+fn title_row<'a>(look: Look) -> Element<'a, Message> {
+    let icon = |label: &str, on_press: Message| {
+        button(text(label.to_owned()).size(14).color(look.fg))
+            .padding([0, 6])
+            .style(button::text)
+            .on_press(on_press)
+    };
+    row![
+        text("Profiles").size(14).color(look.fg).width(Length::Fill),
+        icon("+", msg(ProfilesMsg::NewMenu)),
+        icon("×", Message::Action(Action::ToggleProfiles)),
+    ]
+    .align_y(Alignment::Center)
+    .into()
+}
+
 fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'a, Message> {
     let all = entries(
         config,
@@ -111,15 +128,7 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
     if pos == 0 && !view.query.trim().is_empty() {
         list = list.push(text("No matching profile").size(12).color(look.dim));
     }
-    let close = button(text("×").size(14).color(look.fg))
-        .padding([0, 6])
-        .style(button::text)
-        .on_press(Message::Action(Action::ToggleProfiles));
-    let title = row![
-        text("Profiles").size(14).color(look.fg).width(Length::Fill),
-        close
-    ]
-    .align_y(Alignment::Center);
+    let title = title_row(look);
     let search = text_input("Search profiles", &view.query)
         .id(Id::new(SEARCH_INPUT))
         .on_input(|q| msg(ProfilesMsg::Query(q)))

@@ -1,16 +1,11 @@
-//! Config file I/O: XDG path, atomic save, load with graceful fallback, and semantic validation.
+//! Config file I/O: XDG path, atomic in-place writes, load with graceful fallback.
 
-use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 
 use super::Config;
-use crate::action::Action;
 use crate::background::{Background, Fit};
-use crate::keychord::KeyChord;
-use crate::profile::ProfileId;
-use crate::scheme::ColorScheme;
 
 /// The config file's name inside [`config_dir`].
 pub(super) const FILE_NAME: &str = "config.toml";
@@ -221,78 +216,6 @@ fn write_new_file(path: &Path, contents: &[u8]) -> Result<(), ConfigError> {
     file.sync_all().map_err(|err| ConfigError::io(path, err))
 }
 
-/// One semantic problem found by [`validate`]. Syntax errors never reach this point (they fail
-/// at [`load`] time instead).
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum ConfigIssue {
-    /// Two profiles share the same `id`.
-    #[error("duplicate profile id {0:?}")]
-    DuplicateProfileId(ProfileId),
-    /// A profile's `group` does not match any entry in `groups`.
-    #[error("profile {profile:?} references unknown group {group:?}")]
-    UnknownGroup {
-        /// The profile with the dangling reference.
-        profile: ProfileId,
-        /// The group id it references.
-        group: String,
-    },
-    /// `appearance.color_scheme` does not match a built-in scheme.
-    #[error("unknown colour scheme {0:?}")]
-    UnknownColorScheme(String),
-    /// The same chord is bound to more than one action.
-    #[error("{chord} is bound to more than one action: {actions:?}")]
-    AmbiguousChord {
-        /// The shared chord.
-        chord: KeyChord,
-        /// The actions it is bound to.
-        actions: Vec<Action>,
-    },
-}
-
-/// Checks `config` for problems that successful deserialisation cannot catch: duplicate ids,
-/// dangling group references, an unknown colour scheme name, and chords bound to more than one
-/// action. Returns every issue found (never panics, never fails to load the config).
-#[must_use]
-pub fn validate(config: &Config) -> Vec<ConfigIssue> {
-    let mut issues = Vec::new();
-
-    let mut seen_ids = HashSet::new();
-    let group_ids: HashSet<&str> = config.groups.iter().map(|g| g.id.0.as_str()).collect();
-    for profile in &config.profiles {
-        if !seen_ids.insert(&profile.id) {
-            issues.push(ConfigIssue::DuplicateProfileId(profile.id.clone()));
-        }
-        if let Some(group) = &profile.group
-            && !group_ids.contains(group.0.as_str())
-        {
-            issues.push(ConfigIssue::UnknownGroup {
-                profile: profile.id.clone(),
-                group: group.0.clone(),
-            });
-        }
-    }
-
-    if ColorScheme::by_name(&config.appearance.color_scheme).is_none() {
-        issues.push(ConfigIssue::UnknownColorScheme(
-            config.appearance.color_scheme.clone(),
-        ));
-    }
-
-    let mut by_chord: HashMap<KeyChord, Vec<Action>> = HashMap::new();
-    for (&action, chords) in config.hotkeys.bindings() {
-        for &chord in chords {
-            by_chord.entry(chord).or_default().push(action);
-        }
-    }
-    for (chord, actions) in by_chord {
-        if actions.len() > 1 {
-            issues.push(ConfigIssue::AmbiguousChord { chord, actions });
-        }
-    }
-
-    issues
-}
-
 #[cfg(test)]
 mod tests {
     #![expect(
@@ -303,15 +226,6 @@ mod tests {
     )]
 
     use super::*;
-    use crate::profile::{Group, GroupId, LocalOpts, Profile, ProfileKind};
-
-    fn profile(id: &str) -> Profile {
-        Profile {
-            id: ProfileId(id.to_owned()),
-            kind: ProfileKind::Local(LocalOpts::default()),
-            ..Profile::default_shell()
-        }
-    }
 
     #[test]
     fn config_dir_honours_the_override() {
@@ -477,70 +391,6 @@ background = { color = \"#112233\" }   # keep me
         let err = set_profile_background(tmp.path(), "work", Some(&bg)).unwrap_err();
         assert!(matches!(err, ConfigError::Io { .. }), "{err}");
         assert!(!path.exists());
-    }
-
-    #[test]
-    fn validate_catches_duplicate_profile_ids() {
-        let config = Config {
-            profiles: vec![profile("dup"), profile("dup")],
-            ..Config::default()
-        };
-        let issues = validate(&config);
-        assert!(
-            issues
-                .iter()
-                .any(|i| matches!(i, ConfigIssue::DuplicateProfileId(id) if id.0 == "dup")),
-            "{issues:?}"
-        );
-    }
-
-    #[test]
-    fn validate_catches_unknown_group_and_scheme() {
-        let mut p = profile("solo");
-        p.group = Some(GroupId("nonexistent".to_owned()));
-        let config = Config {
-            profiles: vec![p],
-            groups: vec![Group {
-                id: GroupId("other".to_owned()),
-                name: "Other".to_owned(),
-            }],
-            appearance: super::super::Appearance {
-                color_scheme: "Not A Real Scheme".to_owned(),
-                ..super::super::Appearance::default()
-            },
-            ..Config::default()
-        };
-        let issues = validate(&config);
-        assert!(matches!(
-            &issues[0],
-            ConfigIssue::UnknownGroup { group, .. } if group == "nonexistent"
-        ));
-        assert!(
-            issues.iter().any(
-                |i| matches!(i, ConfigIssue::UnknownColorScheme(s) if s == "Not A Real Scheme")
-            )
-        );
-    }
-
-    #[test]
-    fn validate_catches_ambiguous_chords() {
-        use crate::action::{Action, Hotkeys};
-        use std::collections::BTreeMap;
-        let mut bindings = BTreeMap::new();
-        let chord = KeyChord::parse("Ctrl-Shift-X").unwrap();
-        bindings.insert(Action::Copy, vec![chord]);
-        bindings.insert(Action::Paste, vec![chord]);
-        let config = Config {
-            hotkeys: Hotkeys::new(bindings),
-            ..Config::default()
-        };
-        let issues = validate(&config);
-        assert!(
-            issues
-                .iter()
-                .any(|i| matches!(i, ConfigIssue::AmbiguousChord { .. })),
-            "{issues:?}"
-        );
     }
 
     use std::os::unix::fs::PermissionsExt as _;

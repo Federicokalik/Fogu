@@ -35,6 +35,8 @@ pub enum Level {
 pub enum ToastAction {
     /// OSC 52 write waiting for the user's decision: "Copy" applies it, "Deny" drops it.
     ClipboardWrite,
+    /// A quick connect just opened: "Save as profile…" opens the editor on it.
+    SaveAsProfile(fogu_core::ProfileId),
     /// A finished download: "Open" (`file`, single-entry downloads) and "Show in file
     /// manager" (`dir`), both through the desktop's opener and only on click.
     Downloaded {
@@ -209,6 +211,10 @@ fn toast_view(note: &Notification) -> Element<'_, Message> {
             body = body.push(
                 buttons.push(button(text("Show in file manager").size(13)).on_press(open(dir))),
             );
+        }
+        Some(ToastAction::SaveAsProfile(_)) => {
+            let save = Message::ToastAccept(id);
+            body = body.push(button(text("Save as profile…").size(13)).on_press(save));
         }
         None => {}
     }

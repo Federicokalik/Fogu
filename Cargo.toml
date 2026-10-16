@@ -55,8 +55,9 @@ insta = "1.49.0"
 # other feature needed.
 serde = { version = "1.0.229", features = ["derive"] }
 # why: native config file format: human-editable, comments allowed, no YAML
-# type-coercion surprises.
-toml = "1.1.8"
+# type-coercion surprises. `preserve_order`: tables keep struct field order, so keys the
+# profile editor adds to config.toml come in the documented order (indexmap is already in the tree).
+toml = { version = "1.1.8", features = ["preserve_order"] }
 # why: edit config.toml in place, keeping the user's comments and order (a whole-file `toml`
 # round trip would drop them). Default features only (parse + display), pure Rust.
 toml_edit = "0.25.17"

@@ -1,0 +1,291 @@
+//! App wiring of the profile editor: opening "Profile: …" tabs, field changes (re-validated
+//! every time), file pickers, Save (in-place `ProfileEdit::Update` / `Add` of the stripped
+//! draft), Cancel, Delete (through the sidebar's confirmation) and "Copy to my profiles".
+
+use std::path::PathBuf;
+
+use fogu_core::config::{ProfileEdit, slug, unique_profile_id};
+use fogu_core::{LocalOpts, Profile, ProfileId, ProfileKind, SshOpts, strip_defaults};
+use iced::Task;
+
+use super::fields::{Effect, FieldId};
+use super::{ProfileEditor, Source};
+use crate::app::App;
+use crate::forms::FieldValue;
+use crate::message::Message;
+use crate::notifications::{Level, Notification};
+use crate::profiles::{Entry, Origin};
+use crate::tab::{Tab, TabId};
+
+/// Editor tab messages.
+#[derive(Clone, Debug)]
+pub enum EditorMsg {
+    /// A form widget changed.
+    Field(FieldId, FieldValue),
+    /// A file picker for the field closed (`None` = cancelled).
+    Picked(FieldId, Option<PathBuf>),
+    Save,
+    /// Cancel / Close: drop the draft and close the tab.
+    Cancel,
+    /// Ask to delete the stored profile (the sidebar's confirmation dialog).
+    Delete,
+    /// Read-only `~/.ssh/config` host: save it as a stored profile and edit that.
+    CopyToMine,
+}
+
+/// Why "Browse…" is off when no picker can open.
+const NO_PICKER: &str = "No file picker: install xdg-desktop-portal or zenity";
+
+impl App {
+    /// The editor of tab `tab`.
+    fn editor_mut(&mut self, tab: TabId) -> Option<&mut ProfileEditor> {
+        self.tabs
+            .iter_mut()
+            .find(|t| t.id == tab)
+            .and_then(|t| t.editor.as_deref_mut())
+    }
+
+    /// Opens the editor for a sidebar/picker entry: a stored profile is edited in place, a
+    /// `~/.ssh/config` host is shown read-only, a built-in or quick-connect one is saved as new.
+    pub(crate) fn edit_entry(&mut self, entry: &Entry) -> Task<Message> {
+        let source = match entry.origin {
+            Origin::Stored => Source::Stored(Box::new(entry.profile.clone())),
+            Origin::SshConfig => Source::SshConfig,
+            Origin::Builtin | Origin::Quick => Source::New,
+        };
+        let mut draft = entry.profile.clone();
+        if source == Source::New {
+            draft.id = unique_profile_id(&self.config, "new-profile");
+        }
+        self.open_editor(draft, source)
+    }
+
+    /// New ▸ Local / SSH: an empty draft.
+    pub(crate) fn new_profile(&mut self, ssh: bool) -> Task<Message> {
+        let kind = if ssh {
+            ProfileKind::Ssh(SshOpts::default())
+        } else {
+            ProfileKind::Local(LocalOpts::default())
+        };
+        let draft = Profile {
+            id: unique_profile_id(&self.config, "new-profile"),
+            name: String::new(),
+            kind,
+            ..Profile::default_shell()
+        };
+        self.open_editor(draft, Source::New)
+    }
+
+    /// A new editor tab on `draft` (or the one already open for that stored profile).
+    fn open_editor(&mut self, draft: Profile, source: Source) -> Task<Message> {
+        self.menu = None;
+        self.profiles.focused = false;
+        // Opened from a menu over the sidebar: the sidebar never saw the pointer leave (the menu
+        // had it), and a stale hover would hand it the keyboard on the next click in the page.
+        self.profiles.hovered = false;
+        let existing = self.tabs.iter().find(|t| {
+            t.editor
+                .as_ref()
+                .is_some_and(|e| e.source != Source::New && e.draft.id == draft.id)
+        });
+        if let Some(id) = existing.map(|t| t.id) {
+            self.activate(id);
+            return Task::none();
+        }
+        let mut editor = ProfileEditor::new(draft, source);
+        editor.picker = if cfg!(test) || crate::sftp::picker_available() {
+            Ok(())
+        } else {
+            Err(NO_PICKER)
+        };
+        editor.refresh(&self.config, &self.profiles.ssh_hosts.profiles);
+        let id = TabId(self.take_id());
+        self.tabs.push(Tab::editor(id, editor));
+        self.activate(id);
+        Task::none()
+    }
+
+    pub(crate) fn on_editor(&mut self, tab: TabId, message: EditorMsg) -> Task<Message> {
+        match message {
+            EditorMsg::Field(field, value) => {
+                let config = self.config.clone();
+                let hosts = self.profiles.ssh_hosts.profiles.clone();
+                let Some(editor) = self.editor_mut(tab) else {
+                    return Task::none();
+                };
+                let effect = editor.apply(field, value);
+                editor.refresh(&config, &hosts);
+                if let Effect::Browse(field) = effect {
+                    return self.editor_pick(tab, field);
+                }
+            }
+            EditorMsg::Picked(field, Some(path)) => {
+                return self.on_editor(tab, EditorMsg::Field(field, FieldValue::Picked(path)));
+            }
+            EditorMsg::Picked(_, None) => {}
+            EditorMsg::Save => return self.save_editor(tab),
+            EditorMsg::Cancel => return self.remove_tab(tab),
+            EditorMsg::Delete => {
+                if let Some(Source::Stored(old)) = self.editor_mut(tab).map(|e| e.source.clone()) {
+                    self.profiles.pending_delete = Some(old.id);
+                }
+            }
+            EditorMsg::CopyToMine => return self.copy_editor(tab),
+        }
+        Task::none()
+    }
+
+    /// The file (or, for the start directory, folder) picker for `field`.
+    fn editor_pick(&mut self, tab: TabId, field: FieldId) -> Task<Message> {
+        if !crate::sftp::picker_available() {
+            return self.notify(crate::sftp::no_picker_note());
+        }
+        let dialog = rfd::AsyncFileDialog::new();
+        let done =
+            move |path: Option<PathBuf>| Message::Editor(tab, EditorMsg::Picked(field, path));
+        let to_path = |f: Option<rfd::FileHandle>| f.map(|f| f.path().to_path_buf());
+        match field {
+            FieldId::LocalCwd => Task::perform(
+                dialog.set_title("Start directory").pick_folder(),
+                move |f| done(to_path(f)),
+            ),
+            FieldId::BgImage => Task::perform(
+                dialog
+                    .set_title("Background image")
+                    .add_filter("Images (PNG, JPEG, WebP)", &["png", "jpg", "jpeg", "webp"])
+                    .pick_file(),
+                move |f| done(to_path(f)),
+            ),
+            FieldId::PrivateKeys => {
+                let mut dialog = dialog.set_title("Private key");
+                if let Some(ssh_dir) = dirs::home_dir().map(|h| h.join(".ssh")) {
+                    dialog = dialog.set_directory(ssh_dir);
+                }
+                Task::perform(dialog.pick_file(), move |f| done(to_path(f)))
+            }
+            _ => Task::perform(dialog.set_title("Choose a file").pick_file(), move |f| {
+                done(to_path(f))
+            }),
+        }
+    }
+
+    /// Writes the draft (stripped of inherited values) and closes the editor; open tabs of the
+    /// profile keep running and use the new settings when they reconnect or restart.
+    fn save_editor(&mut self, tab: TabId) -> Task<Message> {
+        let Some(editor) = self.editor_mut(tab).map(|e| e.clone()) else {
+            return Task::none();
+        };
+        if !editor.can_save() {
+            return Task::none();
+        }
+        let mut draft = editor.draft.clone();
+        // Rows added with "+ Add" and left empty are not saved.
+        match &mut draft.kind {
+            ProfileKind::Ssh(ssh) => {
+                if let Some(keys) = &mut ssh.private_keys {
+                    keys.retain(|k| !k.as_os_str().is_empty());
+                }
+            }
+            ProfileKind::Local(local) => {
+                if let Some(args) = &mut local.args {
+                    args.retain(|a| !a.is_empty());
+                }
+            }
+        }
+        let mut new = strip_defaults(&draft, &self.config.profile_defaults);
+        let edit = match &editor.source {
+            Source::Stored(opened) => {
+                let Some(current) = self.config.profiles.iter().find(|p| p.id == opened.id) else {
+                    let note = Notification::new(Level::Error, "Profile not saved")
+                        .detail("It is no longer in config.toml.");
+                    return self.notify(note);
+                };
+                ProfileEdit::Update {
+                    old: Box::new(current.clone()),
+                    new: Box::new(new.clone()),
+                }
+            }
+            Source::New => {
+                new.id = unique_profile_id(&self.config, &slug(&new.name, "profile"));
+                ProfileEdit::Add(Box::new(new.clone()))
+            }
+            Source::SshConfig => return Task::none(),
+        };
+        if let Err(task) = self.write_edits(&[edit]) {
+            return task;
+        }
+        self.use_saved_profile(&new);
+        let closed = self.remove_tab(tab);
+        let note = Notification::new(Level::Info, "Profile saved")
+            .detail(fogu_term::sanitize_title(&new.name));
+        Task::batch([closed, self.notify(note)])
+    }
+
+    /// Open panes and tabs of `profile` remember the saved version (restart, reconnect).
+    fn use_saved_profile(&mut self, profile: &Profile) {
+        for tab in &mut self.tabs {
+            if tab.profile.id == profile.id {
+                tab.profile = profile.clone();
+            }
+            for pane in tab.panes.values_mut() {
+                if pane.profile.id == profile.id {
+                    pane.profile = profile.clone();
+                }
+            }
+        }
+    }
+
+    /// Closes every editor tab of stored profile `id` (it was deleted).
+    pub(crate) fn close_editors_of(&mut self, id: &ProfileId) -> Task<Message> {
+        let tabs: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| {
+                t.editor
+                    .as_ref()
+                    .is_some_and(|e| matches!(&e.source, Source::Stored(p) if &p.id == id))
+            })
+            .map(|t| t.id)
+            .collect();
+        Task::batch(tabs.into_iter().map(|t| self.remove_tab(t)))
+    }
+
+    /// "Copy to my profiles" in a read-only editor: the copy is saved and the editor switches
+    /// to it.
+    fn copy_editor(&mut self, tab: TabId) -> Task<Message> {
+        let Some(draft) = self.editor_mut(tab).map(|e| e.draft.clone()) else {
+            return Task::none();
+        };
+        let before = self.config.profiles.len();
+        let task = self.copy_from_ssh_config(&draft);
+        if self.config.profiles.len() == before {
+            return task; // not saved; the toast says why
+        }
+        let Some(copy) = self.config.profiles.last().cloned() else {
+            return task;
+        };
+        let (config, hosts) = (
+            self.config.clone(),
+            self.profiles.ssh_hosts.profiles.clone(),
+        );
+        if let Some(editor) = self.editor_mut(tab) {
+            *editor = ProfileEditor {
+                picker: editor.picker,
+                ..ProfileEditor::new(copy.clone(), Source::Stored(Box::new(copy)))
+            };
+            editor.refresh(&config, &hosts);
+        }
+        task
+    }
+
+    /// The active tab is an editor and nothing is in front of it: it gets keyboard shortcuts.
+    pub(crate) fn editor_has_keys(&self) -> bool {
+        self.active_tab().is_some_and(|t| t.editor.is_some())
+            && self.picker.is_none()
+            && self.menu.is_none()
+            && self.renaming.is_none()
+            && self.pending_close.is_none()
+            && self.profiles.pending_delete.is_none()
+            && !(self.profiles.open && self.profiles.focused)
+    }
+}

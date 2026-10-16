@@ -50,7 +50,13 @@ impl App {
             // That press opened a profile: the keyboard stays with the new terminal.
         } else if sidebar.open && sidebar.hovered {
             sidebar.focused = true;
-        } else if in_panel {
+        } else if in_panel
+            || self
+                .tabs
+                .iter()
+                .any(|t| t.id == active && t.editor.is_some())
+        {
+            // A click into the SFTP panel or a profile editor page takes the keyboard.
             sidebar.focused = false;
         }
     }
@@ -78,6 +84,17 @@ impl App {
                 Key::Named(Named::ArrowUp) => self.on_profiles(ProfilesMsg::Move(-1)),
                 Key::Named(Named::ArrowDown) => self.on_profiles(ProfilesMsg::Move(1)),
                 Key::Named(Named::Enter) => self.on_profiles(ProfilesMsg::Submit),
+                _ => Task::none(),
+            };
+        }
+        if self.editor_has_keys() {
+            if let Some(action) = crate::keys::hotkey(&self.config.hotkeys, key, modified, mods) {
+                return self.on_action(action);
+            }
+            // Tab / Shift+Tab move between the editor's fields.
+            return match key {
+                Key::Named(Named::Tab) if mods.shift() => iced::widget::operation::focus_previous(),
+                Key::Named(Named::Tab) => iced::widget::operation::focus_next(),
                 _ => Task::none(),
             };
         }

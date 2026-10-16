@@ -63,14 +63,14 @@ fn ssh(id: &str, host: &str, port: Option<u16>) -> Profile {
     }
 }
 
-pub(super) struct Tmp(pub(super) PathBuf);
+pub(crate) struct Tmp(pub(crate) PathBuf);
 impl Drop for Tmp {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
-pub(super) fn tmp() -> Tmp {
+pub(crate) fn tmp() -> Tmp {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
@@ -81,7 +81,7 @@ pub(super) fn tmp() -> Tmp {
 
 /// A headless app whose config is `dir/config.toml` (written from [`CONFIG`]) and whose Recent
 /// list lives in `dir/state`.
-pub(super) fn app_in(dir: &Path) -> App {
+pub(crate) fn app_in(dir: &Path) -> App {
     std::fs::write(dir.join("config.toml"), CONFIG).unwrap();
     let (config, err) = load(dir);
     assert!(err.is_none());
@@ -102,7 +102,7 @@ pub(super) fn send(app: &mut App, message: ProfilesMsg) {
     let _task = app.update(Message::Profiles(message));
 }
 
-pub(super) fn id(s: &str) -> ProfileId {
+pub(crate) fn id(s: &str) -> ProfileId {
     ProfileId(s.to_owned())
 }
 

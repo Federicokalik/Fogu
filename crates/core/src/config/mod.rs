@@ -6,10 +6,12 @@ mod edit;
 mod io;
 pub mod sftp;
 pub mod ssh_opts;
+mod validate;
 
 pub use edit::{ProfileEdit, edit_profiles, slug, unique_group_id, unique_profile_id};
-pub use io::{ConfigError, ConfigIssue, config_dir, load, set_profile_background, validate};
+pub use io::{ConfigError, config_dir, load, set_profile_background};
 pub use sftp::SftpCfg;
+pub use validate::{ConfigIssue, validate};
 
 use serde::{Deserialize, Serialize};
 

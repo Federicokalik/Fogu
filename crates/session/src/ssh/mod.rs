@@ -8,6 +8,7 @@
 //! texts are sanitized ([`sanitize_remote`]); channel data goes through the terminal like any
 //! program output. Secrets exist only as `SecretString` and are exposed only at the russh call.
 
+pub mod algorithms;
 mod auth;
 mod connect;
 mod hostkeys;
@@ -30,8 +31,10 @@ use crate::{
     SessionWarning,
 };
 
-/// How long a prompt waits for its [`SessionInput::PromptReply`] before the connection aborts.
-pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long a prompt waits for its [`SessionInput::PromptReply`] before the connection aborts,
+/// unless the profile sets `prompt_timeout`.
+pub const PROMPT_TIMEOUT: Duration =
+    Duration::from_millis(fogu_core::config::ssh_opts::DEFAULT_PROMPT_TIMEOUT_MS);
 /// `ready_timeout` when the profile sets none (20 s).
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -98,6 +101,8 @@ pub(crate) struct Ui {
     /// Latest size the UI asked for.
     pub(crate) size: Size,
     next_prompt: u64,
+    /// The profile's `prompt_timeout`; `None` = no limit.
+    prompt_timeout: Option<Duration>,
     /// The SFTP engine's channel ends, handed to the engine once the shell is up.
     pub(crate) sftp: Option<SftpEnds>,
 }
@@ -120,12 +125,13 @@ impl Ui {
         Ok(())
     }
 
-    /// Sends `kind` to the UI and waits (≤ [`PROMPT_TIMEOUT`]) for its reply.
+    /// Sends `kind` to the UI and waits (≤ the profile's `prompt_timeout`) for its reply.
     pub(crate) async fn ask(&mut self, kind: PromptKind) -> Result<PromptReply, Stop> {
         let id = PromptId(self.next_prompt);
         self.next_prompt += 1;
         tracing::debug!(?id, ?kind, "prompt");
         self.pump.emit(SessionOutput::Prompt(id, kind)).await?;
+        let limit = self.prompt_timeout;
         let wait = async {
             loop {
                 match self.in_rx.recv().await {
@@ -136,9 +142,12 @@ impl Ui {
                 }
             }
         };
-        timeout(PROMPT_TIMEOUT, wait)
-            .await
-            .unwrap_or(Err(Stop::Failed(SessionError::PromptTimeout)))
+        match limit {
+            Some(limit) => timeout(limit, wait)
+                .await
+                .unwrap_or(Err(Stop::Failed(SessionError::PromptTimeout))),
+            None => wait.await,
+        }
     }
 
     /// Input that arrives while no shell is running: sizes are remembered, close stops, keys and
@@ -173,6 +182,7 @@ pub(crate) async fn run_ssh(
         in_rx,
         size,
         next_prompt: 0,
+        prompt_timeout: ssh.prompt_timeout,
         sftp: Some(sftp),
     };
     let out = match session(&ssh, &paths, &mut ui).await {

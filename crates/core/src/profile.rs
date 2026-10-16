@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::background::Background;
-use crate::config::ssh_opts::{EffectiveSsh, SshOpts, resolve_ssh};
+use crate::config::ssh_opts::{EffectiveSsh, SshOpts, resolve_ssh, strip_ssh};
 use crate::scheme::RgbColor;
 
 /// How to start a local shell in a PTY. The concrete, fully-resolved form of a local profile
@@ -148,10 +148,10 @@ pub struct Profile {
     #[serde(default)]
     pub color: Option<RgbColor>,
     /// Suppress OSC-2/0/title-driven tab titles for this profile.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub disable_dynamic_title: bool,
     /// See [`SessionEndBehavior`].
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub behavior_on_session_end: SessionEndBehavior,
     /// Colour or image drawn under this profile's tabs (a tab may override it).
     #[serde(default)]
@@ -177,6 +177,16 @@ impl Profile {
             kind: ProfileKind::Local(LocalOpts::default()),
         }
     }
+}
+
+// Serde's `skip_serializing_if` passes a reference.
+#[expect(clippy::trivially_copy_pass_by_ref, reason = "serde's signature")]
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 /// Partial defaults applied under every profile of a kind, themselves falling back to
@@ -211,6 +221,39 @@ pub fn resolve(profile: &Profile, defaults: &ProfileDefaults) -> EffectiveProfil
         ProfileKind::Local(opts) => EffectiveProfile::Local(resolve_local(opts, &defaults.local)),
         ProfileKind::Ssh(opts) => EffectiveProfile::Ssh(resolve_ssh(opts, &defaults.ssh)),
     }
+}
+
+/// The inverse of [`resolve`]: `profile` with every kind option that resolves to the same
+/// value without it set to `None`, and empty `icon`/`group` cleared. What the profile editor
+/// saves, so config.toml keeps only real overrides.
+#[must_use]
+pub fn strip_defaults(profile: &Profile, defaults: &ProfileDefaults) -> Profile {
+    let mut out = profile.clone();
+    out.icon = out.icon.filter(|icon| !icon.trim().is_empty());
+    out.group = out.group.filter(|group| !group.0.trim().is_empty());
+    out.kind = match &profile.kind {
+        ProfileKind::Local(opts) => ProfileKind::Local(strip_local(opts, &defaults.local)),
+        ProfileKind::Ssh(opts) => ProfileKind::Ssh(strip_ssh(opts, &defaults.ssh)),
+    };
+    out
+}
+
+fn strip_local(p: &LocalOpts, d: &LocalOpts) -> LocalOpts {
+    let full = resolve_local(p, d);
+    let mut out = p.clone();
+    macro_rules! strip {
+        ($($field:ident),*) => {$(
+            if out.$field.is_some() {
+                let mut without = out.clone();
+                without.$field = None;
+                if resolve_local(&without, d) == full {
+                    out = without;
+                }
+            }
+        )*};
+    }
+    strip!(program, args, cwd, env, login);
+    out
 }
 
 fn resolve_local(opts: &LocalOpts, defaults: &LocalOpts) -> LocalProfile {

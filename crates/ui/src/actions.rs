@@ -66,7 +66,7 @@ impl App {
         self.tabs.iter_mut().find_map(|t| t.panes.get_mut(&id))
     }
 
-    fn take_id(&mut self) -> u64 {
+    pub(crate) fn take_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         id
@@ -314,6 +314,9 @@ impl App {
         let Some(tab) = self.tabs.iter().find(|t| t.id == id) else {
             return Task::none();
         };
+        if tab.panes.is_empty() {
+            return self.remove_tab(id); // a profile editor tab
+        }
         let panes: Vec<PaneId> = tab.panes.keys().copied().collect();
         Task::batch(panes.into_iter().map(|pane| self.close_pane(pane)))
     }
