@@ -25,6 +25,7 @@ mod profile_picker;
 mod prompt;
 mod restart;
 mod runs;
+mod sftp;
 mod split_container;
 mod subscription;
 mod tab;

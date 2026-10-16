@@ -42,6 +42,8 @@ pub struct TabBar<'a> {
     pub hovered: Option<TabId>,
     pub renaming: Option<&'a Rename>,
     pub colors: &'a Colors,
+    /// The active tab has an SSH pane: show the SFTP button (`true` = panel open).
+    pub sftp: Option<bool>,
 }
 
 /// `title` cut to [`MAX_TITLE_CHARS`] characters, ending in `…` when cut.
@@ -160,7 +162,23 @@ impl<'a> TabBar<'a> {
             .style(button::text)
             .on_press(Message::Action(Action::OpenProfilePicker));
         let bar_bg = self.bar_bg();
-        let bar = container(row![tabs, plus, profiles].align_y(Alignment::Center))
+        let mut bar_row = row![tabs, plus, profiles].align_y(Alignment::Center);
+        if let Some(open) = self.sftp {
+            let color = if open {
+                to_iced(fogu_core::RgbColor::from_hex(0x00_90FF))
+            } else {
+                fg
+            };
+            let sftp = button(text("SFTP").size(12).color(color))
+                .padding([2, 8])
+                .style(button::text)
+                .on_press(Message::Action(Action::ToggleSftp));
+            let tip = container(text("SFTP panel (toggle-sftp)").size(12))
+                .padding(4)
+                .style(container::rounded_box);
+            bar_row = bar_row.push(tooltip(sftp, tip, tooltip::Position::Bottom));
+        }
+        let bar = container(bar_row)
             .width(Length::Fill)
             .style(move |_theme: &iced::Theme| container::background(bar_bg));
         mouse_area(bar).on_move(Message::TabBarCursor).into()

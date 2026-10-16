@@ -102,6 +102,8 @@ pub enum Action {
     RestartTab,
     /// Opens the profile picker.
     OpenProfilePicker,
+    /// Shows/hides the SFTP side panel of the active SSH tab.
+    ToggleSftp,
 }
 
 /// An `Action` string was not one of the known slugs (e.g. `"new-tab"`, `"go-to-tab-3"`,
@@ -140,6 +142,7 @@ impl fmt::Display for Action {
             Self::Reconnect => write!(f, "reconnect"),
             Self::RestartTab => write!(f, "restart-tab"),
             Self::OpenProfilePicker => write!(f, "open-profile-picker"),
+            Self::ToggleSftp => write!(f, "toggle-sftp"),
         }
     }
 }
@@ -185,6 +188,7 @@ impl FromStr for Action {
             "reconnect" => Self::Reconnect,
             "restart-tab" => Self::RestartTab,
             "open-profile-picker" => Self::OpenProfilePicker,
+            "toggle-sftp" => Self::ToggleSftp,
             _ => return Err(ActionParseError(s.to_owned())),
         })
     }
@@ -289,6 +293,7 @@ impl Hotkeys {
         bindings.insert(Action::Reconnect, chords(&[]));
         bindings.insert(Action::RestartTab, chords(&[]));
         bindings.insert(Action::OpenProfilePicker, chords(&["Ctrl-Shift-E"]));
+        bindings.insert(Action::ToggleSftp, chords(&["Ctrl-Shift-O"]));
         Self::new(bindings)
     }
 
@@ -377,6 +382,7 @@ paste = []"#,
             Action::GoToTab(3),
             Action::PaneNav(Dir::Left),
             Action::OpenProfilePicker,
+            Action::ToggleSftp,
         ];
         for action in actions {
             let s = action.to_string();

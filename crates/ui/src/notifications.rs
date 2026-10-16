@@ -35,6 +35,8 @@ pub enum Level {
 pub enum ToastAction {
     /// OSC 52 write waiting for the user's decision: "Copy" applies it, "Deny" drops it.
     ClipboardWrite,
+    /// A finished download: "Show in file manager" (shown disabled until an opener exists).
+    ShowInFileManager,
 }
 
 /// One toast.
@@ -50,7 +52,7 @@ pub struct Notification {
     pub detail: String,
     /// When it was created.
     pub created: Instant,
-    /// Extra buttons; a toast with an action never auto-dismisses.
+    /// Extra buttons; a toast waiting for a decision (OSC 52) never auto-dismisses.
     pub action: Option<ToastAction>,
 }
 
@@ -88,7 +90,7 @@ impl Notification {
 
     /// Whether the toast removes itself after [`AUTO_DISMISS`].
     pub fn auto_dismisses(&self) -> bool {
-        self.level != Level::Error && self.action.is_none()
+        self.level != Level::Error && self.action != Some(ToastAction::ClipboardWrite)
     }
 
     /// Whether its time is up at `now`.
@@ -182,14 +184,21 @@ fn toast_view(note: &Notification) -> Element<'_, Message> {
     if !note.detail.is_empty() {
         body = body.push(text(&note.detail).size(13));
     }
-    if note.action == Some(ToastAction::ClipboardWrite) {
-        body = body.push(
-            row![
-                button(text("Copy")).on_press(Message::ToastAccept(id)),
-                button(text("Deny")).on_press(Message::DismissToast(id)),
-            ]
-            .spacing(8),
-        );
+    match note.action {
+        Some(ToastAction::ClipboardWrite) => {
+            body = body.push(
+                row![
+                    button(text("Copy")).on_press(Message::ToastAccept(id)),
+                    button(text("Deny")).on_press(Message::DismissToast(id)),
+                ]
+                .spacing(8),
+            );
+        }
+        // No `on_press`: drawn disabled until opening the file manager is supported.
+        Some(ToastAction::ShowInFileManager) => {
+            body = body.push(button(text("Show in file manager").size(13)));
+        }
+        None => {}
     }
     let close = button(text("×")).on_press(Message::DismissToast(id));
     let level = note.level;

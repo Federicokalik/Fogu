@@ -5,6 +5,7 @@
 use fogu_core::Size;
 use fogu_term::input;
 use fogu_term::{TermHandle, TermMode};
+use iced::Task;
 
 use crate::app::App;
 use crate::message::Message;
@@ -44,13 +45,13 @@ impl App {
     /// keeps its grid (reset to a clean state, see `TermHandle::reset_for_new_session`) when
     /// `terminal.keep_history_on_restart` is set; a running one (`RestartTab` / `Reconnect`)
     /// always gets a blank terminal, since its old session may still be writing.
-    pub(crate) fn restart_pane(&mut self, id: PaneId) {
+    pub(crate) fn restart_pane(&mut self, id: PaneId) -> Task<Message> {
         let Some(index) = self.tab_of(id) else {
-            return;
+            return Task::none();
         };
         let keep = self.config.terminal.keep_history_on_restart;
         let Some(old) = self.tabs.get_mut(index).and_then(|t| t.panes.remove(&id)) else {
-            return;
+            return Task::none();
         };
         let (profile, size) = (old.profile.clone(), old.size());
         let kept = keep && !old.state.is_running();
@@ -67,7 +68,7 @@ impl App {
         let pane = self.start_pane(&profile, None, (term, kept), size);
         let new = pane.id;
         let Some(tab) = self.tabs.get_mut(index) else {
-            return;
+            return Task::none();
         };
         tab.panes.insert(new, pane);
         let layout = std::mem::replace(&mut tab.layout, fogu_core::SplitTree::new(new));
@@ -75,6 +76,7 @@ impl App {
         if tab.focused == id {
             tab.focused = new;
         }
+        self.rebind_panel(id, new)
     }
 }
 

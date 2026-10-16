@@ -9,6 +9,7 @@ use iced::Point;
 use crate::metrics::CellPos;
 use crate::profile_picker::PickerMsg;
 use crate::prompt::PromptMsg;
+use crate::sftp::SftpMsg;
 use crate::tab::{PaneId, TabId};
 
 /// A step of a mouse selection gesture, in viewport cells.
@@ -141,6 +142,18 @@ pub enum Message {
     Picker(PickerMsg),
     /// The "close live SSH session?" modal: `true` = close, `false` = keep it.
     ConfirmClose(bool),
+    /// SFTP engine events and side-panel input.
+    Sftp(SftpMsg),
+    /// A key press no widget took (unmodified key, key with modifiers applied, modifiers).
+    KeyIgnored(
+        iced::keyboard::Key,
+        iced::keyboard::Key,
+        iced::keyboard::Modifiers,
+    ),
+    /// The modifier keys changed (Ctrl/Shift-click selection in the SFTP list).
+    Modifiers(iced::keyboard::Modifiers),
+    /// A mouse button was pressed anywhere (keyboard focus between terminal and SFTP panel).
+    MousePressed,
 }
 
 impl Message {

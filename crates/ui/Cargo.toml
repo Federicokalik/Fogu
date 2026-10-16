@@ -13,6 +13,8 @@ iced = { workspace = true }
 fogu-core = { path = "../core" }
 fogu-term = { path = "../term" }
 secrecy.workspace = true
+rfd.workspace = true
+dirs.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

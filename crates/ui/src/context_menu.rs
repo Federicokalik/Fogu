@@ -91,17 +91,25 @@ pub struct ContextMenu {
 }
 
 impl ContextMenu {
-    /// The tab menu (applies to the active tab: right-click activates first).
-    pub fn tab(anchor: Point) -> Self {
+    /// The tab menu (applies to the active tab: right-click activates first); `ssh` adds the
+    /// SFTP panel toggle.
+    pub fn tab(anchor: Point, ssh: bool) -> Self {
         let mut close = MenuItem::new("Close", MenuAction::Run(Action::CloseTab));
         close.separator = true;
+        let mut items = vec![
+            MenuItem::new("Rename…", MenuAction::Run(Action::RenameTab)),
+            MenuItem::new("Color ▸", MenuAction::Ui(Message::MenuColors)),
+        ];
+        if ssh {
+            items.push(MenuItem::new(
+                "SFTP panel",
+                MenuAction::Run(Action::ToggleSftp),
+            ));
+        }
+        items.push(close);
         Self {
             anchor,
-            items: vec![
-                MenuItem::new("Rename…", MenuAction::Run(Action::RenameTab)),
-                MenuItem::new("Color ▸", MenuAction::Ui(Message::MenuColors)),
-                close,
-            ],
+            items,
             input: None,
         }
     }
@@ -262,7 +270,7 @@ mod tests {
 
     #[test]
     fn menu_stays_inside_the_window() {
-        let menu = ContextMenu::tab(Point::new(990.0, 5.0));
+        let menu = ContextMenu::tab(Point::new(990.0, 5.0), false);
         let at = menu.position(Size::new(1000.0, 650.0));
         assert!((at.x - (1000.0 - MENU_W)).abs() < f32::EPSILON);
         assert!((at.y - 5.0).abs() < f32::EPSILON);

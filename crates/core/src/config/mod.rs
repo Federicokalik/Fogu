@@ -3,9 +3,11 @@
 //! "defaults" file).
 
 mod io;
+pub mod sftp;
 pub mod ssh_opts;
 
 pub use io::{ConfigError, ConfigIssue, config_dir, load, save, validate};
+pub use sftp::SftpCfg;
 
 use serde::{Deserialize, Serialize};
 
@@ -182,6 +184,8 @@ pub struct Config {
     pub groups: Vec<Group>,
     /// Profile opened for new tabs when set; falls back to "Default shell".
     pub default_profile: Option<ProfileId>,
+    /// SFTP panel and transfers.
+    pub sftp: SftpCfg,
 }
 
 impl Default for Config {
@@ -195,6 +199,7 @@ impl Default for Config {
             profiles: Vec::new(),
             groups: Vec::new(),
             default_profile: None,
+            sftp: SftpCfg::default(),
         }
     }
 }

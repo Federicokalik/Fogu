@@ -5,12 +5,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fogu_core::{Profile, ProfileKind, RgbColor, Size, SplitTree};
-use fogu_session::{ExitInfo, SessionHandle, SessionInput, SessionWarning};
+use fogu_session::{
+    ExitInfo, SessionHandle, SessionInput, SessionOutput, SessionWarning, SftpEvent, SftpRequest,
+};
 use fogu_term::{RenderSnapshot, Scroll, TermHandle};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
 
 use crate::prompt::PromptState;
+use crate::sftp::SftpPanelState;
 use crate::subscription::EventSlot;
 
 /// Identifies a tab; monotonic, never reused.
@@ -114,7 +117,9 @@ pub struct Pane {
     pub term: TermHandle,
     dirty: Arc<AtomicBool>,
     session_input: Sender<SessionInput>,
-    pub events: EventSlot,
+    pub events: EventSlot<SessionOutput>,
+    /// SSH panes: the connection's SFTP engine (used by the tab's SFTP panel).
+    pub sftp: Option<SftpLink>,
     pub state: PaneState,
     pub snapshot: RenderSnapshot,
     /// Bumped per resize; older debounce timers are stale.
@@ -151,6 +156,10 @@ impl Pane {
             term,
             session_input: handle.input,
             events: EventSlot::new(id.0, handle.events),
+            sftp: handle.sftp.map(|h| SftpLink {
+                cmds: h.cmds,
+                events: EventSlot::new(id.0, h.events),
+            }),
             state: PaneState::Running,
             resize_generation: 0,
             pending_resize: None,
@@ -216,6 +225,16 @@ impl Pane {
     }
 }
 
+/// The UI side of a pane's SFTP engine: commands out, events in (subscribed for every SSH
+/// pane, panel open or not).
+#[derive(Debug)]
+pub struct SftpLink {
+    /// Commands to the engine.
+    pub cmds: Sender<SftpRequest>,
+    /// Engine events until the subscription takes them.
+    pub events: EventSlot<SftpEvent>,
+}
+
 /// One tab: its title override, colour and its panes laid out by a split tree. Each pane
 /// carries its own profile (a split may connect elsewhere).
 #[derive(Debug)]
@@ -231,6 +250,8 @@ pub struct Tab {
     pub panes: BTreeMap<PaneId, Pane>,
     /// The pane receiving keys; always a leaf of `layout`.
     pub focused: PaneId,
+    /// The SFTP side panel (SSH tabs), kept while hidden so transfers stay listed.
+    pub sftp: Option<SftpPanelState>,
 }
 
 impl Tab {
@@ -243,6 +264,7 @@ impl Tab {
             layout: SplitTree::new(pane.id),
             focused: pane.id,
             panes: BTreeMap::from([(pane.id, pane)]),
+            sftp: None,
         }
     }
 

@@ -26,11 +26,12 @@ use crate::notifications::{AUTO_DISMISS, Level, Notification, Toasts};
 use crate::palette::{Colors, to_iced};
 use crate::panes::{CloseTarget, CwdQuery};
 use crate::paste::PendingPaste;
-use crate::profile_picker::{self, PickerMsg, ProfilePicker};
+use crate::profile_picker::{self, ProfilePicker};
 use crate::prompt;
 use crate::restart;
+use crate::sftp;
 use crate::split_container::SplitContainer;
-use crate::subscription::session_events;
+use crate::subscription::{session_events, sftp_events};
 use crate::tab::{PaneId, Tab, TabId};
 use crate::tab_bar::{Rename, TabBar};
 use crate::terminal_view::TerminalView;
@@ -79,6 +80,8 @@ pub struct App {
     pub(crate) pending_close: Option<CloseTarget>,
     /// `--config-dir` (SSH `known_hosts` location); `None` = the default.
     pub(crate) config_dir: Option<std::path::PathBuf>,
+    /// Modifier keys currently held (from the window's keyboard events).
+    pub(crate) modifiers: keyboard::Modifiers,
     exit_after_first_frame: bool,
     /// Test builds: input ends of the stub sessions (what the UI sent) and the effective
     /// profile each stub session was opened with.
@@ -86,6 +89,9 @@ pub struct App {
     pub(crate) stub_inputs: Vec<tokio::sync::mpsc::Receiver<fogu_session::SessionInput>>,
     #[cfg(test)]
     pub(crate) stub_profiles: Vec<fogu_core::EffectiveProfile>,
+    /// Test builds: command ends of the SSH stubs' SFTP handles.
+    #[cfg(test)]
+    pub(crate) stub_sftp: Vec<tokio::sync::mpsc::Receiver<fogu_session::SftpRequest>>,
 }
 
 impl App {
@@ -131,12 +137,15 @@ impl App {
             picker: None,
             pending_close: None,
             config_dir: None,
+            modifiers: keyboard::Modifiers::default(),
             exit_after_first_frame: false,
             config,
             #[cfg(test)]
             stub_inputs: Vec::new(),
             #[cfg(test)]
             stub_profiles: Vec::new(),
+            #[cfg(test)]
+            stub_sftp: Vec::new(),
         }
     }
 
@@ -222,6 +231,16 @@ impl App {
             Message::Picker(message) => self.on_picker(message),
             Message::Enter => self.on_enter(),
             Message::ConfirmClose(confirmed) => self.on_confirm_close(confirmed),
+            Message::Sftp(message) => self.on_sftp(message),
+            Message::KeyIgnored(key, modified, mods) => self.on_key_ignored(&key, &modified, mods),
+            Message::Modifiers(mods) => {
+                self.modifiers = mods;
+                Task::none()
+            }
+            Message::MousePressed => {
+                self.on_mouse_pressed();
+                Task::none()
+            }
             Message::Session(pane, event) => self.on_session(pane, event),
             Message::Action(action) => self.on_action(action),
             Message::GridResized { pane, cols, rows } => self.on_grid_resized(pane, cols, rows),
@@ -273,7 +292,7 @@ impl App {
         match message {
             Message::Key(_) | Message::Text(_) if !pane.state.is_running() => {
                 if !pane.closing && restart::restarts(&message, alt_is_meta) {
-                    self.restart_pane(id);
+                    return self.restart_pane(id);
                 }
             }
             Message::Key(key) => {
@@ -392,6 +411,8 @@ impl App {
             || self.menu.is_some()
             || self.picker.is_some()
             || self.pending_close.is_some();
+        let sftp_panel = tab.sftp.as_ref().filter(|p| p.visible);
+        let panel_has_keys = sftp_panel.is_some_and(|p| p.focused);
         let mouse = MouseConfig {
             wheel_lines: self.config.terminal.wheel_lines,
             paste_on_middle_click: self.config.terminal.paste_on_middle_click,
@@ -403,8 +424,11 @@ impl App {
             .filter_map(|id| tab.panes.get(id))
             .map(|pane| {
                 let id = pane.id;
-                let focused =
-                    id == tab.focused && self.focused && !typing_elsewhere && pane.prompt.is_none();
+                let focused = id == tab.focused
+                    && self.focused
+                    && !typing_elsewhere
+                    && !panel_has_keys
+                    && pane.prompt.is_none();
                 let view: Element<'_, Message> = TerminalView::new(
                     id,
                     &pane.snapshot,
@@ -443,12 +467,20 @@ impl App {
         if let Some(color) = border {
             split = split.border(tab.focused, color);
         }
+        if let Some(panel) = sftp_panel {
+            split = split.side(sftp::panel::view(tab.id, panel, &self.colors), panel.width);
+        }
         let bar = TabBar {
             tabs: &self.tabs,
             active: self.active,
             hovered: self.hovered_tab,
             renaming: self.renaming.as_ref(),
             colors: &self.colors,
+            sftp: tab
+                .panes
+                .values()
+                .any(|p| p.sftp.is_some())
+                .then_some(sftp_panel.is_some()),
         }
         .view();
         // Toasts are layered over the panes only, never over the tab bar.
@@ -458,6 +490,10 @@ impl App {
         }
         let modal = self.paste_modal().or_else(|| self.close_modal());
         let base = overlay(column![bar, panes].into(), modal);
+        let base = match sftp_panel.and_then(|p| sftp::conflict_dialog(tab.id, p)) {
+            Some(dialog) => modal::over(base, dialog),
+            None => base,
+        };
         let base = profile_picker::overlay(base, self.picker.as_ref(), &self.config);
         context_menu::overlay(base, self.menu.as_ref(), self.window_size)
     }
@@ -468,7 +504,10 @@ impl App {
             .tabs
             .iter()
             .flat_map(|tab| tab.panes.values())
-            .map(|pane| session_events(&pane.events));
+            .flat_map(|pane| {
+                let sftp = pane.sftp.as_ref().map(|link| sftp_events(&link.events));
+                std::iter::once(session_events(&pane.events)).chain(sftp)
+            });
         let window_events = event::listen_with(|event, status, _window| match event {
             iced::Event::Window(window::Event::Focused) => Some(Message::Focused(true)),
             iced::Event::Window(window::Event::Unfocused) => Some(Message::Focused(false)),
@@ -480,16 +519,19 @@ impl App {
                 key: keyboard::Key::Named(Named::Escape),
                 ..
             }) => Some(Message::Escape),
-            // Keys no widget took: dialog defaults and picker navigation.
+            // Keys no widget took: SFTP panel keys, dialog defaults and picker navigation.
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(named),
+                key,
+                modified_key,
+                modifiers,
                 ..
-            }) if status == event::Status::Ignored => match named {
-                Named::Enter => Some(Message::Enter),
-                Named::ArrowUp => Some(Message::Picker(PickerMsg::Move(-1))),
-                Named::ArrowDown => Some(Message::Picker(PickerMsg::Move(1))),
-                _ => None,
-            },
+            }) if status == event::Status::Ignored => {
+                Some(Message::KeyIgnored(key, modified_key, modifiers))
+            }
+            iced::Event::Keyboard(keyboard::Event::ModifiersChanged(mods)) => {
+                Some(Message::Modifiers(mods))
+            }
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Message::MousePressed),
             _ => None,
         });
         let frame = self

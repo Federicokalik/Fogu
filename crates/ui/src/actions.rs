@@ -152,17 +152,24 @@ impl App {
     }
 
     /// Test builds: an inert session (no process). Its input end is kept in `stub_inputs`; its
-    /// event sender is dropped, so the event stream is empty.
+    /// event sender is dropped, so the event stream is empty. SSH stubs get an SFTP handle whose
+    /// command end is kept in `stub_sftp`.
     #[cfg(test)]
     fn open_session(&mut self, p: &EffectiveProfile, _: Size, _: TermHandle) -> SessionHandle {
         self.stub_profiles.push(p.clone());
         let (input, input_rx) = tokio::sync::mpsc::channel(8);
         let (_, events) = tokio::sync::mpsc::channel(8);
         self.stub_inputs.push(input_rx);
+        let sftp = matches!(p, EffectiveProfile::Ssh(_)).then(|| {
+            let (cmds, cmds_rx) = tokio::sync::mpsc::channel(64);
+            let (_, events) = tokio::sync::mpsc::channel(8);
+            self.stub_sftp.push(cmds_rx);
+            fogu_session::SftpHandle { cmds, events }
+        });
         SessionHandle {
             input,
             events,
-            sftp: None,
+            sftp,
         }
     }
 
@@ -208,7 +215,7 @@ impl App {
             Action::RenameTab => return self.start_rename(self.active),
             Action::RestartTab => {
                 if let Some(pane) = self.active_pane().map(|p| p.id) {
-                    self.restart_pane(pane);
+                    return self.restart_pane(pane);
                 }
             }
             Action::Copy => {
@@ -254,10 +261,11 @@ impl App {
                     .active_pane()
                     .filter(|p| p.is_ssh() || !p.state.is_running())
                 {
-                    self.restart_pane(pane.id);
+                    return self.restart_pane(pane.id);
                 }
             }
             Action::OpenProfilePicker => return self.open_picker(),
+            Action::ToggleSftp => return self.toggle_sftp(),
             // Not implemented yet; the user is told rather than left guessing.
             Action::SelectAll => {
                 tracing::debug!(%action, "action not implemented yet");
@@ -376,7 +384,10 @@ impl App {
             Message::OpenTabMenu(id) => {
                 self.commit_rename();
                 self.activate(id);
-                self.menu = Some(ContextMenu::tab(self.tab_bar_cursor));
+                let ssh = self
+                    .active_tab()
+                    .is_some_and(|t| t.panes.values().any(|p| p.sftp.is_some()));
+                self.menu = Some(ContextMenu::tab(self.tab_bar_cursor, ssh));
             }
             Message::MenuColors => {
                 let anchor = self.menu.as_ref().map_or(self.tab_bar_cursor, |m| m.anchor);

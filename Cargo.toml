@@ -79,6 +79,14 @@ tokio-util = { version = "0.7.20", default-features = false }
 # (zeroize-on-drop, redacted `Debug`).
 secrecy = "0.10.3"
 
+# why: native file pickers for SFTP upload/download.
+# Only the `xdg-portal` backend (D-Bus portal, zenity fallback): no GTK, no `wayland` feature (the
+# portal needs no Wayland handle since we open the dialog without a parent window).
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+# why: the XDG download directory (`~/Downloads`, honours `user-dirs.dirs`) for SFTP double-click
+# downloads; `xdg` covers only the base-directory spec, not user dirs.
+dirs = "7.0.0"
+
 # why: command-line flags (`--config-dir`, `--software-render`, `--version`).
 # `derive` keeps the flag definitions declarative; default features (help, usage, errors) only.
 clap = { version = "4.6.7", features = ["derive"] }

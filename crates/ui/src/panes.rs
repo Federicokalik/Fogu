@@ -207,6 +207,9 @@ impl App {
         };
         tab.panes.remove(&id);
         tab.layout.remove(&id);
+        if tab.sftp.as_ref().is_some_and(|p| p.pane == id) {
+            tab.sftp = None;
+        }
         let Some(next) = tab.layout.leaves().first().map(|p| **p) else {
             let tab = tab.id;
             return self.remove_tab(tab);
