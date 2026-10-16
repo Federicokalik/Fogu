@@ -1,7 +1,7 @@
 //! `fogu-core`: pure config/model crate (config schema, profiles, `SplitTree`, colour
 //! schemes, keymap parsing, `Action` enum, recovery-state model). No tokio, no GUI, no I/O
 //! (except [`config::load`], the in-place `config.toml` edits, [`builtin`]'s `/etc/shells`
-//! read and [`recent`]'s state file; plain `std::fs`).
+//! read, [`recent`]'s state file and the read-only [`ssh_config`] import; plain `std::fs`).
 
 mod action;
 mod background;
@@ -15,6 +15,7 @@ pub mod recent;
 mod scheme;
 mod size;
 mod split;
+pub mod ssh_config;
 
 pub use action::{Action, Dir, Hotkeys};
 pub use background::{Background, EffectiveBackground, Fit, TabBackground, effective_background};

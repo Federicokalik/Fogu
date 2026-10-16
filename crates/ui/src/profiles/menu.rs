@@ -1,6 +1,7 @@
 //! The profile row menu:
 //! Connect, Connect in split, Open SFTP, Edit… (not yet), Duplicate, Copy ssh command, Move to
-//! group ▸, Delete. Editing items are enabled for stored profiles only.
+//! group ▸, Delete. Editing items are enabled for stored profiles only; a `~/.ssh/config` host
+//! offers "Copy to my profiles" instead of Duplicate.
 
 use fogu_core::config::ProfileEdit;
 use fogu_core::{Config, ProfileKind};
@@ -46,7 +47,12 @@ pub(super) fn row_menu(anchor: iced::Point, entry: &Entry, config: &Config) -> C
     edit.separator = true;
     edit.tooltip = Some("Coming with the profile editor");
     items.push(edit);
-    items.push(item("Duplicate", ProfilesMsg::Duplicate(id.clone()), true));
+    let duplicate = if entry.origin == Origin::SshConfig {
+        "Copy to my profiles"
+    } else {
+        "Duplicate"
+    };
+    items.push(item(duplicate, ProfilesMsg::Duplicate(id.clone()), true));
     if ssh {
         let mut copy = item(
             "Copy ssh command",

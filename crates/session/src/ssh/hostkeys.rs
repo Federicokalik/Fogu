@@ -6,13 +6,15 @@
 //! fails the whole file on one bad line, splits on single spaces, miscounts line numbers after
 //! comments and ignores `@revoked`; we need exact line numbers for the "changed" screen.
 //! Matching follows OpenSSH: `host` for port 22, `[host]:port` otherwise; comma-separated
-//! patterns with `*`/`?` globs and `!` negation, case-insensitive; hashed `|1|salt|hash` entries
+//! patterns with `*`/`?` globs and `!` negation, case-insensitive (`fogu_core::ssh_config::
+//! host_matches`, shared with `~/.ssh/config`); hashed `|1|salt|hash` entries
 //! via HMAC-SHA1. Only `known_hosts` lines are read here: never the key material of the user.
 
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use fogu_core::fsutil;
+use fogu_core::ssh_config::host_matches;
 use russh::keys::ssh_key::known_hosts::{Entry, HostPatterns, Marker};
 use russh::keys::{HashAlg, PublicKey};
 
@@ -172,50 +174,8 @@ fn matches_host(patterns: &HostPatterns, name: &str) -> bool {
             let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, salt);
             ring::hmac::verify(&key, name.as_bytes(), hash).is_ok()
         }
-        HostPatterns::Patterns(list) => {
-            let mut positive = false;
-            for pattern in list {
-                let pattern = pattern.to_ascii_lowercase();
-                if let Some(negated) = pattern.strip_prefix('!') {
-                    if glob(negated.as_bytes(), name.as_bytes()) {
-                        return false;
-                    }
-                } else if glob(pattern.as_bytes(), name.as_bytes()) {
-                    positive = true;
-                }
-            }
-            positive
-        }
+        HostPatterns::Patterns(list) => host_matches(list.iter().map(String::as_str), name),
     }
-}
-
-/// OpenSSH `match_pattern`: `*` = any run, `?` = one char. Iterative (no recursion blow-up).
-fn glob(pattern: &[u8], text: &[u8]) -> bool {
-    let (mut p, mut t) = (0, 0);
-    let mut star: Option<(usize, usize)> = None;
-    while t < text.len() {
-        match pattern.get(p) {
-            Some(b'*') => {
-                star = Some((p, t));
-                p += 1;
-            }
-            Some(&c) if c == b'?' || Some(&c) == text.get(t) => {
-                p += 1;
-                t += 1;
-            }
-            _ => match star {
-                Some((sp, st)) => {
-                    p = sp + 1;
-                    t = st + 1;
-                    star = Some((sp, st + 1));
-                }
-                None => return false,
-            },
-        }
-    }
-    pattern
-        .get(p..)
-        .is_some_and(|rest| rest.iter().all(|&c| c == b'*'))
 }
 
 /// The host field we write: the plain lookup name when it is made only of hostname/address

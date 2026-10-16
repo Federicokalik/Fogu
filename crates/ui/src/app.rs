@@ -95,6 +95,14 @@ pub struct App {
     pub(crate) stub_sftp: Vec<tokio::sync::mpsc::Receiver<fogu_session::SftpRequest>>,
 }
 
+/// `~/.ssh/config` hosts; test builds don't read the machine's file.
+fn ssh_hosts() -> crate::profiles::SshHosts {
+    if cfg!(test) {
+        return crate::profiles::SshHosts::default();
+    }
+    crate::profiles::SshHosts::from_process()
+}
+
 /// "Default shell" + the installed shells; test builds don't depend on the machine's
 /// `/etc/shells`.
 fn builtins() -> Vec<fogu_core::Profile> {
@@ -145,7 +153,10 @@ impl App {
             pending_clipboard: Vec::new(),
             blink: Blink::new(Instant::now()),
             picker: None,
-            profiles: ProfilesView::new(config.appearance.profiles_sidebar_width, builtins()),
+            profiles: ProfilesView {
+                ssh_hosts: ssh_hosts(),
+                ..ProfilesView::new(config.appearance.profiles_sidebar_width, builtins())
+            },
             pending_close: None,
             config_dir: None,
             modifiers: keyboard::Modifiers::default(),
@@ -179,7 +190,7 @@ impl App {
         if let Some(dir) = options.state_dir {
             app.load_recent(dir.join(fogu_core::recent::RECENT_FILE));
         }
-        let mut tasks = Vec::new();
+        let mut tasks = vec![app.refresh_ssh_hosts()];
         let font_notes = font_problems
             .into_iter()
             .map(|p| Notification::new(Level::Warn, "Font").detail(p));

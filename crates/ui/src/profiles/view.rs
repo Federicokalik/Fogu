@@ -53,7 +53,12 @@ pub(crate) fn with_sidebar<'a>(
 }
 
 fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'a, Message> {
-    let all = entries(config, &view.builtins, Some(&view.recent));
+    let all = entries(
+        config,
+        &view.builtins,
+        &view.ssh_hosts.profiles,
+        Some(&view.recent),
+    );
     let rows = rows(&all, config, &view.recent, now_secs());
     let lines = lines(view, config, &all, &rows);
     let row_look = RowLook {

@@ -42,7 +42,13 @@ pub enum PickerMsg {
 /// What the picker lists: every profile of the sidebar, as entries and fuzzy rows.
 pub(crate) fn listing(app: &App) -> (Vec<Entry>, Vec<FuzzyRow>) {
     let entries = app.all_entries();
-    let rows = profiles::rows(&entries, &app.config, &app.profiles.recent, now_secs());
+    let mut rows = profiles::rows(&entries, &app.config, &app.profiles.recent, now_secs());
+    // A flat list: say where a `~/.ssh/config` host comes from (a stored copy looks the same).
+    for (row, entry) in rows.iter_mut().zip(&entries) {
+        if entry.origin == profiles::Origin::SshConfig {
+            row.subtitle.push_str(" · ssh config");
+        }
+    }
     (entries, rows)
 }
 
@@ -51,7 +57,10 @@ impl App {
     pub(crate) fn open_picker(&mut self) -> Task<Message> {
         self.menu = None;
         self.picker = Some(ProfilePicker::default());
-        operation::focus(Id::new(PICKER_INPUT))
+        Task::batch([
+            self.refresh_ssh_hosts(),
+            operation::focus(Id::new(PICKER_INPUT)),
+        ])
     }
 
     pub(crate) fn on_picker(&mut self, message: PickerMsg) -> Task<Message> {

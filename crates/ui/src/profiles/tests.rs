@@ -63,14 +63,14 @@ fn ssh(id: &str, host: &str, port: Option<u16>) -> Profile {
     }
 }
 
-struct Tmp(PathBuf);
+pub(super) struct Tmp(pub(super) PathBuf);
 impl Drop for Tmp {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
-fn tmp() -> Tmp {
+pub(super) fn tmp() -> Tmp {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
@@ -81,7 +81,7 @@ fn tmp() -> Tmp {
 
 /// A headless app whose config is `dir/config.toml` (written from [`CONFIG`]) and whose Recent
 /// list lives in `dir/state`.
-fn app_in(dir: &Path) -> App {
+pub(super) fn app_in(dir: &Path) -> App {
     std::fs::write(dir.join("config.toml"), CONFIG).unwrap();
     let (config, err) = load(dir);
     assert!(err.is_none());
@@ -98,16 +98,16 @@ fn app_in(dir: &Path) -> App {
     app
 }
 
-fn send(app: &mut App, message: ProfilesMsg) {
+pub(super) fn send(app: &mut App, message: ProfilesMsg) {
     let _task = app.update(Message::Profiles(message));
 }
 
-fn id(s: &str) -> ProfileId {
+pub(super) fn id(s: &str) -> ProfileId {
     ProfileId(s.to_owned())
 }
 
 /// The sidebar as text: `"> Label (n)"` headers and item titles.
-fn tree(app: &App) -> Vec<String> {
+pub(super) fn tree(app: &App) -> Vec<String> {
     let all = app.all_entries();
     let rows = rows(&all, &app.config, &app.profiles.recent, now_secs());
     lines(&app.profiles, &app.config, &all, &rows)
@@ -137,7 +137,7 @@ fn entries_list_builtins_then_stored_then_quick_with_subtitles() {
     recent.touch(&id("quick:bob@db:2200"), 1);
     recent.touch(&id("quick:not a host:x"), 2);
     let builtins = [Profile::default_shell()];
-    let all = entries(&config, &builtins, Some(&recent));
+    let all = entries(&config, &builtins, &[], Some(&recent));
     let shown: Vec<(&str, &str, Origin)> = all
         .iter()
         .map(|e| (e.profile.name.as_str(), e.subtitle.as_str(), e.origin))
@@ -152,7 +152,7 @@ fn entries_list_builtins_then_stored_then_quick_with_subtitles() {
         ]
     );
     config.appearance.show_builtin_profiles = false;
-    assert_eq!(entries(&config, &builtins, None).len(), 2);
+    assert_eq!(entries(&config, &builtins, &[], None).len(), 2);
 }
 
 #[test]

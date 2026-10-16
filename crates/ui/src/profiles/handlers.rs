@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use fogu_core::config::{self, ProfileEdit, slug, unique_profile_id};
-use fogu_core::{Group, GroupId, Profile, ProfileId, Side};
+use fogu_core::{Group, GroupId, Profile, ProfileId, ProfileKind, Side};
 use iced::advanced::widget::operate;
 use iced::advanced::widget::operation::focusable;
 use iced::widget::operation;
@@ -76,7 +76,7 @@ impl App {
         view.focused = view.open;
         view.resizing = false;
         if view.open {
-            return operation::focus(SEARCH_INPUT);
+            return Task::batch([self.refresh_ssh_hosts(), operation::focus(SEARCH_INPUT)]);
         }
         Task::none()
     }
@@ -110,6 +110,7 @@ impl App {
         entries(
             &self.config,
             &self.profiles.builtins,
+            &self.profiles.ssh_hosts.profiles,
             Some(&self.profiles.recent),
         )
     }
@@ -254,9 +255,13 @@ impl App {
     }
 
     /// "Duplicate": a stored profile is copied in the file; a built-in or quick-connect one is
-    /// saved as a new stored profile.
+    /// saved as a new stored profile. "Copy to my profiles" (`~/.ssh/config` host): saved under
+    /// its own name; the `ssh_config` options Fogu doesn't use are not copied (toast).
     pub(crate) fn duplicate(&mut self, entry: &Entry) -> Task<Message> {
         let p = &entry.profile;
+        if entry.origin == Origin::SshConfig {
+            return self.copy_from_ssh_config(p);
+        }
         let name = format!("{} copy", p.name);
         let edit = match entry.origin {
             Origin::Stored => ProfileEdit::Duplicate {
@@ -264,13 +269,36 @@ impl App {
                 id: unique_profile_id(&self.config, &format!("{}-copy", p.id.0)),
                 name,
             },
-            Origin::Builtin | Origin::Quick => ProfileEdit::Add(Box::new(Profile {
-                id: unique_profile_id(&self.config, &slug(&name, "profile")),
-                name,
-                ..p.clone()
-            })),
+            Origin::Builtin | Origin::Quick | Origin::SshConfig => {
+                ProfileEdit::Add(Box::new(Profile {
+                    id: unique_profile_id(&self.config, &slug(&name, "profile")),
+                    name,
+                    ..p.clone()
+                }))
+            }
         };
         self.save_edits(&[edit])
+    }
+
+    fn copy_from_ssh_config(&mut self, p: &Profile) -> Task<Message> {
+        let mut copy = Profile {
+            id: unique_profile_id(&self.config, &slug(&p.name, "profile")),
+            ..p.clone()
+        };
+        let mut left_out = Vec::new();
+        if let ProfileKind::Ssh(ssh) = &mut copy.kind {
+            left_out = std::mem::take(&mut ssh.ignored_ssh_config);
+        }
+        let new_id = copy.id.clone();
+        let saved = self.save_edits(&[ProfileEdit::Add(Box::new(copy))]);
+        if !self.config.profiles.iter().any(|x| x.id == new_id) {
+            return saved; // not saved; save_edits showed why
+        }
+        let mut note = Notification::new(Level::Info, "Copied to my profiles");
+        if !left_out.is_empty() {
+            note = note.detail(format!("Not copied: {}", left_out.join(", ")));
+        }
+        Task::batch([saved, self.notify(note)])
     }
 
     /// Clipboard + a toast with what was copied.

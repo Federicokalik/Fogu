@@ -140,6 +140,14 @@ fn agent_child() {
             .unwrap()
             .contains("ssh-ed25519")
     );
+    let mut client = Client::connect(&ssh, paths.clone(), no_prompts);
+    client.wait_shell();
+    // `identities_only` (ssh_config `IdentitiesOnly`): the agent key is offered only when its
+    // `.pub` sits next to a configured key file.
+    ssh.identities_only = true;
+    let mut client = Client::connect(&ssh, paths.clone(), no_prompts);
+    assert!(matches!(error_of(client.end()), SessionError::AuthFailed));
+    ssh.private_keys = vec![format!("{dir}/client_ed25519").into()];
     let mut client = Client::connect(&ssh, paths, no_prompts);
     client.wait_shell();
     fs::write(format!("{dir}/agent-auth-ok"), "").unwrap();

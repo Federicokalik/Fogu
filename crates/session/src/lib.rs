@@ -139,7 +139,7 @@ pub enum SessionWarning {
     /// `verify_host_keys = false`: the server's identity was not checked (persistent badge).
     HostKeyNotVerified,
     /// Profile options that are set but not implemented yet (accepted, ignored).
-    Unsupported(Vec<&'static str>),
+    Unsupported(Vec<String>),
 }
 
 /// Why a server's host key was not accepted.
@@ -228,6 +228,12 @@ pub enum SessionError {
     /// The server's host key was not accepted.
     #[error(transparent)]
     HostKey(HostKeyFailure),
+    /// The profile reaches its host through a jump host or proxy, which is not implemented
+    /// yet; a direct connection could reach a different machine, so none is made.
+    #[error(
+        "not connecting: {0} not supported yet (a direct connection could reach a different machine)"
+    )]
+    RouteNotSupported(String),
     /// Every allowed authentication method failed.
     #[error("authentication failed")]
     AuthFailed,

@@ -209,6 +209,15 @@ async fn session(ssh: &EffectiveSsh, paths: &SshPaths, ui: &mut Ui) -> Result<Ex
     if ssh.host.is_empty() {
         return Err(SessionError::NoHost.into());
     }
+    let route = ssh.unsupported_route();
+    if !route.is_empty() {
+        return Err(SessionError::RouteNotSupported(crate::sanitize_remote(
+            &route.join(", "),
+            300,
+            false,
+        ))
+        .into());
+    }
     let ready = ssh.ready_timeout.unwrap_or(DEFAULT_READY_TIMEOUT);
     ui.service(&format!("Connecting to {}:{}…", ssh.host, ssh.port))
         .await?;

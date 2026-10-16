@@ -201,6 +201,25 @@ pub struct Config {
     pub default_profile: Option<ProfileId>,
     /// SFTP panel and transfers.
     pub sftp: SftpCfg,
+    /// SSH settings that are not per-profile.
+    pub ssh: SshCfg,
+}
+
+/// `[ssh]`: SSH settings that are not per-profile.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SshCfg {
+    /// Show every plain `Host` of `~/.ssh/config` as a read-only profile ("SSH config" group of
+    /// the profile sidebar and picker). Default `true`.
+    pub read_ssh_config: bool,
+}
+
+impl Default for SshCfg {
+    fn default() -> Self {
+        Self {
+            read_ssh_config: true,
+        }
+    }
 }
 
 impl Default for Config {
@@ -215,6 +234,7 @@ impl Default for Config {
             groups: Vec::new(),
             default_profile: None,
             sftp: SftpCfg::default(),
+            ssh: SshCfg::default(),
         }
     }
 }
@@ -265,6 +285,13 @@ mod tests {
         // Everything else still gets its default.
         assert_eq!(config.terminal.scrollback_lines, 10_000);
         assert!(config.terminal.keep_history_on_restart);
+    }
+
+    #[test]
+    fn read_ssh_config_defaults_on_and_can_be_turned_off() {
+        assert!(Config::default().ssh.read_ssh_config);
+        let config: Config = toml::from_str("[ssh]\nread_ssh_config = false\n").unwrap();
+        assert!(!config.ssh.read_ssh_config);
     }
 
     #[test]

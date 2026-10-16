@@ -218,7 +218,12 @@ impl Auth<'_> {
                 AgentIdentity::Certificate { .. } => None,
             })
             .collect();
-        keys.sort_by_key(|key| !preferred.iter().any(|p| p.key_data() == key.key_data()));
+        let is_configured =
+            |key: &PublicKey| preferred.iter().any(|p| p.key_data() == key.key_data());
+        if self.ssh.identities_only {
+            keys.retain(is_configured);
+        }
+        keys.sort_by_key(|key| !is_configured(key));
         let mut last = Outcome::Skipped;
         for key in keys {
             self.ui

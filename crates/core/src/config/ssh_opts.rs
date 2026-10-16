@@ -197,6 +197,14 @@ pub struct SshOpts {
     pub weight: Option<i32>,
     /// Per-profile override of `terminal.osc52_write`.
     pub osc52_write: Option<Osc52Policy>,
+    /// Offer only the agent identities whose `.pub` sits next to a configured key (OpenSSH
+    /// `IdentitiesOnly`; `false`).
+    pub identities_only: Option<bool>,
+    /// `~/.ssh/config` options that apply to this host but are not used (unknown to Fogu,
+    /// unusable values, or never obeyed like `StrictHostKeyChecking no`); listed in the
+    /// connect-time warning. Only `ssh_config` profiles have them; never stored.
+    #[serde(skip)]
+    pub ignored_ssh_config: Vec<String>,
 }
 
 /// A fully resolved SSH profile, ready for `fogu_session::open`.
@@ -260,6 +268,10 @@ pub struct EffectiveSsh {
     pub verify_host_keys: bool,
     /// See [`SshOpts::weight`].
     pub weight: i32,
+    /// See [`SshOpts::identities_only`].
+    pub identities_only: bool,
+    /// See [`SshOpts::ignored_ssh_config`].
+    pub ignored_ssh_config: Vec<String>,
 }
 
 impl EffectiveSsh {
@@ -271,10 +283,34 @@ impl EffectiveSsh {
         ssh
     }
 
-    /// Options that are set but whose behaviour is not implemented yet; the session warns about
-    /// each once at connect ("not supported yet: x11"). Never silently ignored.
+    /// Set options that change *how the host is reached* (jump host, proxy command, SOCKS/HTTP
+    /// proxy, an unresolvable `~/.ssh/config` `ProxyJump`). Not implemented yet, and connecting
+    /// directly instead could reach a different machine, so the session refuses to connect.
     #[must_use]
-    pub fn unsupported(&self) -> Vec<&'static str> {
+    pub fn unsupported_route(&self) -> Vec<String> {
+        let checks = [
+            (self.jump_host.is_some(), "jump_host"),
+            (self.proxy_command.is_some(), "proxy_command"),
+            (self.socks_proxy.is_some(), "socks_proxy"),
+            (self.http_proxy.is_some(), "http_proxy"),
+        ];
+        let from_ssh_config = self.ignored_ssh_config.iter().filter(|o| {
+            let key = o.split_whitespace().next().unwrap_or_default();
+            key.eq_ignore_ascii_case("ProxyJump") || key.eq_ignore_ascii_case("ProxyCommand")
+        });
+        checks
+            .into_iter()
+            .filter(|(set, _)| *set)
+            .map(|(_, name)| name.to_owned())
+            .chain(from_ssh_config.cloned())
+            .collect()
+    }
+
+    /// Options that are set but whose behaviour is not implemented yet, then the ignored
+    /// `~/.ssh/config` options; the session warns about each once at connect ("not supported
+    /// yet: x11"). Never silently ignored.
+    #[must_use]
+    pub fn unsupported(&self) -> Vec<String> {
         let checks = [
             (
                 self.input_backspace != Backspace::Backspace,
@@ -295,7 +331,9 @@ impl EffectiveSsh {
         ];
         checks
             .into_iter()
-            .filter_map(|(set, name)| set.then_some(name))
+            .filter(|(set, _)| *set)
+            .map(|(_, name)| name.to_owned())
+            .chain(self.ignored_ssh_config.iter().cloned())
             .collect()
     }
 }
@@ -341,11 +379,13 @@ pub fn resolve_ssh(p: &SshOpts, d: &SshOpts) -> EffectiveSsh {
         clear_service_messages_on_connect: pick!(clear_service_messages_on_connect).unwrap_or(true),
         verify_host_keys: pick!(verify_host_keys).unwrap_or(true),
         weight: pick!(weight).unwrap_or(0),
+        identities_only: pick!(identities_only).unwrap_or(false),
+        ignored_ssh_config: p.ignored_ssh_config.clone(),
     }
 }
 
 /// `$USER`, else `root`.
-fn local_user() -> String {
+pub(crate) fn local_user() -> String {
     std::env::var("USER")
         .ok()
         .filter(|user| !user.is_empty())

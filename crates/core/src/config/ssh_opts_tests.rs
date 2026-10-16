@@ -153,3 +153,15 @@ fn profile_overrides_defaults_and_zero_keepalive_disables() {
     assert_eq!(ssh.term, "xterm");
     assert_eq!(ssh.keepalive_interval, None);
 }
+
+#[test]
+fn unsupported_route_lists_proxies_and_unresolved_proxyjump() {
+    let mut ssh = EffectiveSsh::new("h");
+    assert_eq!(ssh.unsupported_route(), Vec::<String>::new());
+    ssh.socks_proxy = Some(("p".into(), 1080));
+    ssh.ignored_ssh_config = vec!["ProxyJump bob@gw:2200".into(), "Ciphers aes".into()];
+    assert_eq!(
+        ssh.unsupported_route(),
+        ["socks_proxy", "ProxyJump bob@gw:2200"]
+    );
+}

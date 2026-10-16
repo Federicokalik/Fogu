@@ -3,13 +3,13 @@
 //! which lines are shown); drawing is in `view.rs`, App wiring in `handlers.rs`, the row menu in
 //! `menu.rs`.
 //!
-//! Every profile shown comes from [`entries`]: built-ins, stored profiles, then quick-connect
-//! profiles remembered in Recent. A new read-only source (say `~/.ssh/config` hosts) is one
-//! more [`Origin`] appended there plus its own [`Section`]; the menu already limits editing to
-//! [`Origin::Stored`].
+//! Every profile shown comes from [`entries`]: built-ins, stored profiles, the read-only
+//! `~/.ssh/config` hosts (`ssh_config.rs`), then quick-connect profiles remembered in Recent.
+//! The menu limits editing to [`Origin::Stored`].
 
 mod handlers;
 mod menu;
+pub(crate) mod ssh_config;
 pub(crate) mod view;
 
 use std::collections::BTreeSet;
@@ -27,6 +27,7 @@ use crate::context_menu::to_iced;
 use crate::fuzzy_list::{self, FuzzyRow};
 
 pub use handlers::{Launch, ProfilesMsg};
+pub use ssh_config::SshHosts;
 
 /// Id of the search field.
 pub const SEARCH_INPUT: &str = "fogu-profiles-search";
@@ -49,6 +50,8 @@ pub enum Origin {
     Builtin,
     /// A quick-connect string remembered in Recent.
     Quick,
+    /// A `Host` of `~/.ssh/config` (read-only).
+    SshConfig,
 }
 
 /// One profile the sidebar or picker can show.
@@ -66,6 +69,7 @@ pub enum Section {
     Recent,
     Group(GroupId),
     Ungrouped,
+    SshConfig,
     Builtins,
 }
 
@@ -117,6 +121,8 @@ pub struct ProfilesView {
     pub recent_path: Option<PathBuf>,
     /// "Default shell" + `/etc/shells`, read once at startup.
     pub builtins: Vec<Profile>,
+    /// `~/.ssh/config` hosts.
+    pub ssh_hosts: SshHosts,
 }
 
 impl ProfilesView {
@@ -139,6 +145,7 @@ impl ProfilesView {
             recent: Recent::default(),
             recent_path: None,
             builtins,
+            ssh_hosts: SshHosts::default(),
         }
     }
 }
@@ -154,8 +161,14 @@ impl ProfilesView {
     }
 }
 
-/// Built-ins (when shown), stored profiles, then quick-connect profiles from `recent`.
-pub fn entries(config: &Config, builtins: &[Profile], recent: Option<&Recent>) -> Vec<Entry> {
+/// Built-ins (when shown), stored profiles, `~/.ssh/config` hosts, then quick-connect profiles
+/// from `recent`.
+pub fn entries(
+    config: &Config,
+    builtins: &[Profile],
+    ssh_hosts: &[Profile],
+    recent: Option<&Recent>,
+) -> Vec<Entry> {
     let entry = |profile: Profile, origin| Entry {
         subtitle: if origin == Origin::Quick {
             "quick connect".to_owned()
@@ -173,13 +186,20 @@ pub fn entries(config: &Config, builtins: &[Profile], recent: Option<&Recent>) -
         .profiles
         .iter()
         .map(|p| entry(p.clone(), Origin::Stored));
+    let from_ssh_config = ssh_hosts
+        .iter()
+        .map(|p| entry(p.clone(), Origin::SshConfig));
     let quick = recent
         .into_iter()
         .flat_map(|r| &r.recent)
         .filter_map(|e| e.id.0.strip_prefix(QUICK_PREFIX))
         .filter_map(|s| quick_profile(s).ok())
         .map(|p| entry(p, Origin::Quick));
-    shown_builtins.chain(stored).chain(quick).collect()
+    shown_builtins
+        .chain(stored)
+        .chain(from_ssh_config)
+        .chain(quick)
+        .collect()
 }
 
 /// `user@host[:port]` for SSH, the program (or "local shell") for local profiles.
@@ -286,7 +306,10 @@ pub fn rows(entries: &[Entry], config: &Config, recent: &Recent, now: u64) -> Ve
                     .last_used(&p.id)
                     .map(|t| relative_time(now, t))
                     .unwrap_or_default(),
-                keywords: group.into_iter().collect(),
+                keywords: group
+                    .into_iter()
+                    .chain((e.origin == Origin::SshConfig).then(|| "ssh config".to_owned()))
+                    .collect(),
                 chip: Some(chip),
                 icon: glyph(p.icon.as_deref()),
             }
@@ -295,7 +318,7 @@ pub fn rows(entries: &[Entry], config: &Config, recent: &Recent, now: u64) -> Ve
 }
 
 /// The sidebar's lines: with a query, the ranked matches; else Recent (up to
-/// `appearance.recent_profiles`), each group, Ungrouped and Built-ins, collapsed ones as a
+/// `appearance.recent_profiles`), each group, Ungrouped, SSH config and Built-ins, collapsed ones as a
 /// header only. Empty sections other than groups are left out.
 pub fn lines(
     view: &ProfilesView,
@@ -338,10 +361,21 @@ pub fn lines(
     }
     let ungrouped = stored(&|p| !p.group.as_ref().is_some_and(known));
     sections.push((Section::Ungrouped, "Ungrouped".to_owned(), ungrouped));
-    let builtins = (0..entries.len())
-        .filter(|&i| entries.get(i).is_some_and(|e| e.origin == Origin::Builtin))
-        .collect();
-    sections.push((Section::Builtins, "Built-ins".to_owned(), builtins));
+    let of = |origin| {
+        (0..entries.len())
+            .filter(|&i| entries.get(i).is_some_and(|e| e.origin == origin))
+            .collect()
+    };
+    sections.push((
+        Section::SshConfig,
+        "SSH config".to_owned(),
+        of(Origin::SshConfig),
+    ));
+    sections.push((
+        Section::Builtins,
+        "Built-ins".to_owned(),
+        of(Origin::Builtin),
+    ));
 
     let mut out = Vec::new();
     for (section, label, items) in sections {

@@ -147,27 +147,6 @@ fn lookup_table() {
 }
 
 #[test]
-fn glob_matches_like_openssh() {
-    for (pattern, text, want) in [
-        ("*", "anything", true),
-        ("a*c", "abbbc", true),
-        ("a*c", "abbbd", false),
-        ("a?c", "abc", true),
-        ("a?c", "ac", false),
-        ("*.example", "x.example", true),
-        ("*.example", "example", false),
-        ("[h]:22*", "[h]:2222", true),
-        ("**a", "a", true),
-    ] {
-        assert_eq!(
-            glob(pattern.as_bytes(), text.as_bytes()),
-            want,
-            "{pattern} {text}"
-        );
-    }
-}
-
-#[test]
 fn learn_writes_0600_openssh_lines_and_lookup_finds_them() {
     let dir = temp_dir("learn");
     let path = dir.join("sub/known_hosts");

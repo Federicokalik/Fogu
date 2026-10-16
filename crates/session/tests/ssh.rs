@@ -67,12 +67,32 @@ fn missing_host_fails_with_no_host_after_warning_unsupported_options() {
         matches!(end, SessionOutput::Error(SessionError::NoHost)),
         "{end:?}"
     );
-    assert_eq!(warnings, [SessionWarning::Unsupported(vec!["x11", "cwd"])]);
+    assert_eq!(
+        warnings,
+        [SessionWarning::Unsupported(vec![
+            "x11".to_owned(),
+            "cwd".to_owned()
+        ])]
+    );
     assert!(
         grid.contains("Not supported yet (ignored): x11, cwd"),
         "{grid}"
     );
     assert!(grid.contains("Error: no host configured"), "{grid}");
+}
+
+#[test]
+fn proxied_profile_refuses_to_connect_directly() {
+    // Port 1 would be refused if a connection were attempted: the error must come first.
+    let mut ssh = EffectiveSsh::new("127.0.0.1");
+    ssh.port = 1;
+    ssh.proxy_command = Some("ssh -W %h:%p bastion".into());
+    let (end, _warnings, grid) = run(&ssh, "proxied");
+    let SessionOutput::Error(SessionError::RouteNotSupported(what)) = end else {
+        panic!("expected RouteNotSupported, got {end:?}");
+    };
+    assert_eq!(what, "proxy_command");
+    assert!(!grid.contains("Connecting to"), "{grid}");
 }
 
 #[test]
