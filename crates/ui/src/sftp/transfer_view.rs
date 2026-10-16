@@ -1,16 +1,13 @@
-//! The transfers strip of the SFTP panel and the "file exists" dialog.
+//! The transfers strip of the SFTP panel.
 
-use iced::widget::{
-    Space, button, checkbox, column, container, progress_bar, row, scrollable, text, tooltip,
-};
+use iced::widget::{Space, column, container, progress_bar, row, scrollable};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
 use super::listing::human_bytes;
 use super::panel::{Look, flat, label, msg};
-use super::transfers::{ConflictChoice, Direction, Transfer, TransferState, conflict_text};
+use super::transfers::{Direction, Transfer, TransferState};
 use super::{PanelMsg, SftpPanelState};
 use crate::message::Message;
-use crate::modal;
 use crate::tab::TabId;
 
 /// The transfers strip: header with collapse / clear, then one block per transfer.
@@ -64,6 +61,7 @@ fn transfer_row(tab: TabId, t: &Transfer, look: Look) -> Element<'_, Message> {
         TransferState::Running if t.rate > 0 => format!("{}/s", human_bytes(t.rate)),
         TransferState::Running => String::new(),
         TransferState::Done if t.failed > 0 && t.done_files == 0 => "failed".to_owned(),
+        TransferState::Done if t.done_files == 0 && t.skipped > 0 => "skipped".to_owned(),
         TransferState::Done if t.failed > 0 => format!("done, {} failed", t.failed),
         TransferState::Done => "done".to_owned(),
         TransferState::Failed(why) => format!("failed: {why}"),
@@ -98,41 +96,4 @@ fn transfer_row(tab: TabId, t: &Transfer, look: Look) -> Element<'_, Message> {
     ]
     .spacing(8);
     column![top, bar, bottom].spacing(2).into()
-}
-
-/// The "file exists" dialog for the panel's first queued conflict.
-pub fn conflict_dialog(tab: TabId, panel: &SftpPanelState) -> Option<Element<'_, Message>> {
-    let conflict = panel.conflicts.current()?;
-    let direction = panel
-        .transfers
-        .get(conflict.transfer)
-        .map_or(Direction::Download, |t| t.direction);
-    let more = panel.conflicts.queue.len() - 1;
-    let keep_both = tooltip(
-        button(text("Keep both")),
-        container(text("Not available yet").size(12))
-            .padding(4)
-            .style(container::rounded_box),
-        tooltip::Position::Bottom,
-    );
-    let buttons = row![
-        button(text("Overwrite")).on_press(msg(tab, PanelMsg::Conflict(ConflictChoice::Overwrite))),
-        button(text("Skip")).on_press(msg(tab, PanelMsg::Conflict(ConflictChoice::Skip))),
-        keep_both,
-    ]
-    .spacing(8);
-    let mut content = column![
-        text("File exists").size(18),
-        text(conflict_text(conflict, direction)),
-    ]
-    .spacing(12);
-    if more > 0 {
-        content = content.push(
-            checkbox(panel.conflicts.apply_all)
-                .label(format!("Apply to all ({more} more)"))
-                .on_toggle(move |on| msg(tab, PanelMsg::ConflictApplyAll(on))),
-        );
-    }
-    content = content.push(buttons);
-    Some(modal::frame(content.into(), 420.0))
 }

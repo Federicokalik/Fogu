@@ -27,38 +27,6 @@ impl Drop for Tmp {
 }
 
 #[test]
-fn validate_name_table() {
-    let long = "a".repeat(NAME_MAX);
-    let too_long = "a".repeat(NAME_MAX + 1);
-    let table: &[(&str, Result<(), NameError>)] = &[
-        ("file.txt", Ok(())),
-        (".hidden", Ok(())),
-        ("...", Ok(())),
-        ("with space", Ok(())),
-        ("日本語.txt", Ok(())),
-        ("back\\slash", Ok(())),
-        (&long, Ok(())),
-        ("", Err(NameError::Empty)),
-        (".", Err(NameError::Dot)),
-        ("..", Err(NameError::Dot)),
-        ("a/b", Err(NameError::Slash)),
-        ("/etc", Err(NameError::Slash)),
-        ("../../x", Err(NameError::Slash)),
-        ("nul\0x", Err(NameError::Nul)),
-        ("new\nline", Err(NameError::Control)),
-        ("esc\x1b[31m", Err(NameError::Control)),
-        ("del\x7f", Err(NameError::Control)),
-        ("c1\u{9b}", Err(NameError::Control)),
-        ("evil\u{202e}gpj.exe", Err(NameError::Bidi)),
-        ("iso\u{2068}x", Err(NameError::Bidi)),
-        (&too_long, Err(NameError::Invalid)),
-    ];
-    for (name, want) in table {
-        assert_eq!(validate_name(name).map(|_| ()), *want, "{name:?}");
-    }
-}
-
-#[test]
 fn part_names_respect_name_max() {
     assert_eq!(part_name("a").as_deref(), Some("a.part"));
     assert_eq!(
@@ -70,11 +38,16 @@ fn part_names_respect_name_max() {
 
 #[test]
 fn download_modes_never_carry_special_bits() {
-    assert_eq!(file_mode(None).as_raw_mode(), 0o644);
-    assert_eq!(file_mode(Some(0o600)).as_raw_mode(), 0o644);
-    assert_eq!(file_mode(Some(0o4755)).as_raw_mode(), 0o755);
-    assert_eq!(file_mode(Some(0o7001)).as_raw_mode(), 0o755);
-    assert_eq!(file_mode(Some(0o6644)).as_raw_mode(), 0o644);
+    // Default: never executable, whatever the server says.
+    for mode in [None, Some(0o600), Some(0o4755), Some(0o7001), Some(0o6644)] {
+        assert_eq!(file_mode(mode, false).as_raw_mode(), 0o644, "{mode:?}");
+    }
+    // `keep_executable_bit`: x kept, special bits still dropped.
+    assert_eq!(file_mode(None, true).as_raw_mode(), 0o644);
+    assert_eq!(file_mode(Some(0o600), true).as_raw_mode(), 0o644);
+    assert_eq!(file_mode(Some(0o4755), true).as_raw_mode(), 0o755);
+    assert_eq!(file_mode(Some(0o7001), true).as_raw_mode(), 0o755);
+    assert_eq!(file_mode(Some(0o6644), true).as_raw_mode(), 0o644);
 }
 
 #[test]
@@ -88,7 +61,8 @@ fn a_planted_symlink_is_never_written_through() {
     let dir = LocalDir::open(&dest).unwrap();
     let fd = dir.open_dir(&[]).unwrap();
     for truncate in [false, true] {
-        let err = create_file(fd.as_fd(), "report.txt", file_mode(None), truncate).unwrap_err();
+        let err =
+            create_file(fd.as_fd(), "report.txt", file_mode(None, false), truncate).unwrap_err();
         assert!(err.raw_os_error().is_some(), "{err}");
     }
     assert!(open_for_resume(fd.as_fd(), "report.txt").is_err());
@@ -119,9 +93,9 @@ fn create_is_exclusive_and_finish_never_replaces_unless_asked() {
     let tmp = Tmp::new("finish");
     let dir = LocalDir::open(&tmp.0).unwrap();
     let fd = dir.open_dir(&[]).unwrap();
-    let mut part = create_file(fd.as_fd(), "a.part", file_mode(Some(0o755)), false).unwrap();
+    let mut part = create_file(fd.as_fd(), "a.part", file_mode(Some(0o755), true), false).unwrap();
     part.write_all(b"new").unwrap();
-    assert!(create_file(fd.as_fd(), "a.part", file_mode(None), false).is_err());
+    assert!(create_file(fd.as_fd(), "a.part", file_mode(None, false), false).is_err());
     let mode = std::fs::metadata(tmp.0.join("a.part"))
         .unwrap()
         .permissions()
@@ -135,7 +109,7 @@ fn create_is_exclusive_and_finish_never_replaces_unless_asked() {
     assert_eq!(std::fs::read_to_string(tmp.0.join("a")).unwrap(), "new");
     assert!(!tmp.0.join("a.part").exists());
     let (_, len) = {
-        create_file(fd.as_fd(), "b.part", file_mode(None), false)
+        create_file(fd.as_fd(), "b.part", file_mode(None, false), false)
             .unwrap()
             .write_all(b"12345")
             .unwrap();

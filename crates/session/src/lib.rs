@@ -28,9 +28,9 @@ pub use prompt::{
     KbdPrompt, PROMPT_INSTRUCTIONS_MAX_CHARS, PROMPT_MAX_COUNT, PROMPT_TEXT_MAX_CHARS, PromptId,
     PromptKind, PromptReply, sanitize_remote,
 };
-pub use sftp::{SftpCmd, SftpEvent, SftpHandle, SftpRequest, display_name};
+pub use sftp::{SftpCmd, SftpEvent, SftpHandle, SftpRequest, display_name, validate_name};
 #[cfg(feature = "ssh")]
-pub use ssh::{PROMPT_TIMEOUT, SshPaths, validate_name};
+pub use ssh::{PROMPT_TIMEOUT, SshPaths};
 pub use supervise::supervise;
 
 /// Capacity of the UI → session input channel.

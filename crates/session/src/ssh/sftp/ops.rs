@@ -1,5 +1,5 @@
-//! Metadata operations: list, stat, realpath, mkdir, rename, remove (recursive), chmod. Each
-//! runs as its own task and answers with exactly one event.
+//! Metadata operations: list, stat, realpath, mkdir, rename, remove (recursive), count,
+//! chmod. Each runs as its own task and answers with exactly one event.
 
 use std::sync::Arc;
 
@@ -117,6 +117,10 @@ pub(crate) async fn run(
         SftpCmd::RemoveDirRecursive(path) => remove_tree(&remote, &path, &opts)
             .await
             .map(|()| SftpEvent::Done(id)),
+        SftpCmd::CountDir(path) => walk_tree(&remote, &path, &opts).await.map(|tree| {
+            let entries = (tree.files.len() + tree.dirs.len()).saturating_sub(1) as u64;
+            SftpEvent::Counted { id, path, entries }
+        }),
         SftpCmd::Chmod(path, mode) => remote
             .chmod(&path, mode)
             .await
@@ -186,45 +190,69 @@ async fn stat(remote: &Arc<Remote>, path: &str) -> RemoteResult<Entry> {
     Ok(entry)
 }
 
-/// Deletes the tree at `path`. The root must be a real directory (a symlink is refused: use
-/// `RemoveFile`); symlinks inside are removed, never followed. Bounded by the walk caps.
-async fn remove_tree(remote: &Remote, path: &str, opts: &SftpOptions) -> RemoteResult<()> {
+/// Everything below a directory, found by [`walk_tree`].
+struct Tree {
+    /// Files, symlinks and special entries (removed with `remove`, never followed).
+    files: Vec<String>,
+    /// Directories, parents first (the root first).
+    dirs: Vec<String>,
+}
+
+/// Walks the tree at `path` without following symlinks. The root must be a real directory (a
+/// symlink is refused: delete it as a file). Bounded by the walk caps; nothing is changed.
+async fn walk_tree(remote: &Remote, path: &str, opts: &SftpOptions) -> RemoteResult<Tree> {
     if kind_of(&remote.lstat(path).await?) != EntryKind::Dir {
         return Err(RemoteError::new(
             "not a directory (symlinks are not followed)",
         ));
     }
     let mut stack = vec![(path.to_owned(), 0_usize)];
-    let mut dirs = Vec::new();
+    let mut tree = Tree {
+        files: Vec::new(),
+        dirs: Vec::new(),
+    };
     let mut budget = WalkBudget::new(opts);
     while let Some((dir, depth)) = stack.pop() {
         if depth > opts.max_walk_depth {
-            return Err(RemoteError::new(
-                "directory tree too deep; nothing more deleted",
-            ));
+            return Err(RemoteError::new("directory tree too deep (max_walk_depth)"));
         }
         let (entries, truncated) = remote.read_dir(&dir, opts.max_listing_entries).await?;
         if truncated {
             return Err(RemoteError::new(
-                "directory too large; nothing more deleted",
+                "a directory is too large (max_listing_entries)",
             ));
         }
         for (name, attrs) in entries {
             let child = join(&dir, &name);
             if budget.take(child.len()).is_err() {
                 return Err(RemoteError::new(
-                    "directory tree too large; nothing more deleted",
+                    "directory tree too large (max_walk_entries)",
                 ));
             }
             if kind_of(&attrs) == EntryKind::Dir {
                 stack.push((child, depth + 1));
             } else {
-                remote.remove_file(&child).await?;
+                tree.files.push(child);
             }
         }
-        dirs.push(dir);
+        tree.dirs.push(dir);
     }
-    for dir in dirs.iter().rev() {
+    Ok(tree)
+}
+
+/// Deletes the tree at `path`: the whole tree is walked first (a tree over the caps is not
+/// touched at all), then files and links are removed, then directories deepest first.
+async fn remove_tree(remote: &Remote, path: &str, opts: &SftpOptions) -> RemoteResult<()> {
+    let tree = walk_tree(remote, path, opts)
+        .await
+        .map_err(|e| RemoteError {
+            message: format!("{}; nothing was deleted", e.message),
+            ..e
+        })?;
+    for file in &tree.files {
+        remote.remove_file(file).await?;
+    }
+    for dir in tree.dirs.iter().rev() {
         remote.remove_dir(dir).await?;
     }
     Ok(())

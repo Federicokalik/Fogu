@@ -10,10 +10,20 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 fogu-term = { path = "../crates/term" }
+# No `ssh` feature: `validate_name`/`display_name` are pure and live in the always-built
+# `sftp` module, so the fuzz build stays free of russh/ring.
+fogu-session = { path = "../crates/session", default-features = false }
 
 [[bin]]
 name = "osc_payloads"
 path = "fuzz_targets/osc_payloads.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sftp_name_sanitize"
+path = "fuzz_targets/sftp_name_sanitize.rs"
 test = false
 doc = false
 bench = false

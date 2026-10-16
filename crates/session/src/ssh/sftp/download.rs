@@ -21,9 +21,11 @@ use super::disk_guard::{Every, FileCap, Guard};
 use super::local_fs::{self, Existing, LocalDir, validate_name};
 use super::ops::{WalkBudget, join, last_component};
 use super::remote::kind_of;
-use super::transfer::{Ctx, Fatal, FileEnd, Progress, finish, on_existing, run_jobs};
+use super::transfer::{
+    Ctx, Fatal, FileEnd, Progress, finish, numbered, on_existing, resume_plausible, run_jobs,
+};
 use crate::sftp::{
-    ConflictKind, EntryKind, OverwritePolicy, SftpEvent, SkipReason, TransferReport,
+    ConflictKind, EntryKind, KEEP_BOTH_MAX, OverwritePolicy, SftpEvent, SkipReason, TransferReport,
 };
 
 /// One file to fetch.
@@ -33,6 +35,8 @@ struct Job {
     rel: Vec<String>,
     /// Size the server reported when the walk ran (none = 0).
     size: u64,
+    /// Remote modification time, if reported (resume plausibility).
+    mtime: Option<u32>,
     /// Most bytes the local file may have (`None` = growing files allowed, no hard limit).
     cap: Option<FileCap>,
     mode: Option<u32>,
@@ -88,7 +92,12 @@ async fn run(
             Err(err) => report.fail(rel.join("/"), err.to_string()),
         }
     }
-    let total = plan.files.iter().map(|(_, _, a)| a.size.unwrap_or(0)).sum();
+    // Reported sizes are server data: two files "of" u64::MAX must not overflow.
+    let total = plan
+        .files
+        .iter()
+        .map(|(_, _, a)| a.size.unwrap_or(0))
+        .fold(0, u64::saturating_add);
     let queued = SftpEvent::TransferQueued {
         id: ctx.id,
         files: plan.files.len() as u64,
@@ -103,6 +112,7 @@ async fn run(
             let job = Job {
                 remote,
                 size: attrs.size.unwrap_or(0),
+                mtime: attrs.mtime,
                 cap: FileCap::of(&ctx.opts, attrs.size),
                 mode: attrs.permissions,
                 rel,
@@ -230,6 +240,18 @@ async fn fetch(ctx: &Ctx, job: Job) -> FileEnd {
         Ok(dir) => dir,
         Err(err) => return FileEnd::Failed(format!("destination directory: {err}")),
     };
+    let kept;
+    let name = if job.overwrite == OverwritePolicy::KeepBoth {
+        match free_name(&dir, name) {
+            Ok(free) => {
+                kept = free;
+                kept.as_str()
+            }
+            Err(end) => return end,
+        }
+    } else {
+        name.as_str()
+    };
     let Some(part) = local_fs::part_name(name) else {
         return FileEnd::Failed("name too long for a .part file".into());
     };
@@ -241,7 +263,8 @@ async fn fetch(ctx: &Ctx, job: Job) -> FileEnd {
         },
         Err(err) => return FileEnd::Failed(err.to_string()),
     };
-    let (file, offset, created) = match open_part(&job, &dir, &part) {
+    let keep_exec = ctx.opts.keep_executable_bit;
+    let (file, offset, created) = match open_part(&job, &dir, &part, keep_exec) {
         Ok(opened) => opened,
         Err(end) => return end,
     };
@@ -254,7 +277,7 @@ async fn fetch(ctx: &Ctx, job: Job) -> FileEnd {
             Ok(()) => return FileEnd::Done { bytes },
             // Someone created the target meanwhile: keep the complete `.part`, report it.
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                return FileEnd::Conflict(ConflictKind::Exists);
+                return FileEnd::Conflict(ConflictKind::Exists, false);
             }
             Err(err) => FileEnd::Failed(format!("rename: {err}")),
         },
@@ -270,9 +293,14 @@ async fn fetch(ctx: &Ctx, job: Job) -> FileEnd {
 /// Creates (or, with `resume`, reopens) the `.part` file; returns it, the resume offset and
 /// whether this run created (or truncated) it. A `.part` longer than the reported size (so
 /// resuming would pass the cap) is left alone unless the user chose `Overwrite`.
-fn open_part(job: &Job, dir: &OwnedFd, part: &str) -> Result<(std::fs::File, u64, bool), FileEnd> {
+fn open_part(
+    job: &Job,
+    dir: &OwnedFd,
+    part: &str,
+    keep_exec: bool,
+) -> Result<(std::fs::File, u64, bool), FileEnd> {
     let failed = |err: std::io::Error| FileEnd::Failed(format!("{part}: {err}"));
-    let mode = local_fs::file_mode(job.mode);
+    let mode = local_fs::file_mode(job.mode, keep_exec);
     match local_fs::existing(dir, part).map_err(failed)? {
         Existing::Nothing => {
             let file = local_fs::create_file(dir.as_fd(), part, mode, false).map_err(failed)?;
@@ -296,12 +324,54 @@ fn open_part(job: &Job, dir: &OwnedFd, part: &str) -> Result<(std::fs::File, u64
             file.set_len(0).map_err(failed)?;
             Ok((file, 0, true))
         }
-        _ => {
-            on_existing(job.overwrite, ConflictKind::PartialExists)?;
+        other => {
+            if let Err(end) = on_existing(job.overwrite, ConflictKind::PartialExists) {
+                let resumable = other == Existing::File
+                    && job.overwrite == OverwritePolicy::Ask
+                    && part_resumable(job, dir, part);
+                return Err(match end {
+                    FileEnd::Conflict(kind, _) => FileEnd::Conflict(kind, resumable),
+                    end => end,
+                });
+            }
             let file = local_fs::create_file(dir.as_fd(), part, mode, true).map_err(failed)?;
             Ok((file, 0, true))
         }
     }
+}
+
+/// Whether the existing `.part` looks like an earlier, interrupted download of this file.
+fn part_resumable(job: &Job, dir: &OwnedFd, part: &str) -> bool {
+    let Ok(Some((len, mtime))) = local_fs::file_info(dir, part) else {
+        return false;
+    };
+    job.cap.is_none_or(|cap| cap.allows(len))
+        && resume_plausible(len, Some(mtime), job.size, job.mtime.map(u64::from))
+}
+
+/// "Keep both": `name` itself when neither it nor its `.part` exists, else the first free
+/// `name (n)` (checked the same way, symlinks not followed).
+fn free_name(dir: &OwnedFd, name: &str) -> Result<String, FileEnd> {
+    let free = |candidate: &str| -> std::io::Result<bool> {
+        let Some(part) = local_fs::part_name(candidate) else {
+            return Ok(false);
+        };
+        Ok(local_fs::existing(dir, candidate)? == Existing::Nothing
+            && local_fs::existing(dir, &part)? == Existing::Nothing)
+    };
+    let failed = |err: std::io::Error| FileEnd::Failed(err.to_string());
+    if free(name).map_err(failed)? {
+        return Ok(name.to_owned());
+    }
+    for n in 1..=KEEP_BOTH_MAX {
+        let Some(candidate) = numbered(name, n) else {
+            break;
+        };
+        if free(&candidate).map_err(failed)? {
+            return Ok(candidate);
+        }
+    }
+    Err(FileEnd::Failed("no free name to keep both files".into()))
 }
 
 /// Why a stream stopped early.
@@ -331,7 +401,7 @@ async fn stream(ctx: &Ctx, job: &Job, file: std::fs::File, offset: u64, dir: &Ow
     let result = async {
         if offset > 0 {
             out.seek(SeekFrom::Start(offset)).await?;
-            job.progress.add(offset);
+            job.progress.resumed(offset);
         }
         let mut reader = ctx.remote.reader(&handle, offset);
         loop {
@@ -372,4 +442,4 @@ async fn stream(ctx: &Ctx, job: &Job, file: std::fs::File, offset: u64, dir: &Ow
 
 #[cfg(test)]
 #[path = "download_tests.rs"]
-mod tests;
+pub(super) mod tests;

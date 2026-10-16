@@ -31,12 +31,16 @@ pub enum Level {
 }
 
 /// Buttons a toast can carry besides the dismiss `×`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToastAction {
     /// OSC 52 write waiting for the user's decision: "Copy" applies it, "Deny" drops it.
     ClipboardWrite,
-    /// A finished download: "Show in file manager" (shown disabled until an opener exists).
-    ShowInFileManager,
+    /// A finished download: "Open" (`file`, single-entry downloads) and "Show in file
+    /// manager" (`dir`), both through the desktop's opener and only on click.
+    Downloaded {
+        file: Option<std::path::PathBuf>,
+        dir: std::path::PathBuf,
+    },
 }
 
 /// One toast.
@@ -184,7 +188,7 @@ fn toast_view(note: &Notification) -> Element<'_, Message> {
     if !note.detail.is_empty() {
         body = body.push(text(&note.detail).size(13));
     }
-    match note.action {
+    match &note.action {
         Some(ToastAction::ClipboardWrite) => {
             body = body.push(
                 row![
@@ -194,9 +198,17 @@ fn toast_view(note: &Notification) -> Element<'_, Message> {
                 .spacing(8),
             );
         }
-        // No `on_press`: drawn disabled until opening the file manager is supported.
-        Some(ToastAction::ShowInFileManager) => {
-            body = body.push(button(text("Show in file manager").size(13)));
+        Some(ToastAction::Downloaded { file, dir }) => {
+            let open = |path: &std::path::Path| {
+                Message::Desktop(crate::sftp::DesktopMsg::Open(path.to_path_buf()))
+            };
+            let mut buttons = row![].spacing(8);
+            if let Some(file) = file {
+                buttons = buttons.push(button(text("Open").size(13)).on_press(open(file)));
+            }
+            body = body.push(
+                buttons.push(button(text("Show in file manager").size(13)).on_press(open(dir))),
+            );
         }
         None => {}
     }

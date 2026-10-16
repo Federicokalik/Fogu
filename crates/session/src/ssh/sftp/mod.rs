@@ -13,6 +13,8 @@ mod disk_guard;
 mod download;
 #[cfg(test)]
 mod hostile_server;
+#[cfg(test)]
+mod hostile_tests;
 mod local_fs;
 mod ops;
 mod remote;
@@ -31,7 +33,6 @@ use tokio::task::{Id, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) use disk_guard::Statvfs;
-pub use local_fs::validate_name;
 
 use self::disk_guard::SpaceProbe;
 use self::remote::{Remote, RemoteError};
@@ -216,9 +217,10 @@ impl Engine {
                 local,
                 remote_dir,
                 overwrite,
+                resume,
             } => {
                 let ctx = self.transfer_ctx(id, remote);
-                let task = upload::upload(ctx, local, remote_dir, overwrite);
+                let task = upload::upload(ctx, local, remote_dir, (overwrite, resume));
                 (TaskKind::Transfer(id), self.tasks.spawn(task))
             }
             cmd => {

@@ -9,16 +9,19 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::io::AsyncReadExt as _;
+use russh_sftp::protocol::FileAttributes;
+use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 use tokio_util::sync::CancellationToken;
 
 use super::local_fs::validate_name;
 use super::ops::join;
 use super::remote::kind_of;
-use super::transfer::{Ctx, Fatal, FileEnd, Progress, finish, on_existing, run_jobs};
+use super::transfer::{
+    Ctx, Fatal, FileEnd, Progress, finish, numbered, on_existing, resume_plausible, run_jobs,
+};
 use crate::sftp::{
-    ConflictKind, EntryKind, NameError, OverwritePolicy, SftpEvent, SftpOptions, SkipReason,
-    TransferReport,
+    ConflictKind, EntryKind, KEEP_BOTH_MAX, NameError, OverwritePolicy, SftpEvent, SftpOptions,
+    SkipReason, TransferReport,
 };
 
 /// One file to send.
@@ -26,9 +29,23 @@ struct Job {
     local: PathBuf,
     remote: String,
     size: u64,
+    /// Local modification time (resume plausibility).
+    mtime: Option<u64>,
     mode: u32,
     overwrite: OverwritePolicy,
+    resume: bool,
     progress: Arc<Progress>,
+}
+
+/// How the remote file is opened.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Open {
+    /// `CREATE | EXCLUDE`: a new file.
+    Create,
+    /// `CREATE | TRUNCATE`: replace (confirmed overwrite).
+    Truncate,
+    /// `WRITE` from this offset: resume a shorter remote file.
+    Append(u64),
 }
 
 /// What the local walk found: remote dirs to create (parents first), files, skips.
@@ -44,10 +61,10 @@ pub(crate) async fn upload(
     ctx: Ctx,
     local: Vec<PathBuf>,
     remote_dir: String,
-    overwrite: OverwritePolicy,
+    (overwrite, resume): (OverwritePolicy, bool),
 ) {
     let mut report = TransferReport::default();
-    let result = run(&ctx, local, &remote_dir, overwrite, &mut report).await;
+    let result = run(&ctx, local, &remote_dir, (overwrite, resume), &mut report).await;
     finish(&ctx, result, report).await;
 }
 
@@ -55,7 +72,7 @@ async fn run(
     ctx: &Ctx,
     roots: Vec<PathBuf>,
     remote_dir: &str,
-    overwrite: OverwritePolicy,
+    (overwrite, resume): (OverwritePolicy, bool),
     report: &mut TransferReport,
 ) -> Result<(), Fatal> {
     if kind_of(&ctx.remote.stat(remote_dir).await?) != EntryKind::Dir {
@@ -77,7 +94,11 @@ async fn run(
             },
         }
     }
-    let total = plan.files.iter().map(|(_, _, _, m)| m.len()).sum();
+    let total = plan
+        .files
+        .iter()
+        .map(|(_, _, _, m)| m.len())
+        .fold(0, u64::saturating_add);
     let queued = SftpEvent::TransferQueued {
         id: ctx.id,
         files: plan.files.len() as u64,
@@ -93,8 +114,14 @@ async fn run(
                 local,
                 remote,
                 size: meta.len(),
+                mtime: meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs()),
                 mode: meta.permissions().mode() & 0o777,
                 overwrite,
+                resume,
                 progress: Arc::clone(&progress),
             };
             (rel, job)
@@ -216,25 +243,35 @@ fn classify(
     }
 }
 
-/// Uploads one file; a remote file this run created is removed on failure/cancel unless
-/// `keep_partial`.
+/// Uploads one file; a remote file this run created (or truncated) is removed on
+/// failure/cancel unless `keep_partial` (a resumed one is never removed).
 async fn send(ctx: &Ctx, job: Job) -> FileEnd {
-    let truncate = match ctx.remote.try_lstat(&job.remote).await {
-        Ok(None) => false,
-        Ok(Some(_)) => match on_existing(job.overwrite, ConflictKind::Exists) {
-            Ok(()) => true,
-            Err(end) => return end,
-        },
-        Err(err) => return FileEnd::Failed(err.message),
+    let (target, open) = match target(ctx, &job).await {
+        Ok(chosen) => chosen,
+        Err(end) => return end,
     };
     let mut input = match tokio::fs::File::open(&job.local).await {
         Ok(file) => file,
         Err(err) => return FileEnd::Failed(err.to_string()),
     };
-    let handle = match ctx.remote.open_write(&job.remote, job.mode, truncate).await {
+    let offset = if let Open::Append(offset) = open {
+        offset
+    } else {
+        0
+    };
+    let opened = if matches!(open, Open::Append(_)) {
+        ctx.remote.open_append(&target).await
+    } else {
+        let truncate = open == Open::Truncate;
+        ctx.remote.open_write(&target, job.mode, truncate).await
+    };
+    let handle = match opened {
         Ok(handle) => handle,
         // Created meanwhile (EXCLUDE): same as finding it in the check above.
-        Err(_) if !truncate && matches!(ctx.remote.try_lstat(&job.remote).await, Ok(Some(_))) => {
+        Err(_)
+            if open == Open::Create
+                && matches!(ctx.remote.try_lstat(&target).await, Ok(Some(_))) =>
+        {
             return match on_existing(job.overwrite, ConflictKind::Exists) {
                 Err(end) => end,
                 Ok(()) => FileEnd::Failed("the target appeared during the upload".into()),
@@ -242,38 +279,124 @@ async fn send(ctx: &Ctx, job: Job) -> FileEnd {
         }
         Err(err) => return FileEnd::Failed(err.message),
     };
-    let mut writer = ctx.remote.writer(&handle, 0);
-    let mut bytes = 0_u64;
-    let result = async {
-        loop {
-            if ctx.cancel.is_cancelled() {
-                return Ok(false);
-            }
-            let mut buf = vec![0; ctx.remote.write_chunk];
-            let n = input.read(&mut buf).await.map_err(|e| e.to_string())?;
-            if n == 0 {
-                break;
-            }
-            buf.truncate(n);
-            writer.write(buf).await.map_err(|e| e.message)?;
-            bytes += n as u64;
-            job.progress.add(n as u64);
-        }
-        writer.finish().await.map_err(|e| e.message)?;
-        Ok::<_, String>(true)
-    }
-    .await;
-    drop(writer);
+    let result = copy(ctx, &job, &mut input, &handle, offset).await;
     let closed = ctx.remote.close_handle(handle).await;
     let end = match (result, closed) {
-        (Ok(true), Ok(())) => return FileEnd::Done { bytes },
-        (Ok(true), Err(err)) => FileEnd::Failed(format!("close: {}", err.message)),
-        (Ok(false), _) => FileEnd::Cancelled,
+        (Ok(Some(bytes)), Ok(())) => return FileEnd::Done { bytes },
+        (Ok(Some(_)), Err(err)) => FileEnd::Failed(format!("close: {}", err.message)),
+        (Ok(None), _) => FileEnd::Cancelled,
         (Err(message), _) => FileEnd::Failed(message),
     };
-    tracing::debug!(size = job.size, bytes, "upload did not complete");
-    if !ctx.opts.keep_partial {
-        let _best_effort = ctx.remote.remove_file(&job.remote).await;
+    tracing::debug!(size = job.size, "upload did not complete");
+    if !ctx.opts.keep_partial && !matches!(open, Open::Append(_)) {
+        let _best_effort = ctx.remote.remove_file(&target).await;
     }
     end
+}
+
+/// Where and how to write: the planned path (new, confirmed overwrite or resume), or under
+/// "keep both" the first free name next to it.
+async fn target(ctx: &Ctx, job: &Job) -> Result<(String, Open), FileEnd> {
+    let attrs = match ctx.remote.try_lstat(&job.remote).await {
+        Ok(None) => return Ok((job.remote.clone(), Open::Create)),
+        Ok(Some(attrs)) => attrs,
+        Err(err) => return Err(FileEnd::Failed(err.message)),
+    };
+    let remote_size = attrs.size.unwrap_or(u64::MAX);
+    if job.resume && kind_of(&attrs) == EntryKind::File && remote_size <= job.size {
+        return Ok((job.remote.clone(), Open::Append(remote_size)));
+    }
+    if job.overwrite == OverwritePolicy::KeepBoth {
+        return free_name(ctx, &job.remote).await.map(|p| (p, Open::Create));
+    }
+    match on_existing(job.overwrite, ConflictKind::Exists) {
+        Ok(()) => Ok((job.remote.clone(), Open::Truncate)),
+        Err(FileEnd::Conflict(kind, _)) => Err(FileEnd::Conflict(kind, resumable(job, &attrs))),
+        Err(end) => Err(end),
+    }
+}
+
+/// The existing remote file looks like an earlier, interrupted upload of this one.
+fn resumable(job: &Job, attrs: &FileAttributes) -> bool {
+    kind_of(attrs) == EntryKind::File
+        && attrs.size.is_some_and(|size| {
+            resume_plausible(size, attrs.mtime.map(u64::from), job.size, job.mtime)
+        })
+}
+
+/// "Keep both": the first `name (n)` next to `path` that does not exist on the server. Up to
+/// [`KEEP_BOTH_MAX`] round trips (a server on which "everything exists" can stall each one for
+/// the request timeout), so a cancel is honoured between them.
+async fn free_name(ctx: &Ctx, path: &str) -> Result<String, FileEnd> {
+    let (dir, name) = split_remote(path);
+    for n in 1..=KEEP_BOTH_MAX {
+        if ctx.cancel.is_cancelled() {
+            return Err(FileEnd::Cancelled);
+        }
+        let Some(candidate) = numbered(name, n) else {
+            break;
+        };
+        let candidate = join(dir, &candidate);
+        match ctx.remote.try_lstat(&candidate).await {
+            Ok(None) => return Ok(candidate),
+            Ok(Some(_)) => {}
+            Err(err) => return Err(FileEnd::Failed(err.message)),
+        }
+    }
+    Err(FileEnd::Failed("no free name to keep both files".into()))
+}
+
+/// `(dir, name)` of a remote path built by `join` (`"/a"` → `("/", "a")`, `"a"` → `("", "a")`).
+fn split_remote(path: &str) -> (&str, &str) {
+    match path.rsplit_once('/') {
+        Some(("", name)) if path.starts_with('/') => ("/", name),
+        Some((dir, name)) => (dir, name),
+        None => ("", path),
+    }
+}
+
+/// Streams the local file from `offset` into `handle`; `Ok(None)` = cancelled.
+async fn copy(
+    ctx: &Ctx,
+    job: &Job,
+    input: &mut tokio::fs::File,
+    handle: &str,
+    offset: u64,
+) -> Result<Option<u64>, String> {
+    if offset > 0 {
+        input
+            .seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| e.to_string())?;
+        job.progress.resumed(offset);
+    }
+    let mut writer = ctx.remote.writer(handle, offset);
+    let mut bytes = 0_u64;
+    loop {
+        if ctx.cancel.is_cancelled() {
+            return Ok(None);
+        }
+        let mut buf = vec![0; ctx.remote.write_chunk];
+        let n = input.read(&mut buf).await.map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        buf.truncate(n);
+        writer.write(buf).await.map_err(|e| e.message)?;
+        bytes += n as u64;
+        job.progress.add(n as u64);
+    }
+    writer.finish().await.map_err(|e| e.message)?;
+    Ok(Some(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn remote_paths_split() {
+        assert_eq!(super::split_remote("/a"), ("/", "a"));
+        assert_eq!(super::split_remote("/d/a"), ("/d", "a"));
+        assert_eq!(super::split_remote("d/a"), ("d", "a"));
+        assert_eq!(super::split_remote("a"), ("", "a"));
+    }
 }

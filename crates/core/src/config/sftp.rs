@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 /// SFTP panel and transfer settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a flat, directly-TOML-mapped settings record, not a state machine"
+)]
 pub struct SftpCfg {
     /// Where double-click downloads go; `None` = the XDG download directory (`~/Downloads`).
     pub download_dir: Option<PathBuf>,
@@ -15,6 +19,9 @@ pub struct SftpCfg {
     pub show_hidden: bool,
     /// Panel width as a share of the tab (0.15–0.85).
     pub panel_width: f32,
+    /// Start with "follow terminal" on: the panel goes where the remote shell's cwd is (needs
+    /// OSC 7 from the shell); manual navigation turns it off.
+    pub follow_cwd: bool,
     /// Seconds a finished transfer stays in the transfers list.
     pub transfer_linger_secs: u64,
     /// Files transferred at the same time per connection (at least 1).
@@ -36,6 +43,10 @@ pub struct SftpCfg {
     pub max_download_bytes: Option<u64>,
     /// Free space a download must leave on the local disk, in bytes.
     pub free_space_reserve_bytes: u64,
+    /// Keep the server's executable bit on downloaded files (`0755`). Off: downloads are
+    /// always `0644`, so a `.desktop` file, script or `AppImage` from the server cannot be run
+    /// by a double-click in a file manager.
+    pub keep_executable_bit: bool,
 }
 
 impl Default for SftpCfg {
@@ -44,6 +55,7 @@ impl Default for SftpCfg {
             download_dir: None,
             show_hidden: false,
             panel_width: 0.4,
+            follow_cwd: true,
             transfer_linger_secs: 10,
             max_parallel_files: 4,
             keep_partial: false,
@@ -54,6 +66,7 @@ impl Default for SftpCfg {
             allow_growing_files: false,
             max_download_bytes: None,
             free_space_reserve_bytes: 1 << 30,
+            keep_executable_bit: false,
         }
     }
 }

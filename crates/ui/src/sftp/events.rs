@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use fogu_session::sftp::{CmdId, Entry, TransferId, TransferReport};
+use fogu_session::sftp::{CmdId, Entry, SkipReason, TransferId, TransferReport};
 use fogu_session::{SftpEvent, SftpRequest, display_name};
 use tokio::sync::mpsc::Sender;
 
@@ -38,7 +38,19 @@ impl SftpPanelState {
                 entries,
                 truncated,
             } => self.on_listing(id, path, entries, truncated, &mut out),
-            SftpEvent::Error { id, message } => self.on_error(id, message, &mut out),
+            SftpEvent::Error { id, message } => self.on_error(id, message, tx, &mut out),
+            SftpEvent::Done(id) => {
+                if let Some(Pending::Op { dir, .. }) = self.pending.remove(&id)
+                    && let Err(err) = self.op_ended(&dir, tx)
+                {
+                    out.notes.push(error_note("SFTP", err));
+                }
+            }
+            SftpEvent::Counted { id, entries, .. } => {
+                if self.pending.remove(&id).is_some() {
+                    self.on_counted(id, Ok(entries));
+                }
+            }
             SftpEvent::TransferQueued { id, files, total } => {
                 self.transfers.queued(id, files, total);
             }
@@ -62,12 +74,18 @@ impl SftpPanelState {
             SftpEvent::TransferCancelled { id, report } => {
                 self.on_transfer_end(id, TransferState::Cancelled, &report, (now, tx), &mut out);
             }
-            SftpEvent::Conflict { id, path, kind } => {
+            SftpEvent::Conflict {
+                id,
+                path,
+                kind,
+                resumable,
+            } => {
                 if self.transfers.get(id).is_some() {
                     self.conflicts.queue.push_back(Conflict {
                         transfer: id,
                         path,
                         kind,
+                        resumable,
                     });
                 }
             }
@@ -79,7 +97,7 @@ impl SftpPanelState {
                     out.sweep = true;
                 }
             }
-            SftpEvent::Done(_) | SftpEvent::StatResult { .. } => {}
+            SftpEvent::StatResult { .. } => {}
         }
         out
     }
@@ -106,6 +124,8 @@ impl SftpPanelState {
         if self.path.as_deref() != Some(path.as_str()) {
             self.listing.reset_view();
             self.scroll_y = 0.0;
+            // An inline rename/new folder belongs to the directory it was started in.
+            self.ops.edit = None;
         }
         if truncated {
             out.notes.push(
@@ -120,13 +140,43 @@ impl SftpPanelState {
         self.listing.replace(entries, truncated);
     }
 
-    fn on_error(&mut self, id: CmdId, message: String, out: &mut Reaction) {
+    fn on_error(
+        &mut self,
+        id: CmdId,
+        message: String,
+        tx: &Sender<SftpRequest>,
+        out: &mut Reaction,
+    ) {
         let what = match self.pending.remove(&id) {
             Some(Pending::Resolve { home: true, .. }) => {
                 "Cannot open the home directory".to_owned()
             }
+            Some(Pending::List {
+                path, follow: true, ..
+            }) if self.loading == Some(id) => {
+                self.loading = None;
+                self.follow = false;
+                let detail = format!("Cannot open {}: {message}", display_name(&path));
+                out.notes.push(
+                    Notification::new(Level::Warn, "Stopped following the terminal").detail(detail),
+                );
+                return;
+            }
             Some(Pending::List { path, .. } | Pending::Resolve { path, .. }) => {
                 format!("Cannot open {}", display_name(&path))
+            }
+            Some(Pending::Count) => {
+                self.on_counted(id, Err(message));
+                return;
+            }
+            Some(Pending::Op { what, dir, name }) => {
+                let detail = format!("{}: {message}", display_name(&name));
+                out.notes
+                    .push(error_note(&format!("{what} failed"), detail));
+                if let Err(err) = self.op_ended(&dir, tx) {
+                    out.notes.push(error_note("SFTP", err));
+                }
+                return;
             }
             None => "SFTP".to_owned(),
         };
@@ -151,6 +201,17 @@ impl SftpPanelState {
             return;
         };
         out.sweep = true;
+        let only_conflicts = report.files_done == 0
+            && report.failed.is_empty()
+            && !report.skipped.is_empty()
+            && report
+                .skipped
+                .iter()
+                .all(|s| matches!(s.reason, SkipReason::Exists(_)));
+        if t.state == TransferState::Done && only_conflicts && !self.conflicts.queue.is_empty() {
+            // The "file exists" dialog is the answer; a "0 files" toast would only repeat it.
+            return;
+        }
         let summary = transfers::report_summary(report);
         let failed = !report.failed.is_empty();
         let note = match (&t.state, t.direction, &t.origin) {
@@ -159,12 +220,20 @@ impl SftpPanelState {
             }
             (TransferState::Done, Direction::Download, Origin::Download { local_dir, .. }) => {
                 let level = if failed { Level::Warn } else { Level::Info };
-                let note = Notification::new(level, "Download finished")
-                    .detail(format!("{summary} \u{2192} {}", local_dir.display()));
-                if report.files_done > 0 {
-                    note.action(ToastAction::ShowInFileManager)
-                } else {
+                let note = Notification::new(level, "Download finished").detail(format!(
+                    "{summary} \u{2192} {}",
+                    display_name(&local_dir.to_string_lossy())
+                ));
+                if report.files_done == 0 {
                     note
+                } else {
+                    if t.open_when_done && !failed {
+                        out.open.clone_from(&t.open_file);
+                    }
+                    note.action(ToastAction::Downloaded {
+                        file: t.open_file.clone(),
+                        dir: local_dir.clone(),
+                    })
                 }
             }
             (TransferState::Done, _, _) => {

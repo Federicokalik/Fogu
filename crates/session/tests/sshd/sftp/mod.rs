@@ -10,6 +10,7 @@ use std::time::Duration;
 use fogu_session::sftp::{CmdId, EntryKind, OverwritePolicy, TransferReport};
 use fogu_session::{SftpCmd, SftpEvent, SftpHandle, SftpRequest};
 
+mod ops;
 mod transfer;
 
 use super::no_prompts;
@@ -124,6 +125,7 @@ fn answer_id(event: &SftpEvent) -> Option<CmdId> {
         SftpEvent::Listing { id, .. }
         | SftpEvent::StatResult { id, .. }
         | SftpEvent::Realpath { id, .. }
+        | SftpEvent::Counted { id, .. }
         | SftpEvent::Error { id, .. }
         | SftpEvent::TransferDone { id, .. }
         | SftpEvent::TransferFailed { id, .. }

@@ -18,10 +18,10 @@ use super::super::transfer::Ctx;
 use super::download;
 use crate::sftp::{CmdId, OverwritePolicy, SftpEvent, SftpOptions, TransferReport};
 
-struct Tmp(PathBuf);
+pub(in super::super) struct Tmp(pub(in super::super) PathBuf);
 
 impl Tmp {
-    fn new(label: &str) -> Self {
+    pub(in super::super) fn new(label: &str) -> Self {
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
         let path =
@@ -31,7 +31,7 @@ impl Tmp {
         Self(path)
     }
 
-    fn names(&self) -> Vec<String> {
+    pub(in super::super) fn names(&self) -> Vec<String> {
         let mut names: Vec<_> = std::fs::read_dir(&self.0)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -103,7 +103,7 @@ async fn run(server: Hostile, setup: Setup, dest: &Path) -> SftpEvent {
     }
 }
 
-fn report(end: SftpEvent) -> TransferReport {
+pub(in super::super) fn report(end: SftpEvent) -> TransferReport {
     match end {
         SftpEvent::TransferDone { report, .. } => report,
         other => panic!("expected TransferDone, got {other:?}"),
@@ -118,7 +118,7 @@ fn failure(end: SftpEvent) -> String {
     report.failed.into_iter().next().unwrap().message
 }
 
-fn fatal(end: SftpEvent) -> String {
+pub(in super::super) fn fatal(end: SftpEvent) -> String {
     match end {
         SftpEvent::TransferFailed { message, .. } => message,
         other => panic!("expected TransferFailed, got {other:?}"),

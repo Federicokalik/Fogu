@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use fogu_core::{EffectiveProfile, ProfileKind, resolve};
-use fogu_session::{SftpCmd, SftpEvent, SftpRequest, display_name};
+use fogu_session::{SftpCmd, SftpEvent, SftpRequest};
 use iced::Task;
 use iced::widget::operation;
 use tokio::sync::mpsc::Sender;
@@ -26,7 +26,12 @@ impl App {
     pub(crate) fn on_sftp(&mut self, message: SftpMsg) -> Task<Message> {
         match message {
             SftpMsg::Event(pane, event) => self.on_sftp_event(pane, *event),
-            SftpMsg::Panel(tab, message) => self.on_panel(tab, message),
+            SftpMsg::Panel(tab, message) => {
+                if message.is_command() {
+                    self.menu = None;
+                }
+                self.on_panel(tab, message)
+            }
         }
     }
 
@@ -43,6 +48,9 @@ impl App {
             .collect();
         if reaction.sweep {
             tasks.push(self.after(self.linger(), sweep(tab)));
+        }
+        if let Some(file) = reaction.open {
+            tasks.push(self.open_local(file));
         }
         Task::batch(tasks)
     }
@@ -117,16 +125,19 @@ impl App {
         let Some(tx) = pane_ref.sftp.as_ref().map(|l| l.cmds.clone()) else {
             return Task::none();
         };
+        let shell_cwd = pane_ref.remote_cwd.clone();
         let panel = tab
             .sftp
             .get_or_insert_with(|| SftpPanelState::new(pane, &cfg));
         if panel.pane != pane {
             panel.rebind(pane, Instant::now());
         }
-        match panel.open(&tx, options, start) {
+        panel.shell_cwd = shell_cwd.filter(|p| p.starts_with('/'));
+        let opened = match panel.open(&tx, options, start) {
             Ok(()) => Task::none(),
             Err(err) => self.notify(Notification::new(Level::Error, "SFTP").detail(err)),
-        }
+        };
+        Task::batch([opened, self.wayland_drop_hint()])
     }
 
     /// Hides tab `tab`'s panel; the engine closes its channel once no transfer runs.
@@ -164,6 +175,7 @@ impl App {
             }
             PanelMsg::Go(path) => {
                 panel.editing = None;
+                panel.follow = false;
                 panel.list(&tx, path, true)
             }
             PanelMsg::EditPath => {
@@ -180,13 +192,24 @@ impl App {
             }
             PanelMsg::PathSubmit => match panel.editing.take() {
                 Some(path) if !path.trim().is_empty() => {
+                    panel.follow = false;
                     panel.resolve(&tx, Some(path.trim().to_owned()))
                 }
                 _ => Ok(()),
             },
-            PanelMsg::Back => panel.go_back(&tx),
-            PanelMsg::Up => panel.go_up(&tx),
-            PanelMsg::Home => panel.go_home(&tx),
+            // Manual navigation stops following the terminal ("resume following" restarts).
+            PanelMsg::Back => {
+                panel.follow = false;
+                panel.go_back(&tx)
+            }
+            PanelMsg::Up => {
+                panel.follow = false;
+                panel.go_up(&tx)
+            }
+            PanelMsg::Home => {
+                panel.follow = false;
+                panel.go_home(&tx)
+            }
             PanelMsg::Refresh => match panel.path.clone() {
                 Some(path) => panel.list(&tx, path, false),
                 None => panel.resolve(&tx, None),
@@ -230,6 +253,9 @@ impl App {
             return Task::none();
         };
         let result = match message {
+            PanelMsg::Upload if !super::desktop::picker_available() => {
+                return self.notify(super::desktop::no_picker_note());
+            }
             PanelMsg::Upload => return pick_upload(tab, panel.path.clone()),
             PanelMsg::Download => return self.pick_download(tab),
             PanelMsg::UploadPicked { remote_dir, local } => match local {
@@ -238,10 +264,13 @@ impl App {
                         local: local.clone(),
                         remote_dir: remote_dir.clone(),
                         overwrite: fogu_session::sftp::OverwritePolicy::Ask,
+                        resume: false,
                     };
                     let label = transfer_label(&cmd);
                     let origin = Origin::Upload { local, remote_dir };
-                    panel.issue(&tx, cmd, Direction::Upload, label, origin)
+                    panel
+                        .issue(&tx, cmd, Direction::Upload, label, origin)
+                        .map(|_| ())
                 }
                 _ => Ok(()),
             },
@@ -256,11 +285,13 @@ impl App {
                     remote_dir,
                     local_dir,
                 };
-                panel.issue(&tx, cmd, Direction::Download, label, origin)
+                panel
+                    .issue(&tx, cmd, Direction::Download, label, origin)
+                    .map(|_| ())
             }
             PanelMsg::Cancel(id) => panel.send(&tx, SftpCmd::Cancel(id)).map(|_| ()),
             PanelMsg::ClearTransfers => {
-                panel.transfers.clear_finished();
+                panel.transfers.clear_finished(&panel.conflicts);
                 Ok(())
             }
             PanelMsg::ToggleTransfers => {
@@ -268,7 +299,10 @@ impl App {
                 Ok(())
             }
             PanelMsg::Sweep => {
-                if panel.transfers.sweep(Instant::now(), linger) {
+                if panel
+                    .transfers
+                    .sweep(Instant::now(), linger, &panel.conflicts)
+                {
                     return self.after(linger, sweep(tab));
                 }
                 Ok(())
@@ -282,7 +316,7 @@ impl App {
                 panel.conflicts.apply_all = all;
                 Ok(())
             }
-            _ => Ok(()),
+            other => return self.on_panel_ops(tab, other),
         };
         match result {
             Ok(()) => Task::none(),
@@ -290,48 +324,23 @@ impl App {
         }
     }
 
-    /// Double-click / Enter: a directory is entered, a file is downloaded to the download
-    /// directory.
+    /// Double-click / Enter: a directory is entered (following stops), a file is downloaded
+    /// to the download directory.
     fn open_entry(&mut self, tab: TabId, name: &str) -> Task<Message> {
-        let target = download_dir(&self.config.sftp);
         let Some((panel, tx)) = self.panel_of(tab) else {
             return Task::none();
         };
         let (Some(dir), Some(entry)) = (
             panel.path.clone(),
-            panel
-                .listing
-                .entries
-                .iter()
-                .find(|e| e.name == name)
-                .cloned(),
+            panel.listing.entries.iter().find(|e| e.name == name),
         ) else {
             return Task::none();
         };
-        let remote = join(&dir, &entry.name);
-        let result = if is_dir(&entry) {
-            panel.list(&tx, remote, true)
-        } else {
-            match target {
-                Some(local_dir) => match std::fs::create_dir_all(&local_dir) {
-                    Ok(()) => {
-                        let cmd = download_cmd(vec![remote], local_dir.clone());
-                        let label = transfer_label(&cmd);
-                        let origin = Origin::Download {
-                            remote_dir: dir,
-                            local_dir,
-                        };
-                        panel.issue(&tx, cmd, Direction::Download, label, origin)
-                    }
-                    Err(err) => Err(format!(
-                        "cannot create {}: {err}",
-                        display_name(&local_dir.to_string_lossy())
-                    )),
-                },
-                None => Err("no download directory (set [sftp] download_dir)".to_owned()),
-            }
-        };
-        match result {
+        if !is_dir(entry) {
+            return self.download_entry(tab, name, false);
+        }
+        panel.follow = false;
+        match panel.list(&tx, join(&dir, name), true) {
             Ok(()) => Task::none(),
             Err(err) => self.notify(Notification::new(Level::Error, "SFTP").detail(err)),
         }
@@ -356,6 +365,9 @@ impl App {
             let note = Notification::new(Level::Info, "Download")
                 .detail("Select one or more entries first.");
             return self.notify(note);
+        }
+        if !super::desktop::picker_available() {
+            return self.notify(super::desktop::no_picker_note());
         }
         let mut dialog = rfd::AsyncFileDialog::new().set_title("Download to folder");
         if let Some(start) = start {

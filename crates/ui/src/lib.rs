@@ -31,6 +31,7 @@ mod subscription;
 mod tab;
 mod tab_bar;
 mod terminal_view;
+mod view;
 
 use std::sync::Arc;
 

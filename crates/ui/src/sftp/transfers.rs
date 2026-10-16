@@ -69,6 +69,10 @@ pub struct Transfer {
     pub skipped: u64,
     /// When it reached a final state.
     pub finished: Option<Instant>,
+    /// A single-file download: the local file the finished toast's "Open" button opens.
+    pub open_file: Option<PathBuf>,
+    /// "Download and open": open `open_file` as soon as it is complete.
+    pub open_when_done: bool,
 }
 
 impl Transfer {
@@ -88,6 +92,8 @@ impl Transfer {
             failed: 0,
             skipped: 0,
             finished: None,
+            open_file: None,
+            open_when_done: false,
         }
     }
 
@@ -98,7 +104,7 @@ impl Transfer {
 
     /// Progress 0..=1 (0 while the total is unknown).
     pub fn fraction(&self) -> f32 {
-        if self.state == TransferState::Done && self.failed == 0 {
+        if self.state == TransferState::Done && self.failed == 0 && self.skipped == 0 {
             return 1.0;
         }
         if self.total == 0 {
@@ -159,7 +165,15 @@ impl Transfers {
         now: Instant,
     ) -> Option<&Transfer> {
         let t = self.get_mut(id).filter(|t| t.is_active())?;
-        t.bytes = t.bytes.max(report.bytes);
+        // Progress events are lossy and a resume reports only the new bytes: a clean finish
+        // shows the whole size.
+        let clean =
+            state == TransferState::Done && report.failed.is_empty() && report.skipped.is_empty();
+        t.bytes = if clean {
+            t.total.max(report.bytes)
+        } else {
+            t.bytes.max(report.bytes)
+        };
         t.done_files = report.files_done;
         t.failed = report.failed.len() as u64;
         t.skipped = report.skipped.len() as u64;
@@ -177,19 +191,22 @@ impl Transfers {
         }
     }
 
-    /// Drops finished transfers older than `linger`; `true` when any remain finished (another
-    /// sweep is due).
-    pub fn sweep(&mut self, now: Instant, linger: Duration) -> bool {
+    /// Drops finished transfers older than `linger`, except those `pinned` (a conflict of
+    /// theirs is still waiting for an answer, which needs the transfer's origin); `true` when
+    /// any remain finished (another sweep is due).
+    pub fn sweep(&mut self, now: Instant, linger: Duration, pinned: &Conflicts) -> bool {
         self.items.retain(|t| {
-            t.finished
-                .is_none_or(|f| now.saturating_duration_since(f) < linger)
+            pinned.queue.iter().any(|c| c.transfer == t.id)
+                || t.finished
+                    .is_none_or(|f| now.saturating_duration_since(f) < linger)
         });
         self.items.iter().any(|t| t.finished.is_some())
     }
 
-    /// "Clear": drops every finished transfer.
-    pub fn clear_finished(&mut self) {
-        self.items.retain(Transfer::is_active);
+    /// "Clear": drops every finished transfer (except `pinned` ones, see [`Self::sweep`]).
+    pub fn clear_finished(&mut self, pinned: &Conflicts) {
+        self.items
+            .retain(|t| t.is_active() || pinned.queue.iter().any(|c| c.transfer == t.id));
     }
 
     pub fn active_count(&self) -> usize {
@@ -204,6 +221,8 @@ pub struct Conflict {
     /// Target relative to the transfer root (raw).
     pub path: String,
     pub kind: ConflictKind,
+    /// The engine found resuming plausible (offer "Resume").
+    pub resumable: bool,
 }
 
 /// The user's answer to a conflict.
@@ -211,6 +230,32 @@ pub struct Conflict {
 pub enum ConflictChoice {
     Overwrite,
     Skip,
+    /// Write under a free `name (n)` name.
+    KeepBoth,
+    /// Continue the partial file (only offered when the engine found it plausible).
+    Resume,
+}
+
+impl ConflictChoice {
+    /// How the chosen files are re-issued: (policy, resume); `None` = not at all.
+    pub fn reissue_as(self) -> Option<(OverwritePolicy, bool)> {
+        match self {
+            Self::Overwrite => Some((OverwritePolicy::Overwrite, false)),
+            Self::KeepBoth => Some((OverwritePolicy::KeepBoth, false)),
+            Self::Resume => Some((OverwritePolicy::Ask, true)),
+            Self::Skip => None,
+        }
+    }
+
+    /// Suffix of a re-issued transfer's label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Overwrite => "overwrite",
+            Self::KeepBoth => "keep both",
+            Self::Resume => "resume",
+            Self::Skip => "skip",
+        }
+    }
 }
 
 /// Conflicts waiting for an answer, oldest first; the first one is shown.
@@ -228,19 +273,25 @@ impl Conflicts {
     }
 
     /// Answers the current conflict (all queued ones with "apply to all"); returns the
-    /// conflicts to re-issue with `Overwrite`.
+    /// conflicts to re-issue (none for `Skip`). "Resume" for all takes only the resumable
+    /// ones: the others stay queued and are asked next.
     pub fn answer(&mut self, choice: ConflictChoice) -> Vec<Conflict> {
-        let taken: Vec<Conflict> = if self.apply_all {
-            self.queue.drain(..).collect()
-        } else {
-            self.queue.pop_front().into_iter().collect()
+        let taken: Vec<Conflict> = match (self.apply_all, choice) {
+            (true, ConflictChoice::Resume) => {
+                let (resume, rest): (Vec<_>, Vec<_>) =
+                    self.queue.drain(..).partition(|c| c.resumable);
+                self.queue = rest.into();
+                resume
+            }
+            (true, _) => self.queue.drain(..).collect(),
+            (false, _) => self.queue.pop_front().into_iter().collect(),
         };
         if self.queue.is_empty() {
             self.apply_all = false;
         }
         match choice {
-            ConflictChoice::Overwrite => taken,
             ConflictChoice::Skip => Vec::new(),
+            _ => taken,
         }
     }
 
@@ -277,10 +328,14 @@ fn components(rel: &str) -> Option<Vec<&str>> {
     }
 }
 
-/// Commands that re-issue `rels` (conflicts of one transfer) with `Overwrite`, one per target
-/// directory. A path with an invalid component, or an upload root we don't know, is dropped
-/// (returned in the second list, sanitized for display).
-pub fn reissue(origin: &Origin, rels: &[String]) -> (Vec<SftpCmd>, Vec<String>) {
+/// Commands that re-issue `rels` (conflicts of one transfer) with `overwrite` / `resume`, one
+/// per target directory. A path with an invalid component, or an upload root we don't know, is
+/// dropped (returned in the second list, sanitized for display).
+pub fn reissue(
+    origin: &Origin,
+    rels: &[String],
+    (overwrite, resume): (OverwritePolicy, bool),
+) -> (Vec<SftpCmd>, Vec<String>) {
     let mut cmds: Vec<SftpCmd> = Vec::new();
     let mut rejected = Vec::new();
     for rel in rels {
@@ -307,8 +362,8 @@ pub fn reissue(origin: &Origin, rels: &[String]) -> (Vec<SftpCmd>, Vec<String>) 
                     cmds.push(SftpCmd::Download {
                         remote: vec![remote],
                         local_dir: local,
-                        overwrite: OverwritePolicy::Overwrite,
-                        resume: false,
+                        overwrite,
+                        resume,
                     });
                 }
             }
@@ -334,7 +389,8 @@ pub fn reissue(origin: &Origin, rels: &[String]) -> (Vec<SftpCmd>, Vec<String>) 
                     cmds.push(SftpCmd::Upload {
                         local: vec![file],
                         remote_dir: dir,
-                        overwrite: OverwritePolicy::Overwrite,
+                        overwrite,
+                        resume,
                     });
                 }
             }

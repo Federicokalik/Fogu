@@ -1,4 +1,4 @@
-#![expect(clippy::unwrap_used, reason = "tests")]
+#![expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "tests")]
 
 use super::*;
 
@@ -162,4 +162,70 @@ fn formatting_helpers() {
     assert_eq!(human_size(&entry("d", EntryKind::Dir, 4096, 0)), "");
     let first = sample().visible().first().map(|e| e.name.clone()).unwrap();
     assert_eq!(first, "linkdir");
+}
+
+/// The names a malicious server can send: the reducer, the view helpers and the
+/// breadcrumb must accept them without a panic and show nothing unescaped.
+#[test]
+fn hostile_listing_is_accepted_and_shown_escaped() {
+    let long = "n".repeat(4096);
+    let names = [
+        "..",
+        "a/b",
+        ".",
+        "",
+        "evil\x1b]52;c;AAAA\x07",
+        "-rf",
+        long.as_str(),
+        "l",
+        "ok",
+        "evil\u{202e}gpj.exe",
+        "nul\0x",
+    ];
+    let mut l = Listing::new(true);
+    let mut entries: Vec<Entry> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| entry(n, EntryKind::File, u64::MAX - i as u64, u32::MAX))
+        .collect();
+    entries[7].kind = EntryKind::Symlink;
+    entries[7].link_kind = Some(EntryKind::Dir);
+    entries[7].link_target = Some(".".into());
+    entries[0].mode = Some(u32::MAX);
+    l.replace(entries, true);
+    for key in [
+        SortKey::Name,
+        SortKey::Size,
+        SortKey::Modified,
+        SortKey::Mode,
+    ] {
+        l.sort_by(key);
+        l.sort_by(key);
+    }
+    assert_eq!(l.visible().len(), names.len());
+    for e in l.visible() {
+        for text in [shown_name(e), human_size(e), permissions(e), modified(e)] {
+            assert!(!text.chars().any(char::is_control), "{text:?}");
+            assert!(!text.contains('\u{202e}'), "{text:?}");
+            assert!(text.chars().count() <= 257, "{}", text.len());
+        }
+    }
+    for name in names {
+        l.click(name, ClickMods::default());
+    }
+    l.filter = "evil".into();
+    assert_eq!(l.visible().len(), 2);
+    for path in [
+        "/etc/../../tmp",
+        "",
+        "/",
+        "//",
+        "rel",
+        "/evil\x1b]52;c;AAAA\x07/x",
+    ] {
+        for s in super::super::breadcrumb::segments(path) {
+            assert!(!s.label.chars().any(char::is_control), "{path:?}");
+        }
+        let _ = super::super::breadcrumb::parent(path);
+    }
 }

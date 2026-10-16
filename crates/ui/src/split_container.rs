@@ -188,7 +188,11 @@ impl<'a> SplitContainer<'a> {
     }
 
     fn side_message(&self, ratio: Option<f32>) -> Message {
-        Message::Sftp(SftpMsg::Panel(self.tab, PanelMsg::Width(ratio)))
+        self.panel_message(PanelMsg::Width(ratio))
+    }
+
+    fn panel_message(&self, message: PanelMsg) -> Message {
+        Message::Sftp(SftpMsg::Panel(self.tab, message))
     }
 
     /// Every divider: the tree's, then the side panel's.
@@ -363,6 +367,19 @@ impl Widget<Message, iced::Theme, iced::Renderer> for SplitContainer<'_> {
                 state, event, layout, cursor, renderer, clipboard, shell, viewport,
             );
         }
+        // A right-press in the side panel opens its menu at the pointer. Published after the
+        // children, so an entry's own right-press (which picks the entry) arrives first.
+        if self.side.is_some()
+            && let Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) = event
+            && let Some(at) = cursor.position()
+            && layout
+                .children()
+                .last()
+                .is_some_and(|l| l.bounds().contains(at))
+        {
+            let menu = PanelMsg::MenuAt(at);
+            shell.publish(Message::Sftp(SftpMsg::Panel(self.tab, menu)));
+        }
     }
 
     fn mouse_interaction(
@@ -468,22 +485,5 @@ impl<'a> From<SplitContainer<'a>> for Element<'a, Message> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hit_area_is_wider_than_the_gap_and_centred() {
-        let mut tree = SplitTree::new(PaneId(1));
-        assert!(tree.split(&PaneId(1), fogu_core::Side::Right, PaneId(2)));
-        let bounds = Rectangle::new(Point::ORIGIN, Size::new(202.0, 102.0));
-        let divider = tree.dividers(inner(bounds), GAP).remove(0);
-        let hit = hit_area(&divider);
-        assert!((hit.width - HIT).abs() < f32::EPSILON);
-        let gap_centre = divider.rect.x + divider.rect.w / 2.0;
-        assert!((hit.center_x() - gap_centre).abs() < 1e-4);
-        assert!(hit.contains(Point::new(gap_centre + 3.5, 50.0)));
-        assert!(!hit.contains(Point::new(gap_centre + 4.5, 50.0)));
-        let line = across(&divider, 1.0);
-        assert!((line.width - 1.0).abs() < f32::EPSILON);
-    }
-}
+#[path = "split_container_tests.rs"]
+mod tests;

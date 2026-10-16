@@ -136,6 +136,8 @@ pub struct Pane {
     pub prompt: Option<PromptState>,
     /// Warnings the session reported (tab badge), without duplicates.
     pub warnings: Vec<SessionWarning>,
+    /// SSH panes: the last cwd the remote shell reported (OSC 7, raw remote path).
+    pub remote_cwd: Option<String>,
 }
 
 impl Pane {
@@ -168,6 +170,7 @@ impl Pane {
             closing: false,
             prompt: None,
             warnings: Vec::new(),
+            remote_cwd: None,
         }
     }
 

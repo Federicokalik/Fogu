@@ -48,8 +48,8 @@ pub(crate) enum FileEnd {
     Done {
         bytes: u64,
     },
-    /// The target exists and the policy is `Ask`.
-    Conflict(ConflictKind),
+    /// The target exists and the policy is `Ask`; `true` = resuming is plausible.
+    Conflict(ConflictKind, bool),
     Skipped(SkipReason),
     Failed(String),
     Cancelled,
@@ -60,7 +60,8 @@ pub(crate) struct Progress {
     id: TransferId,
     events: Sender<SftpEvent>,
     start: Instant,
-    state: Mutex<(u64, u64, Instant)>,
+    /// (bytes done, total, last event, bytes resumed: counted as done but not in the rate).
+    state: Mutex<(u64, u64, Instant, u64)>,
 }
 
 impl Progress {
@@ -70,8 +71,16 @@ impl Progress {
             id: ctx.id,
             events: ctx.events.clone(),
             start,
-            state: Mutex::new((0, total, start)),
+            state: Mutex::new((0, total, start, 0)),
         })
+    }
+
+    /// Bytes a resume starts from: done, but not transferred now (kept out of the rate).
+    pub(crate) fn resumed(&self, n: u64) {
+        if let Ok(mut state) = self.state.lock() {
+            state.3 += n;
+        }
+        self.add(n);
     }
 
     /// Adds `n` done bytes; sends an event if the last one is ≥ 100 ms old.
@@ -91,7 +100,7 @@ impl Progress {
             clippy::cast_sign_loss,
             reason = "a rate estimate"
         )]
-        let rate = (state.0 as f64 / secs) as u64;
+        let rate = (state.0.saturating_sub(state.3) as f64 / secs) as u64;
         let event = SftpEvent::TransferProgress {
             id: self.id,
             bytes: state.0,
@@ -152,11 +161,12 @@ async fn record(
             report.files_done += 1;
             report.bytes += bytes;
         }
-        FileEnd::Conflict(kind) => {
+        FileEnd::Conflict(kind, resumable) => {
             let conflict = SftpEvent::Conflict {
                 id: ctx.id,
                 path: path.clone(),
                 kind,
+                resumable,
             };
             let _gone = ctx.events.send(conflict).await;
             report.skip(path, SkipReason::Exists(kind));
@@ -167,13 +177,45 @@ async fn record(
     }
 }
 
-/// What an existing target means under `policy`: `Ok(())` = go ahead and replace it.
+/// What an existing target means under `policy`: `Ok(())` = go ahead and replace it. Under
+/// `KeepBoth` the free name was already chosen, so a target found now appeared meanwhile: it is
+/// a conflict like under `Ask`.
 pub(crate) fn on_existing(policy: OverwritePolicy, kind: ConflictKind) -> Result<(), FileEnd> {
     match policy {
         OverwritePolicy::Overwrite => Ok(()),
-        OverwritePolicy::Ask => Err(FileEnd::Conflict(kind)),
+        OverwritePolicy::Ask | OverwritePolicy::KeepBoth => Err(FileEnd::Conflict(kind, false)),
         OverwritePolicy::Skip => Err(FileEnd::Skipped(SkipReason::Exists(kind))),
     }
+}
+
+/// Whether continuing a partial copy is plausible (SFTP v3 has no checksums):
+/// the partial file is shorter than the source and was last written no earlier than the
+/// source last changed. A missing time on either side leaves only the size check.
+pub(crate) fn resume_plausible(
+    partial_len: u64,
+    partial_mtime: Option<u64>,
+    source_len: u64,
+    source_mtime: Option<u64>,
+) -> bool {
+    let fresh = match (partial_mtime, source_mtime) {
+        (Some(partial), Some(source)) => partial >= source,
+        _ => true,
+    };
+    partial_len < source_len && fresh
+}
+
+/// `name` numbered for "keep both": `report.pdf` → `report (n).pdf`, `notes` / `.bashrc` →
+/// `notes (n)` / `.bashrc (n)`. `None` when the result is not a valid name (too long).
+pub(crate) fn numbered(name: &str, n: u32) -> Option<String> {
+    let out = match name.rfind('.') {
+        Some(dot) if dot > 0 => {
+            let (stem, ext) = name.split_at(dot);
+            format!("{stem} ({n}){ext}")
+        }
+        _ => format!("{name} ({n})"),
+    };
+    super::local_fs::validate_name(&out).ok()?;
+    Some(out)
 }
 
 /// Sends the transfer's final event.
@@ -222,5 +264,38 @@ mod tests {
         assert_eq!(report.skipped.len(), REPORT_MAX_ITEMS);
         assert_eq!(report.failed.len(), REPORT_MAX_ITEMS);
         assert_eq!(report.omitted, 10);
+    }
+
+    #[test]
+    fn resume_eligibility_table() {
+        // (partial len, partial mtime, source len, source mtime, plausible)
+        let rows = [
+            (10, Some(200), 100, Some(100), true),
+            (10, Some(100), 100, Some(100), true),
+            (10, Some(99), 100, Some(100), false),
+            (100, Some(200), 100, Some(100), false),
+            (150, Some(200), 100, Some(100), false),
+            (10, None, 100, Some(100), true),
+            (10, Some(1), 100, None, true),
+            (0, Some(200), 100, Some(100), true),
+            (0, None, 0, None, false),
+        ];
+        for (plen, pt, slen, st, want) in rows {
+            assert_eq!(
+                resume_plausible(plen, pt, slen, st),
+                want,
+                "{plen} {pt:?} {slen} {st:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn keep_both_names() {
+        assert_eq!(numbered("report.pdf", 1).as_deref(), Some("report (1).pdf"));
+        assert_eq!(numbered("a.tar.gz", 2).as_deref(), Some("a.tar (2).gz"));
+        assert_eq!(numbered("notes", 3).as_deref(), Some("notes (3)"));
+        assert_eq!(numbered(".bashrc", 1).as_deref(), Some(".bashrc (1)"));
+        assert_eq!(numbered("x.", 1).as_deref(), Some("x (1)."));
+        assert_eq!(numbered(&"a".repeat(252), 1), None);
     }
 }

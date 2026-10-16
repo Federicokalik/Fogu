@@ -289,9 +289,18 @@ impl App {
             self.answer(id, PromptReply::Reject);
             return;
         }
-        if self.menu.take().is_none() {
-            self.renaming = None;
+        if self.menu.take().is_some() {
+            return;
         }
+        let active = self.active;
+        let panel = self.tabs.iter_mut().find(|t| t.id == active);
+        if panel
+            .and_then(|t| t.sftp.as_mut())
+            .is_some_and(crate::sftp::SftpPanelState::cancel_op)
+        {
+            return;
+        }
+        self.renaming = None;
     }
 }
 

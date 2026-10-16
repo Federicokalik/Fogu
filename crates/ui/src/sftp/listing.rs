@@ -193,6 +193,21 @@ impl Listing {
         Some(row)
     }
 
+    /// Right-press on `name`: an entry outside the selection becomes the only selected one;
+    /// inside it, the selection stays (the menu acts on all of it).
+    pub fn right_click(&mut self, name: &str) {
+        if !self.selected.contains(name) {
+            self.click(name, ClickMods::default());
+        }
+        self.cursor = Some(name.to_owned());
+    }
+
+    /// The keyboard cursor's entry, if it is shown.
+    pub fn cursor_entry(&self) -> Option<&Entry> {
+        let cursor = self.cursor.as_deref()?;
+        self.visible().into_iter().find(|e| e.name == cursor)
+    }
+
     /// The selected entries, in display order.
     pub fn selected_entries(&self) -> Vec<&Entry> {
         self.visible()

@@ -21,15 +21,15 @@ use crate::app::App;
 use crate::message::Message;
 use crate::metrics::{FontUnits, ResolvedFont};
 
-fn channel() -> (Sender<SftpRequest>, Receiver<SftpRequest>) {
+pub(super) fn channel() -> (Sender<SftpRequest>, Receiver<SftpRequest>) {
     mpsc::channel(64)
 }
 
-fn drain(rx: &mut Receiver<SftpRequest>) -> Vec<SftpRequest> {
+pub(super) fn drain(rx: &mut Receiver<SftpRequest>) -> Vec<SftpRequest> {
     std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 
-fn file(name: &str) -> Entry {
+pub(super) fn file(name: &str) -> Entry {
     Entry {
         name: name.to_owned(),
         kind: EntryKind::File,
@@ -43,7 +43,7 @@ fn file(name: &str) -> Entry {
     }
 }
 
-fn listing(id: CmdId, path: &str, names: &[&str]) -> SftpEvent {
+pub(super) fn listing(id: CmdId, path: &str, names: &[&str]) -> SftpEvent {
     SftpEvent::Listing {
         id,
         path: path.to_owned(),
@@ -53,7 +53,7 @@ fn listing(id: CmdId, path: &str, names: &[&str]) -> SftpEvent {
 }
 
 /// A visible panel showing `/home/u` (login directory) with entries `a`, `b`.
-fn at_home(tx: &Sender<SftpRequest>, rx: &mut Receiver<SftpRequest>) -> SftpPanelState {
+pub(super) fn at_home(tx: &Sender<SftpRequest>, rx: &mut Receiver<SftpRequest>) -> SftpPanelState {
     let mut panel = SftpPanelState::new(PaneId(1), &SftpCfg::default());
     panel.open(tx, SftpOptions::default(), None).unwrap();
     let sent = drain(rx);
@@ -247,6 +247,7 @@ fn finished_upload_into_the_shown_directory_refreshes_it() {
         local: vec!["/tmp/new.txt".into()],
         remote_dir: "/home/u".into(),
         overwrite: OverwritePolicy::Ask,
+        resume: false,
     };
     panel
         .issue(&tx, cmd, Direction::Upload, "new.txt".into(), origin)
@@ -279,6 +280,7 @@ fn conflict_overwrite_reissues_only_that_file() {
                 id,
                 path: name.into(),
                 kind: ConflictKind::Exists,
+                resumable: false,
             },
             &tx,
             now,
@@ -290,6 +292,7 @@ fn conflict_overwrite_reissues_only_that_file() {
             id: CmdId(999),
             path: "zzz".into(),
             kind: ConflictKind::Exists,
+            resumable: false,
         },
         &tx,
         now,
@@ -364,7 +367,7 @@ fn config_defaults_match_the_engine_defaults() {
     assert_eq!(opts.max_download_bytes, Some(5));
 }
 
-fn ssh_app() -> App {
+pub(super) fn ssh_app() -> App {
     let runtime = Arc::new(SessionRuntime::new().unwrap());
     let resolved = ResolvedFont {
         font: iced::Font::MONOSPACE,

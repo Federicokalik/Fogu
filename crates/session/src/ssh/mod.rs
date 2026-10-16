@@ -23,7 +23,6 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::timeout;
 
 use self::sftp::SftpEnds;
-pub use self::sftp::validate_name;
 use crate::pipeline::{Gone, Pump};
 use crate::prompt::{PROMPT_TEXT_MAX_CHARS, sanitize_remote};
 use crate::{

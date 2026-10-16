@@ -1,9 +1,9 @@
-//! Local writes for downloads. Remote names are attacker
-//! input, so nothing here ever joins a remote *path* to a local one: the destination directory
-//! is opened once, and every file and directory below it is reached from that fd one validated
-//! name at a time with `O_NOFOLLOW`, so a pre-existing (or concurrently planted) local symlink
-//! can never redirect a write outside it. Files are created `O_EXCL` (no silent overwrite) with
-//! mode `0644`/`0755` (never setuid/setgid/sticky) and only become visible under their final
+//! Local writes for downloads. Remote names are attacker input, so nothing here ever joins a remote
+//! *path* to a local one: the destination directory is opened once, and every file and directory
+//! below it is reached from that fd one validated name at a time with `O_NOFOLLOW`, so a
+//! pre-existing (or concurrently planted) local symlink can never redirect a write outside it.
+//! Files are created `O_EXCL` (no silent overwrite) with mode `0644` (`0755` only with
+//! `keep_executable_bit`; never setuid/setgid/sticky) and only become visible under their final
 //! name by a rename that refuses to replace (`RENAME_NOREPLACE`) unless the user confirmed.
 
 use std::fs::File;
@@ -14,46 +14,21 @@ use std::path::Path;
 use rustix::fs::{self as rfs, AtFlags, FileType, Mode, OFlags, RenameFlags};
 use rustix::io::Errno;
 
-use crate::sftp::NameError;
+pub(crate) use crate::sftp::{NAME_MAX, validate_name};
 
-/// Linux `NAME_MAX`: longest single path component in bytes.
-pub(crate) const NAME_MAX: usize = 255;
 /// Suffix of a download in progress.
 pub(crate) const PART_SUFFIX: &str = ".part";
-
-/// Accepts `name` as one local path component, or says why not: empty, `.`, `..`, `/`, NUL,
-/// control characters (C0, DEL, C1), bidi overrides/isolates, or longer than `NAME_MAX` bytes.
-pub fn validate_name(name: &str) -> Result<&str, NameError> {
-    if name.is_empty() {
-        return Err(NameError::Empty);
-    }
-    if name == "." || name == ".." {
-        return Err(NameError::Dot);
-    }
-    if name.len() > NAME_MAX {
-        return Err(NameError::Invalid);
-    }
-    for c in name.chars() {
-        match c {
-            '/' => return Err(NameError::Slash),
-            '\0' => return Err(NameError::Nul),
-            c if c.is_control() => return Err(NameError::Control),
-            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => return Err(NameError::Bidi),
-            _ => {}
-        }
-    }
-    Ok(name)
-}
 
 /// `<name>.part`, if that still fits in `NAME_MAX`.
 pub(crate) fn part_name(name: &str) -> Option<String> {
     (name.len() + PART_SUFFIX.len() <= NAME_MAX).then(|| format!("{name}{PART_SUFFIX}"))
 }
 
-/// Local mode for a downloaded file: `0755` if the remote mode has any `x` bit, else `0644`.
-/// setuid/setgid/sticky are never copied.
-pub(crate) fn file_mode(remote_mode: Option<u32>) -> Mode {
-    if remote_mode.is_some_and(|m| m & 0o111 != 0) {
+/// Local mode for a downloaded file: `0644`, or `0755` when `keep_exec` (the
+/// `keep_executable_bit` option) and the remote mode has any `x` bit. setuid/setgid/sticky are
+/// never copied.
+pub(crate) fn file_mode(remote_mode: Option<u32>, keep_exec: bool) -> Mode {
+    if keep_exec && remote_mode.is_some_and(|m| m & 0o111 != 0) {
         Mode::from_raw_mode(0o755)
     } else {
         Mode::from_raw_mode(0o644)
@@ -143,6 +118,19 @@ pub(crate) fn existing(dir: &impl AsFd, name: &str) -> io::Result<Existing> {
             _ => Existing::Other,
         }),
         Err(Errno::NOENT) => Ok(Existing::Nothing),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Length and mtime (seconds since the epoch) of the regular file `name` in `dir`, not
+/// following a symlink; `None` when it is missing or not a regular file.
+pub(crate) fn file_info(dir: &impl AsFd, name: &str) -> io::Result<Option<(u64, u64)>> {
+    match rfs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile => Ok(Some((
+            u64::try_from(stat.st_size).unwrap_or(0),
+            u64::try_from(stat.st_mtime).unwrap_or(0),
+        ))),
+        Ok(_) | Err(Errno::NOENT) => Ok(None),
         Err(err) => Err(err.into()),
     }
 }

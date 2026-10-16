@@ -22,6 +22,7 @@ fn sftp_upload_then_download_5_mib_is_identical() {
         local: vec![src.join("blob.bin")],
         remote_dir: remote.display().to_string(),
         overwrite: OverwritePolicy::Ask,
+        resume: false,
     });
     let report = done_report(up);
     assert_eq!((report.files_done, report.bytes), (1, data.len() as u64));
@@ -48,9 +49,27 @@ fn sftp_upload_then_download_5_mib_is_identical() {
         .unwrap()
         .permissions()
         .mode();
-    assert_eq!(mode & 0o7000, 0);
-    assert_eq!(mode & 0o100, 0o100, "x bit kept");
+    assert_eq!(mode & 0o777, 0o644, "never executable by default");
     assert!(!local.join("blob.bin.part").exists());
+    // Opt-in: the x bit is kept, the special bits still are not.
+    s.ok(SftpCmd::SetOptions(SftpOptions {
+        keep_executable_bit: true,
+        ..SftpOptions::default()
+    }));
+    let exec = mkdir(s.dir().join("local-exec"));
+    let report = done_report(s.download(
+        &[&remote.join("blob.bin")],
+        &exec,
+        OverwritePolicy::Ask,
+        false,
+    ));
+    assert_eq!(report.files_done, 1);
+    let mode = fs::metadata(exec.join("blob.bin"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o7777, 0o755, "x bit kept with keep_executable_bit");
+    s.ok(SftpCmd::SetOptions(SftpOptions::default()));
     assert!(
         s.seen
             .iter()
@@ -91,6 +110,7 @@ fn sftp_upload_then_download_5_mib_is_identical() {
         local: vec![src.join("blob.bin")],
         remote_dir: remote.display().to_string(),
         overwrite: OverwritePolicy::Skip,
+        resume: false,
     });
     assert_eq!(
         done_report(up).skipped[0].reason,
@@ -211,6 +231,15 @@ fn sftp_resume_completes_with_identical_content() {
         report.skipped[0].reason,
         SkipReason::Exists(ConflictKind::PartialExists)
     );
+    // The engine says resuming is plausible (shorter, written after the remote file changed).
+    assert!(s.seen.iter().any(|e| matches!(
+        e,
+        SftpEvent::Conflict {
+            kind: ConflictKind::PartialExists,
+            resumable: true,
+            ..
+        }
+    )));
     let report = done_report(s.download(&[&remote], &local, OverwritePolicy::Ask, true));
     assert_eq!((report.files_done, report.bytes), (1, len - kept));
     assert!(!part.exists());
@@ -326,6 +355,7 @@ fn sftp_throughput() {
         local: vec![local.join("big.bin")],
         remote_dir: up.display().to_string(),
         overwrite: OverwritePolicy::Ask,
+        resume: false,
     }));
     let secs = start.elapsed().as_secs_f64();
     assert_eq!(report.bytes, len);

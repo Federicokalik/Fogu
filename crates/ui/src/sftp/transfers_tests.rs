@@ -56,16 +56,27 @@ fn transfer_list_lifecycle() {
     assert!((list.get(CmdId(1)).unwrap().fraction() - 1.0).abs() < 1e-6);
     assert_eq!(list.active_count(), 1);
     let linger = Duration::from_secs(10);
-    assert!(list.sweep(t0 + Duration::from_secs(9), linger));
+    assert!(list.sweep(t0 + Duration::from_secs(9), linger, &Conflicts::default()));
     assert_eq!(list.items.len(), 2);
-    assert!(!list.sweep(t0 + linger, linger));
+    // A transfer whose conflict still waits for an answer is kept (its origin is needed).
+    let mut pinned = Conflicts::default();
+    pinned.queue.push_back(Conflict {
+        transfer: CmdId(1),
+        path: "x".into(),
+        kind: ConflictKind::Exists,
+        resumable: false,
+    });
+    assert!(list.sweep(t0 + linger, linger, &pinned));
+    list.clear_finished(&pinned);
+    assert_eq!(list.items.len(), 2, "kept while its conflict is open");
+    assert!(!list.sweep(t0 + linger, linger, &Conflicts::default()));
     assert_eq!(list.items.len(), 1, "finished one removed after linger");
     list.fail_active("connection closed", t0);
     assert_eq!(
         list.get(CmdId(2)).unwrap().state,
         TransferState::Failed("connection closed".into())
     );
-    list.clear_finished();
+    list.clear_finished(&Conflicts::default());
     assert_eq!(list.items.len(), 0);
 }
 
@@ -75,6 +86,7 @@ fn conflict_answers_one_or_all() {
         transfer: CmdId(n),
         path: p.into(),
         kind: ConflictKind::Exists,
+        resumable: false,
     };
     let mut q = Conflicts::default();
     q.queue.extend([c(1, "a"), c(1, "b"), c(2, "x")]);
@@ -92,6 +104,43 @@ fn conflict_answers_one_or_all() {
 }
 
 #[test]
+fn resume_for_all_takes_only_resumable_conflicts() {
+    let c = |p: &str, resumable| Conflict {
+        transfer: CmdId(1),
+        path: p.into(),
+        kind: ConflictKind::PartialExists,
+        resumable,
+    };
+    let mut q = Conflicts::default();
+    q.queue
+        .extend([c("a", true), c("b", false), c("c", true), c("d", false)]);
+    q.apply_all = true;
+    assert_eq!(
+        q.answer(ConflictChoice::Resume),
+        vec![c("a", true), c("c", true)]
+    );
+    // The others are asked next, one by one.
+    assert_eq!(q.current().unwrap().path, "b");
+    assert!(q.apply_all, "still more to answer");
+    assert_eq!(
+        q.answer(ConflictChoice::KeepBoth),
+        vec![c("b", false), c("d", false)]
+    );
+    let as_cmd = |choice: ConflictChoice| choice.reissue_as();
+    assert_eq!(
+        as_cmd(ConflictChoice::Resume),
+        Some((OverwritePolicy::Ask, true))
+    );
+    assert_eq!(
+        as_cmd(ConflictChoice::KeepBoth),
+        Some((OverwritePolicy::KeepBoth, false))
+    );
+    assert_eq!(as_cmd(ConflictChoice::Skip), None);
+}
+
+const OVERWRITE: (OverwritePolicy, bool) = (OverwritePolicy::Overwrite, false);
+
+#[test]
 fn reissue_downloads_group_by_local_dir_and_reject_bad_names() {
     let rels = [
         "dir/sub/f1".to_owned(),
@@ -101,7 +150,7 @@ fn reissue_downloads_group_by_local_dir_and_reject_bad_names() {
         "a/\u{1b}x".to_owned(),
         "/abs".to_owned(),
     ];
-    let (cmds, rejected) = reissue(&dl_origin(), &rels);
+    let (cmds, rejected) = reissue(&dl_origin(), &rels, OVERWRITE);
     assert_eq!(rejected.len(), 3, "{rejected:?}");
     assert!(rejected.iter().all(|r| !r.contains('\u{1b}')));
     assert_eq!(cmds.len(), 2);
@@ -148,7 +197,7 @@ fn reissue_uploads_map_back_to_their_source() {
         "a.txt".to_owned(),
         "unknown.txt".to_owned(),
     ];
-    let (cmds, rejected) = reissue(&origin, &rels);
+    let (cmds, rejected) = reissue(&origin, &rels, (OverwritePolicy::KeepBoth, false));
     assert_eq!(rejected, vec!["unknown.txt".to_owned()]);
     let got: Vec<(Vec<PathBuf>, String)> = cmds
         .into_iter()
@@ -156,7 +205,8 @@ fn reissue_uploads_map_back_to_their_source() {
             SftpCmd::Upload {
                 local,
                 remote_dir,
-                overwrite: OverwritePolicy::Overwrite,
+                overwrite: OverwritePolicy::KeepBoth,
+                resume: false,
             } => (local, remote_dir),
             other => panic!("unexpected {other:?}"),
         })
@@ -215,6 +265,7 @@ fn summary_and_conflict_texts_are_sanitized() {
         transfer: CmdId(1),
         path: "evil\u{202e}gpj.exe".into(),
         kind: ConflictKind::Exists,
+        resumable: false,
     };
     let text = conflict_text(&c, Direction::Download);
     assert!(text.contains("\\u{202e}"), "{text}");

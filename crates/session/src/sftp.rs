@@ -15,6 +15,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 /// Longest name [`display_name`] shows before cutting it with `…`.
 pub const DISPLAY_NAME_MAX_CHARS: usize = 255;
+/// Linux `NAME_MAX`: longest single path component in bytes.
+pub const NAME_MAX: usize = 255;
 
 /// The UI's side of one connection's SFTP engine. Present only on SSH sessions.
 #[derive(Debug)]
@@ -53,7 +55,14 @@ pub enum OverwritePolicy {
     Overwrite,
     /// Skip the file silently (listed in the report).
     Skip,
+    /// Keep the existing target and write under the first free name `name (1).ext`,
+    /// `name (2).ext`, … (up to [`KEEP_BOTH_MAX`]); for downloads `<new name>.part` must be free
+    /// too. A name taken meanwhile is reported as a conflict, like `Ask`.
+    KeepBoth,
 }
+
+/// Highest number [`OverwritePolicy::KeepBoth`] tries before the file fails.
+pub const KEEP_BOTH_MAX: u32 = 999;
 
 /// UI → engine commands. Remote paths are SFTP paths (`/`-separated strings); relative paths
 /// are relative to the login directory.
@@ -71,8 +80,12 @@ pub enum SftpCmd {
     Rename(String, String),
     /// Delete a file or symlink → `Done`.
     RemoveFile(String),
-    /// Delete a directory tree; symlinks inside are removed, never followed → `Done`.
+    /// Delete a directory tree; symlinks inside are removed, never followed. The whole tree is
+    /// walked (within the walk caps) before anything is deleted → `Done`.
     RemoveDirRecursive(String),
+    /// Count what a recursive delete of this directory would remove (same walk, same caps,
+    /// symlinks not followed) → [`SftpEvent::Counted`].
+    CountDir(String),
     /// Set permission bits (`mode & 0o7777`) → `Done`.
     Chmod(String, u32),
     /// Download files/directories into the existing local directory `local_dir`.
@@ -94,6 +107,9 @@ pub enum SftpCmd {
         remote_dir: String,
         /// Existing remote targets.
         overwrite: OverwritePolicy,
+        /// Append to an existing, shorter remote file instead of reporting it as a conflict
+        /// (the remote bytes are taken as a prefix of the local file).
+        resume: bool,
     },
     /// Cancel a running transfer → `TransferCancelled` (or nothing if it already ended).
     Cancel(TransferId),
@@ -132,6 +148,10 @@ pub struct SftpOptions {
     /// margin, not a share of the disk: the reported-size cap and the "does it fit" check are
     /// what stop a hostile server; this only keeps the system usable.
     pub free_space_reserve_bytes: u64,
+    /// Give a downloaded file mode `0755` when the remote mode had an `x` bit. Off by default:
+    /// a server-controlled executable bit on a `.desktop` file, script or `AppImage` is
+    /// what lets a file manager run it on a double-click; downloads are `0644` like a browser's.
+    pub keep_executable_bit: bool,
 }
 
 impl Default for SftpOptions {
@@ -146,6 +166,7 @@ impl Default for SftpOptions {
             allow_growing_files: false,
             max_download_bytes: None,
             free_space_reserve_bytes: 1 << 30,
+            keep_executable_bit: false,
         }
     }
 }
@@ -301,6 +322,16 @@ pub enum SftpEvent {
         /// Its attributes.
         entry: Entry,
     },
+    /// Answer to [`SftpCmd::CountDir`]: entries below `path` (files, links and directories;
+    /// the directory itself not included).
+    Counted {
+        /// The command.
+        id: CmdId,
+        /// The directory as requested.
+        path: String,
+        /// Entries a recursive delete would remove besides `path`.
+        entries: u64,
+    },
     /// Answer to [`SftpCmd::Realpath`].
     Realpath {
         /// The command.
@@ -369,10 +400,39 @@ pub enum SftpEvent {
         path: String,
         /// What exists.
         kind: ConflictKind,
+        /// Re-issuing with `resume` is plausible: the existing partial file (`<name>.part`
+        /// locally, or the remote target of an upload) is a regular file shorter than the
+        /// source and was written after the source last changed (when both times are known).
+        resumable: bool,
     },
     /// The SFTP channel closed (after `Shutdown`, or because the connection or the server's
     /// SFTP process went away). The next command opens a new one.
     Closed,
+}
+
+/// Accepts `name` as one local (or remote) path component, or says why not: empty, `.`, `..`,
+/// `/`, NUL, control characters (C0, DEL, C1), bidi overrides/isolates, or longer than
+/// [`NAME_MAX`] bytes. Pure: the fuzz target `sftp_name_sanitize` runs it on arbitrary input.
+pub fn validate_name(name: &str) -> Result<&str, NameError> {
+    if name.is_empty() {
+        return Err(NameError::Empty);
+    }
+    if name == "." || name == ".." {
+        return Err(NameError::Dot);
+    }
+    if name.len() > NAME_MAX {
+        return Err(NameError::Invalid);
+    }
+    for c in name.chars() {
+        match c {
+            '/' => return Err(NameError::Slash),
+            '\0' => return Err(NameError::Nul),
+            c if c.is_control() => return Err(NameError::Control),
+            '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => return Err(NameError::Bidi),
+            _ => {}
+        }
+    }
+    Ok(name)
 }
 
 /// `name` made safe to show as plain text: control characters (C0, DEL, C1) and bidi
@@ -427,5 +487,38 @@ mod tests {
         let shown = display_name(&long);
         assert_eq!(shown.chars().count(), DISPLAY_NAME_MAX_CHARS + 1);
         assert!(shown.ends_with('…'));
+    }
+
+    #[test]
+    fn validate_name_table() {
+        let long = "a".repeat(NAME_MAX);
+        let too_long = "a".repeat(NAME_MAX + 1);
+        let table: &[(&str, Result<(), NameError>)] = &[
+            ("file.txt", Ok(())),
+            (".hidden", Ok(())),
+            ("...", Ok(())),
+            ("with space", Ok(())),
+            ("日本語.txt", Ok(())),
+            ("back\\slash", Ok(())),
+            ("-rf", Ok(())),
+            (&long, Ok(())),
+            ("", Err(NameError::Empty)),
+            (".", Err(NameError::Dot)),
+            ("..", Err(NameError::Dot)),
+            ("a/b", Err(NameError::Slash)),
+            ("/etc", Err(NameError::Slash)),
+            ("../../x", Err(NameError::Slash)),
+            ("nul\0x", Err(NameError::Nul)),
+            ("new\nline", Err(NameError::Control)),
+            ("esc\x1b[31m", Err(NameError::Control)),
+            ("del\x7f", Err(NameError::Control)),
+            ("c1\u{9b}", Err(NameError::Control)),
+            ("evil\u{202e}gpj.exe", Err(NameError::Bidi)),
+            ("iso\u{2068}x", Err(NameError::Bidi)),
+            (&too_long, Err(NameError::Invalid)),
+        ];
+        for (name, want) in table {
+            assert_eq!(validate_name(name).map(|_| ()), *want, "{name:?}");
+        }
     }
 }

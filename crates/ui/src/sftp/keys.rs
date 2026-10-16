@@ -19,7 +19,7 @@ impl App {
         let panel_focused = tab
             .sftp
             .as_ref()
-            .is_some_and(|p| p.visible && p.focused && p.conflicts.current().is_none());
+            .is_some_and(|p| p.visible && p.focused && !p.dialog_open());
         panel_focused
             && self.picker.is_none()
             && self.menu.is_none()
@@ -68,7 +68,8 @@ impl App {
         }
     }
 
-    /// ↑/↓ move, Enter opens, Backspace goes up, printable text starts filtering.
+    /// ↑/↓ move, Enter opens, Backspace goes up, F2 renames, Delete deletes, printable text
+    /// starts filtering.
     fn on_panel_key(&mut self, key: &Key, mods: Modifiers) -> Task<Message> {
         let tab = self.active;
         let Some((panel, _)) = self.panel_of(tab) else {
@@ -106,6 +107,18 @@ impl App {
                 None => Task::none(),
             },
             Key::Named(Named::Backspace) => self.on_panel(tab, PanelMsg::Up),
+            Key::Named(Named::F2) => {
+                let single = match panel.listing.selected.len() {
+                    0 => panel.listing.cursor.clone(),
+                    1 => panel.listing.selected.first().cloned(),
+                    _ => None,
+                };
+                match single {
+                    Some(name) => self.on_panel(tab, PanelMsg::StartRename(name)),
+                    None => Task::none(),
+                }
+            }
+            Key::Named(Named::Delete) => self.on_panel(tab, PanelMsg::Delete),
             Key::Character(c) if !mods.control() && !mods.alt() && !mods.logo() => {
                 panel.listing.filter.push_str(c);
                 Task::batch([

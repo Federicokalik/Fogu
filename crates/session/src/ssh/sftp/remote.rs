@@ -314,6 +314,15 @@ impl Remote {
         Ok(self.raw.open(path, flags, attrs).await?.handle)
     }
 
+    /// Opens the existing file `path` for writing without creating or truncating it (resume).
+    pub(crate) async fn open_append(&self, path: &str) -> RemoteResult<String> {
+        let handle = self
+            .raw
+            .open(path, OpenFlags::WRITE, FileAttributes::empty())
+            .await?;
+        Ok(handle.handle)
+    }
+
     /// Closes a file handle, reporting the server's verdict (a failed close can mean lost
     /// writes).
     pub(crate) async fn close_handle(&self, handle: String) -> RemoteResult<()> {

@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use fogu_core::{Action, EffectiveProfile, Profile, ProfileKind, Side, Size, resolve};
-use fogu_session::{SessionHandle, SessionInput, SessionOutput};
+use fogu_core::{Action, EffectiveProfile, Profile, Side, Size, resolve};
+use fogu_session::{SessionHandle, SessionInput};
 use fogu_term::{Scroll, TermHandle, input, sanitize_title};
 use iced::widget::operation;
 use iced::{Task, clipboard, window};
@@ -16,7 +16,7 @@ use crate::context_menu::{ContextMenu, MENU_INPUT, parse_color};
 use crate::message::{Message, PasteSource};
 use crate::notifications::{Level, Notification};
 use crate::panes::{CloseTarget, CwdFor, CwdQuery};
-use crate::tab::{Pane, PaneId, PaneState, Tab, TabId};
+use crate::tab::{Pane, PaneId, Tab, TabId};
 use crate::tab_bar::{RENAME_INPUT, Rename};
 
 /// Grid of the first tab, before the first layout resizes it.
@@ -29,7 +29,7 @@ const INITIAL_SIZE: Size = Size {
 /// How long closing a pane waits for `Exited` before dropping it anyway.
 pub(crate) const CLOSE_GRACE: Duration = Duration::from_secs(2);
 /// How long a cwd query stays valid.
-const CWD_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const CWD_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl App {
     pub(crate) fn active_index(&self) -> Option<usize> {
@@ -425,86 +425,6 @@ impl App {
         }
         input.invalid = true;
         Task::none()
-    }
-
-    /// Routes a session event to its pane; events from panes that no longer exist are dropped.
-    pub(crate) fn on_session(&mut self, pane_id: PaneId, event: SessionOutput) -> Task<Message> {
-        let active = self.active;
-        let Some(tab) = self
-            .tabs
-            .iter_mut()
-            .find(|t| t.panes.contains_key(&pane_id))
-        else {
-            return Task::none();
-        };
-        let is_active = tab.id == active;
-        let Some(pane) = tab.panes.get_mut(&pane_id) else {
-            return Task::none();
-        };
-        match event {
-            // Inactive panes keep `dirty` set (no further wakeups) until activated.
-            SessionOutput::Wakeup if is_active => pane.refresh(),
-            SessionOutput::Title(title) => {
-                pane.title_from_osc = (!title.is_empty()).then_some(title);
-            }
-            SessionOutput::Exited(info) => {
-                tracing::info!(?info, "session exited");
-                return self.on_pane_ended(pane_id, PaneState::Exited(info));
-            }
-            SessionOutput::Error(err) => return self.on_session_error(pane_id, &err),
-            SessionOutput::ClipboardStore(request) => {
-                return self.on_clipboard_store(pane_id, request);
-            }
-            SessionOutput::InputDropped => {
-                let note = Notification::new(Level::Warn, "Input dropped").detail(
-                    "The program stopped reading its input; further typing or paste was discarded.",
-                );
-                return self.notify(note);
-            }
-            SessionOutput::Cwd { path, remote } => self.on_cwd(pane_id, path, remote),
-            SessionOutput::Prompt(id, kind) => return self.on_prompt(pane_id, id, kind),
-            SessionOutput::Warning(warning) => {
-                if !pane.warnings.contains(&warning) {
-                    pane.warnings.push(warning.clone());
-                }
-                return self.on_session_warning(&warning);
-            }
-            // No UI for these yet; Progress/Notify/PromptMark are logged by the session.
-            SessionOutput::Wakeup
-            | SessionOutput::Bell
-            | SessionOutput::Progress(_)
-            | SessionOutput::Notify { .. }
-            | SessionOutput::PromptMark(_) => {}
-        }
-        Task::none()
-    }
-
-    /// A cwd report. Attacker-controlled text: only logged sanitized, and only a local
-    /// (`remote: false`) path answering a fresh query opens a tab or a split.
-    fn on_cwd(&mut self, pane_id: PaneId, path: PathBuf, remote: bool) {
-        tracing::debug!(
-            cwd = %sanitize_title(&path.to_string_lossy()),
-            remote,
-            "cwd reported"
-        );
-        let Some(query) = self.pending_cwd else {
-            return;
-        };
-        if query.pane != pane_id || remote || query.asked.elapsed() > CWD_QUERY_TIMEOUT {
-            return;
-        }
-        self.pending_cwd = None;
-        match query.purpose {
-            CwdFor::Tab => {
-                let profile = self
-                    .pane(pane_id)
-                    .map(|p| p.profile.clone())
-                    .filter(|p| matches!(p.kind, ProfileKind::Local(_)))
-                    .unwrap_or_else(Profile::default_shell);
-                self.open_tab(&profile, Some(path));
-            }
-            CwdFor::Split(side) => self.split_now(pane_id, side, Some(path), None),
-        }
     }
 }
 

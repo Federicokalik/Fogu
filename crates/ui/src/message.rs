@@ -9,7 +9,7 @@ use iced::Point;
 use crate::metrics::CellPos;
 use crate::profile_picker::PickerMsg;
 use crate::prompt::PromptMsg;
-use crate::sftp::SftpMsg;
+use crate::sftp::{DesktopMsg, SftpMsg};
 use crate::tab::{PaneId, TabId};
 
 /// A step of a mouse selection gesture, in viewport cells.
@@ -154,6 +154,8 @@ pub enum Message {
     Modifiers(iced::keyboard::Modifiers),
     /// A mouse button was pressed anywhere (keyboard focus between terminal and SFTP panel).
     MousePressed,
+    /// Dropped files, opening local files (SFTP panel).
+    Desktop(DesktopMsg),
 }
 
 impl Message {
