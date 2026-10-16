@@ -282,7 +282,8 @@ fn config_text(dir: &TempDir, port: u16, options: &Options) -> String {
         "ListenAddress 127.0.0.1\nPort {port}\nHostKey {d}/host_ed25519\nPidFile {d}/sshd.pid\n\
          AuthorizedKeysFile {d}/authorized_keys\nPasswordAuthentication no\n\
          KbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nStrictModes no\n\
-         PermitRootLogin prohibit-password\nPrintMotd no\nPrintLastLog no\nLogLevel ERROR\n"
+         PermitRootLogin prohibit-password\nPrintMotd no\nPrintLastLog no\nLogLevel ERROR\n\
+         AllowTcpForwarding yes\n"
     );
     if options.banner.is_some() {
         let _infallible = writeln!(config, "Banner {d}/banner");

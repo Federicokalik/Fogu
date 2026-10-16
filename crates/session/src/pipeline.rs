@@ -126,6 +126,12 @@ impl Pump {
         Ok(())
     }
 
+    /// A sender for tasks that report on their own (port forwards).
+    #[cfg(feature = "ssh")]
+    pub(crate) fn sender(&self) -> Sender<SessionOutput> {
+        self.out_tx.clone()
+    }
+
     pub(crate) async fn emit(&self, out: SessionOutput) -> Result<(), Gone> {
         self.out_tx.send(out).await.map_err(|_| Gone)
     }

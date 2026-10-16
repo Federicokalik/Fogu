@@ -14,6 +14,7 @@ mod background_menu;
 mod blink;
 mod context_menu;
 mod forms;
+mod forwards_dialog;
 mod fuzzy_list;
 mod keys;
 mod lifecycle;

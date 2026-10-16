@@ -109,7 +109,6 @@ fn every_field_resolves_and_is_reported_unsupported() {
         ssh.unsupported(),
         [
             "input_backspace",
-            "forwarded_ports",
             "agent_forward",
             "x11",
             "algorithms",
@@ -316,4 +315,39 @@ fn not_supported_yet_names_every_option_unsupported_warns_about() {
         };
         assert!(NOT_SUPPORTED_YET.contains(&key), "{warned}");
     }
+}
+
+#[test]
+fn forward_bind_host_exposure_and_problems() {
+    let fwd = |kind, host: &str, port, target: &str, target_port| PortForward {
+        kind,
+        host: host.to_owned(),
+        port,
+        target_address: target.to_owned(),
+        target_port,
+        description: String::new(),
+    };
+    let local = fwd(ForwardKind::Local, " ", 8080, "web", 80);
+    assert_eq!(local.bind_host(), "127.0.0.1");
+    assert!(!local.is_exposed());
+    assert_eq!(local.problem(), None);
+    assert_eq!(local.label(), "L 127.0.0.1:8080 → web:80");
+    for host in ["localhost", "::1", "[::1]", "127.0.0.2"] {
+        assert!(
+            !fwd(ForwardKind::Local, host, 1, "t", 1).is_exposed(),
+            "{host}"
+        );
+    }
+    for host in ["0.0.0.0", "::", "192.0.2.5", "box.lan", "*"] {
+        assert!(
+            fwd(ForwardKind::Remote, host, 1, "t", 1).is_exposed(),
+            "{host}"
+        );
+    }
+    assert!(fwd(ForwardKind::Local, "", 0, "t", 1).problem().is_some());
+    assert!(fwd(ForwardKind::Local, "", 1, " ", 1).problem().is_some());
+    assert!(fwd(ForwardKind::Remote, "", 1, "t", 0).problem().is_some());
+    let socks = fwd(ForwardKind::Dynamic, "", 1080, "", 0);
+    assert_eq!(socks.problem(), None);
+    assert_eq!(socks.label(), "D 127.0.0.1:1080 (SOCKS)");
 }

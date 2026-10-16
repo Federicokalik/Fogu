@@ -146,6 +146,10 @@ impl ContextMenu {
                 "SFTP panel",
                 MenuAction::Run(Action::ToggleSftp),
             ));
+            items.push(MenuItem::new(
+                "Port forwarding…",
+                MenuAction::Ui(Message::Forwards(crate::forwards_dialog::ForwardsMsg::Open)),
+            ));
         }
         items.push(close);
         Self::new(anchor, items)

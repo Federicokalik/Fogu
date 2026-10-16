@@ -6,13 +6,13 @@ use std::net::IpAddr;
 
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
-const VERSION: u8 = 5;
-const NO_AUTH: u8 = 0;
-const NO_ACCEPTABLE: u8 = 0xFF;
-const CONNECT: u8 = 1;
-const ATYP_V4: u8 = 1;
-const ATYP_DOMAIN: u8 = 3;
-const ATYP_V6: u8 = 4;
+pub(super) const VERSION: u8 = 5;
+pub(super) const NO_AUTH: u8 = 0;
+pub(super) const NO_ACCEPTABLE: u8 = 0xFF;
+pub(super) const CONNECT: u8 = 1;
+pub(super) const ATYP_V4: u8 = 1;
+pub(super) const ATYP_DOMAIN: u8 = 3;
+pub(super) const ATYP_V6: u8 = 4;
 
 /// Where the proxy should connect.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -133,6 +133,8 @@ impl App {
                 .closes(state.is_clean_exit());
         // A question the session can no longer take an answer to.
         pane.prompt = None;
+        // The session stopped its forwards.
+        pane.forwards.clear();
         pane.status = state.status_line(pane.is_ssh());
         pane.state = state;
         pane.refresh();
@@ -226,6 +228,9 @@ impl App {
             }
             SessionOutput::Cwd { path, remote } => self.on_cwd(pane_id, path, remote),
             SessionOutput::Prompt(id, kind, via) => return self.on_prompt(pane_id, id, kind, via),
+            SessionOutput::ForwardStatus(status) => {
+                crate::forwards_dialog::apply_status(&mut pane.forwards, status);
+            }
             SessionOutput::Warning(warning) => {
                 if !pane.warnings.contains(&warning) {
                     pane.warnings.push(warning.clone());
@@ -280,6 +285,7 @@ pub(crate) fn warning_title(warning: &SessionWarning) -> &'static str {
     match warning {
         SessionWarning::HostKeyNotVerified => "Host key not verified",
         SessionWarning::Unsupported(_) => "SSH options ignored",
+        SessionWarning::ForwardExposed(_) => "Port forward reachable from other machines",
     }
 }
 
@@ -291,6 +297,9 @@ pub(crate) fn warning_detail(warning: &SessionWarning) -> String {
         }
         SessionWarning::Unsupported(options) => {
             format!("Not supported yet: {}", options.join(", "))
+        }
+        SessionWarning::ForwardExposed(label) => {
+            format!("{label} listens on a non-loopback address.")
         }
     }
 }

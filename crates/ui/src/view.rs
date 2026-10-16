@@ -36,6 +36,7 @@ impl App {
             || self.menu.is_some()
             || self.picker.is_some()
             || self.pending_close.is_some()
+            || self.forwards.is_some()
             || self.profiles.pending_delete.is_some()
             || (self.profiles.open && self.profiles.focused);
         let sftp_panel = tab.sftp.as_ref().filter(|p| p.visible);
@@ -124,6 +125,12 @@ impl App {
             renaming: self.renaming.as_ref(),
             colors: &self.colors,
             sftp,
+            forwards: self.active_tab().and_then(|tab| {
+                tab.panes
+                    .values()
+                    .any(crate::tab::Pane::is_ssh)
+                    .then(|| crate::forwards_dialog::listening(tab.panes.values()))
+            }),
             profiles: self.profiles.open,
         }
         .view();
@@ -148,7 +155,7 @@ impl App {
             .or_else(|| self.close_modal())
             .or_else(|| self.delete_modal());
         let base = overlay(base, modal);
-        let base = match sftp_dialog {
+        let base = match sftp_dialog.or_else(|| self.forwards_view()) {
             Some(dialog) => modal::over(base, dialog),
             None => base,
         };
@@ -162,6 +169,15 @@ impl App {
             picker_rows.as_deref().unwrap_or_default(),
         );
         context_menu::overlay(base, self.menu.as_ref(), self.window_size)
+    }
+
+    /// The port forwarding dialog, while its pane exists.
+    fn forwards_view(&self) -> Option<Element<'_, Message>> {
+        let dialog = self.forwards.as_ref()?;
+        let pane = self.pane(dialog.pane)?;
+        let stored = self.config.profiles.iter().any(|p| p.id == pane.profile.id);
+        let look = crate::sftp::panel::Look::new(&self.colors);
+        Some(crate::forwards_dialog::view(dialog, pane, stored, look))
     }
 
     /// Every pane's session events plus window focus/scale/size changes and Escape.

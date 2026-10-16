@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use fogu_core::{EffectiveProfile, EffectiveSsh, Size};
+use fogu_core::{EffectiveProfile, EffectiveSsh, PortForward, Size};
 use fogu_term::{ClipboardType, PromptMark, TermHandle};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -87,6 +87,9 @@ pub enum SessionInput {
     /// Ask for the foreground process's current directory (on demand only, for opening a new tab in the same directory);
     /// the session replies with [`SessionOutput::Cwd`] if it could determine one.
     QueryCwd,
+    /// SSH: add or remove a port forward at runtime (ignored by local sessions and before the
+    /// shell is up).
+    Forward(ForwardCmd),
     /// Close the transport; the session answers with `Exited`.
     Close,
 }
@@ -131,6 +134,8 @@ pub enum SessionOutput {
     Warning(SessionWarning),
     /// OSC 52 clipboard write; the UI applies the policy.
     ClipboardStore(ClipboardRequest),
+    /// A port forward started, failed, changed its connection count or stopped.
+    ForwardStatus(ForwardStatus),
     /// The transport ended.
     Exited(ExitInfo),
     /// The session failed.
@@ -144,8 +149,48 @@ pub enum SessionWarning {
     HostKeyNotVerified,
     /// Profile options that are set but not implemented yet (accepted, ignored).
     Unsupported(Vec<String>),
+    /// A port forward listens on an address other machines can reach (sanitized label,
+    /// e.g. `L 0.0.0.0:8080 → web:80`).
+    ForwardExposed(String),
 }
 
+/// Identifies one port forward of a session (assigned by the session, never reused).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ForwardId(pub u64);
+
+/// Runtime control of a session's port forwards.
+#[derive(Clone, Debug)]
+pub enum ForwardCmd {
+    /// Start this forward; the session answers with [`SessionOutput::ForwardStatus`].
+    Add(PortForward),
+    /// Stop this forward (remote forwards are cancelled on the server).
+    Remove(ForwardId),
+}
+
+/// State of one port forward.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ForwardState {
+    /// Accepting connections.
+    Listening,
+    /// Could not start (port in use, refused by the server…): sanitized reason. The forward
+    /// stays listed until it is removed.
+    Error(String),
+    /// Removed, or the session ended; the last status of this id.
+    Stopped,
+}
+
+/// One forward's status report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForwardStatus {
+    /// Which forward.
+    pub id: ForwardId,
+    /// What it forwards (as requested).
+    pub forward: PortForward,
+    /// Listening / error / stopped.
+    pub state: ForwardState,
+    /// Connections currently being forwarded.
+    pub active_connections: usize,
+}
 /// Why a server's host key was not accepted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum HostKeyFailure {

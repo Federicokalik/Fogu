@@ -46,6 +46,9 @@ pub struct TabBar<'a> {
     pub colors: &'a Colors,
     /// The active tab has an SSH pane: show the SFTP button (`true` = panel open).
     pub sftp: Option<bool>,
+    /// The active tab has an SSH pane: show the "Ports" button with this many listening
+    /// forwards.
+    pub forwards: Option<usize>,
     /// The profile sidebar is open (its toggle button is highlighted).
     pub profiles: bool,
 }
@@ -189,6 +192,20 @@ impl<'a> TabBar<'a> {
                 .padding(4)
                 .style(container::rounded_box);
             bar_row = bar_row.push(tooltip(sftp, tip, tooltip::Position::Bottom));
+        }
+        if let Some(count) = self.forwards {
+            let (label, color) = match count {
+                0 => ("Ports".to_owned(), fg),
+                n => (format!("Ports {n}"), ACTIVE),
+            };
+            let ports = button(text(label).size(12).color(color))
+                .padding([2, 8])
+                .style(button::text)
+                .on_press(Message::Forwards(crate::forwards_dialog::ForwardsMsg::Open));
+            let tip = container(text("Port forwarding (listening forwards)").size(12))
+                .padding(4)
+                .style(container::rounded_box);
+            bar_row = bar_row.push(tooltip(ports, tip, tooltip::Position::Bottom));
         }
         let bar = container(bar_row)
             .width(Length::Fill)

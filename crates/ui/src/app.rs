@@ -73,6 +73,8 @@ pub struct App {
     pub(crate) picker: Option<ProfilePicker>,
     /// The profile manager sidebar.
     pub(crate) profiles: ProfilesView,
+    /// The "Port forwarding" dialog of an SSH pane.
+    pub(crate) forwards: Option<crate::forwards_dialog::ForwardsDialog>,
     /// A close waiting for the "close live SSH session?" confirmation.
     pub(crate) pending_close: Option<CloseTarget>,
     /// `--config-dir` (SSH `known_hosts` location); `None` = the default.
@@ -158,6 +160,7 @@ impl App {
                 ..ProfilesView::new(config.appearance.profiles_sidebar_width, builtins())
             },
             pending_close: None,
+            forwards: None,
             config_dir: None,
             modifiers: keyboard::Modifiers::default(),
             desktop: sftp::Desktop::default(),
@@ -261,6 +264,7 @@ impl App {
             Message::Enter => self.on_enter(),
             Message::ConfirmClose(confirmed) => self.on_confirm_close(confirmed),
             Message::Sftp(message) => self.on_sftp(message),
+            Message::Forwards(message) => self.on_forwards(message),
             Message::Desktop(message) => self.on_desktop(message),
             Message::Background(message) => self.on_background(message),
             Message::KeyIgnored(key, modified, mods) => self.on_key_ignored(&key, &modified, mods),

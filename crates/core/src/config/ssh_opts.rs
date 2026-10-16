@@ -32,7 +32,6 @@ pub const DEFAULT_AGENT_KEY_LIFETIME_S: u32 = 3600;
 /// [`EffectiveSsh::unsupported`] warns about the same options at connect time when they are set.
 pub const NOT_SUPPORTED_YET: &[&str] = &[
     "input_backspace",
-    "forwarded_ports",
     "agent_forward",
     "x11",
     "algorithms",
@@ -88,23 +87,89 @@ pub enum ForwardKind {
     Dynamic,
 }
 
-/// One auto-started port forward.
+/// Listen address of a forward whose `host` is empty: loopback only.
+pub const DEFAULT_FORWARD_HOST: &str = "127.0.0.1";
+
+/// One port forward, started with the session (`forwarded_ports`) or added at runtime.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PortForward {
     /// Direction.
     #[serde(rename = "type")]
     pub kind: ForwardKind,
-    /// Listen address.
+    /// Listen address (local for `Local`/`Dynamic`, on the server for `Remote`); empty =
+    /// [`DEFAULT_FORWARD_HOST`].
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub host: String,
     /// Listen port.
     pub port: u16,
     /// Target address (unused for `Dynamic`).
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub target_address: String,
     /// Target port (unused for `Dynamic`).
     pub target_port: u16,
     /// Free text shown in the forwards dialog.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
+}
+
+impl PortForward {
+    /// The address to listen on: `host` trimmed, or [`DEFAULT_FORWARD_HOST`] when empty.
+    #[must_use]
+    pub fn bind_host(&self) -> &str {
+        match self.host.trim() {
+            "" => DEFAULT_FORWARD_HOST,
+            host => host,
+        }
+    }
+
+    /// `true` when the listener is reachable from other machines (not a loopback address):
+    /// the UI warns about it.
+    #[must_use]
+    pub fn is_exposed(&self) -> bool {
+        let host = self.bind_host();
+        let host = host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(host);
+        !(host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback()))
+    }
+
+    /// Why this forward can't start, if it can't (listen port 0, missing target).
+    #[must_use]
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.port == 0 {
+            return Some("the listen port must be 1–65535");
+        }
+        if self.kind != ForwardKind::Dynamic {
+            if self.target_address.trim().is_empty() {
+                return Some("the target address is empty");
+            }
+            if self.target_port == 0 {
+                return Some("the target port must be 1–65535");
+            }
+        }
+        None
+    }
+
+    /// `L 127.0.0.1:8080 → web:80` / `R …` / `D 127.0.0.1:1080 (SOCKS)`: unsanitized, the
+    /// caller sanitizes before showing it.
+    #[must_use]
+    pub fn label(&self) -> String {
+        let listen = format!("{}:{}", self.bind_host(), self.port);
+        match self.kind {
+            ForwardKind::Local => {
+                format!("L {listen} → {}:{}", self.target_address, self.target_port)
+            }
+            ForwardKind::Remote => {
+                format!("R {listen} → {}:{}", self.target_address, self.target_port)
+            }
+            ForwardKind::Dynamic => format!("D {listen} (SOCKS)"),
+        }
+    }
 }
 
 /// Per-profile algorithm allow-lists; empty list = russh's defaults.
@@ -341,7 +406,6 @@ impl EffectiveSsh {
                 self.input_backspace != Backspace::Backspace,
                 "input_backspace",
             ),
-            (!self.forwarded_ports.is_empty(), "forwarded_ports"),
             (self.agent_forward, "agent_forward"),
             (self.x11, "x11"),
             (!self.algorithms.is_default(), "algorithms"),

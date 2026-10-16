@@ -17,6 +17,7 @@ use russh::keys::{Algorithm, PublicKey, PublicKeyOrCertificate};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until};
 
+use super::forward::Forwarded;
 use super::hostkeys::{self, Lookup};
 use super::transport::{self, Route};
 use super::{SshPaths, Stop, Ui};
@@ -30,9 +31,15 @@ pub(crate) enum HandlerEvent {
     Banner(String),
 }
 
+/// Server-opened `forwarded-tcpip` channels waiting for the session (remote forwards).
+const FORWARDED_QUEUE: usize = 16;
+
 /// Our russh client handler.
 pub(crate) struct Client {
     events: mpsc::Sender<HandlerEvent>,
+    /// Incoming remote-forward connections, routed by the shell loop; a full queue (or one
+    /// nobody reads, e.g. a jump host's) rejects the channel.
+    forwarded: mpsc::Sender<Forwarded>,
     /// The key accepted for this connection; re-keys must match it.
     accepted: Option<PublicKey>,
 }
@@ -83,6 +90,29 @@ impl client::Handler for Client {
             .try_send(HandlerEvent::Banner(banner.to_owned()));
         std::future::ready(Ok(()))
     }
+
+    fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        let incoming = Forwarded {
+            channel,
+            address: connected_address.to_owned(),
+            port: connected_port,
+            reply,
+        };
+        // Dropping the handle (queue full or closed) rejects the channel.
+        if self.forwarded.try_send(incoming).is_err() {
+            tracing::debug!("forwarded-tcpip channel rejected (not listening)");
+        }
+        std::future::ready(Ok(()))
+    }
 }
 
 /// An established, not yet authenticated connection.
@@ -90,6 +120,8 @@ pub(crate) struct Connection {
     pub(crate) handle: client::Handle<Client>,
     /// Banners (and refused late host-key checks) arriving after the handshake.
     pub(crate) events: mpsc::Receiver<HandlerEvent>,
+    /// Server-opened remote-forward channels (see [`Client`]).
+    pub(crate) forwarded: mpsc::Receiver<Forwarded>,
     /// The jump host connection / proxy command under this one; declared last, so it is
     /// dropped (closed) after `handle`.
     pub(crate) route: Route,
@@ -157,8 +189,10 @@ pub(crate) async fn connect(
         &hostkeys::known_algorithms(&files, kh_host, kh_port),
     ));
     let (tx, mut events) = mpsc::channel(8);
+    let (forwarded_tx, forwarded) = mpsc::channel(FORWARDED_QUEUE);
     let handler = Client {
         events: tx,
+        forwarded: forwarded_tx,
         accepted: None,
     };
     let fut = client::connect_stream(config, stream, handler);
@@ -169,7 +203,7 @@ pub(crate) async fn connect(
         tokio::select! {
             result = &mut fut => {
                 return match result {
-                    Ok(handle) => Ok(Connection { handle, events, route }),
+                    Ok(handle) => Ok(Connection { handle, events, forwarded, route }),
                     Err(err) => {
                         let proxy = match refused {
                             None => route.proxy_failure().await,

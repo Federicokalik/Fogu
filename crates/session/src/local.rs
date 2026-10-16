@@ -125,6 +125,7 @@ async fn run_loop(
                 Some(SessionInput::PromptReply(id, _)) => {
                     tracing::debug!(?id, "prompt reply for a local session ignored");
                 }
+                Some(SessionInput::Forward(_)) => tracing::debug!("forward for a local session ignored"),
                 Some(SessionInput::QueryCwd) => {
                     if let Some(path) = current_cwd(&local.master, local.child.id()) {
                         pump.emit(SessionOutput::Cwd { path, remote: false }).await?;

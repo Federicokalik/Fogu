@@ -5,7 +5,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo check --manifest-path fuzz/Cargo.toml --locked
+# same flags as CI: the fuzz build turns off the `ssh` feature, so dead code only shows here
+RUSTFLAGS="-D warnings" cargo check --manifest-path fuzz/Cargo.toml --locked
 cargo nextest run --workspace --locked --no-tests=pass
 cargo test --doc --workspace --locked
 cargo deny check

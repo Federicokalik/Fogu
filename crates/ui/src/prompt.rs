@@ -288,6 +288,7 @@ impl App {
     /// rename.
     pub(crate) fn on_escape(&mut self) {
         if self.picker.take().is_some()
+            || self.forwards.take().is_some()
             || self.pending_close.take().is_some()
             || self.profiles.pending_delete.take().is_some()
         {

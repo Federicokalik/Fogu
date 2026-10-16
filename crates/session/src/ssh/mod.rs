@@ -12,6 +12,7 @@ mod agent;
 pub mod algorithms;
 mod auth;
 mod connect;
+mod forward;
 mod hostkeys;
 mod proxy;
 pub(crate) mod sftp;
@@ -167,6 +168,9 @@ impl Ui {
             }
             Some(SessionInput::PromptReply(id, _)) => tracing::debug!(?id, "stale prompt reply"),
             Some(SessionInput::QueryCwd) => {}
+            Some(SessionInput::Forward(_)) => {
+                tracing::debug!("forward command before the shell started dropped");
+            }
             Some(SessionInput::Close) | None => return Err(Stop::Closed),
         }
         Ok(())

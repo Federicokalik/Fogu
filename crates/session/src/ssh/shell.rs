@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument as _;
 
 use super::connect::{Connection, ssh_error};
+use super::forward::ForwardSet;
 use super::{Stop, Ui};
 use crate::pipeline::WRITE_CHUNK;
 use crate::{ExitInfo, SessionInput, SessionOutput};
@@ -34,6 +35,11 @@ pub(crate) async fn run(
     conn.drain_events(ssh, ui).await?;
     let ssh_handle = Arc::new(conn.handle);
     let route = conn.route;
+    let mut forwarded = conn.forwarded;
+    let mut forwards = ForwardSet::new(Arc::clone(&ssh_handle), ui.pump.sender());
+    for forward in &ssh.forwarded_ports {
+        forwards.add(forward.clone());
+    }
     let sftp_stop = CancellationToken::new();
     let sftp_task = ui.sftp.take().map(|ends| {
         let engine = super::sftp::run(
@@ -69,8 +75,10 @@ pub(crate) async fn run(
                 Some(SessionInput::PromptReply(id, _)) => tracing::debug!(?id, "stale prompt reply"),
                 // The remote cwd comes from OSC 7 only; nothing to query locally.
                 Some(SessionInput::QueryCwd) => {}
+                Some(SessionInput::Forward(cmd)) => forwards.command(cmd),
                 Some(SessionInput::Close) | None => break Err(Stop::Closed),
             },
+            Some(incoming) = forwarded.recv() => forwards.route(incoming),
             written = writer.write(pump.pending.get(..chunk).unwrap_or_default()), if chunk > 0 => {
                 match written {
                     Ok(n) => pump.written(n),
@@ -108,6 +116,7 @@ pub(crate) async fn run(
         let _eof = write_half.eof().await;
         let _close = write_half.close().await;
     }
+    forwards.stop().await;
     // The SFTP engine cancels its transfers (cleaning up partial files) before the connection
     // goes away (bounded by its grace period).
     sftp_stop.cancel();

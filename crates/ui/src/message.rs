@@ -153,6 +153,8 @@ pub enum Message {
     ConfirmClose(bool),
     /// SFTP engine events and side-panel input.
     Sftp(SftpMsg),
+    /// The port forwarding dialog.
+    Forwards(crate::forwards_dialog::ForwardsMsg),
     /// A key press no widget took (unmodified key, key with modifiers applied, modifiers).
     KeyIgnored(
         iced::keyboard::Key,

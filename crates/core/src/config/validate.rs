@@ -31,6 +31,16 @@ pub enum ConfigIssue {
     /// An SSH profile has no host (neither its own nor from `profile_defaults.ssh`).
     #[error("the host is empty")]
     MissingHost(ProfileId),
+    /// A port forward of an SSH profile can't start (see `PortForward::problem`).
+    #[error("port forward {}: {reason}", .index + 1)]
+    BadForward {
+        /// The profile.
+        profile: ProfileId,
+        /// Index into its `forwarded_ports`.
+        index: usize,
+        /// What is wrong.
+        reason: &'static str,
+    },
     /// Following `jump_host` from this profile comes back to it.
     #[error("jump host loop: {}", .chain.join(" → "))]
     JumpHostCycle {
@@ -68,6 +78,7 @@ impl ConfigIssue {
             Self::DuplicateProfileId(id)
             | Self::EmptyProfileName(id)
             | Self::MissingHost(id)
+            | Self::BadForward { profile: id, .. }
             | Self::DuplicateProfileName { profile: id, .. }
             | Self::JumpHostCycle { profile: id, .. }
             | Self::UnknownGroup { profile: id, .. } => Some(id),
@@ -110,6 +121,15 @@ pub fn validate(config: &Config) -> Vec<ConfigIssue> {
                 .or(config.profile_defaults.ssh.host.as_ref());
             if host.is_none_or(|h| h.trim().is_empty()) {
                 issues.push(ConfigIssue::MissingHost(id.clone()));
+            }
+            for (index, forward) in ssh.forwarded_ports.iter().flatten().enumerate() {
+                if let Some(reason) = forward.problem() {
+                    issues.push(ConfigIssue::BadForward {
+                        profile: id.clone(),
+                        index,
+                        reason,
+                    });
+                }
             }
         }
         if let Some(chain) = jump_cycle(config, profile) {
@@ -328,6 +348,37 @@ mod tests {
         };
         config.profile_defaults.ssh.host = Some("default.lan".into());
         assert_eq!(validate(&config), Vec::new());
+    }
+
+    #[test]
+    fn unusable_forwards_are_reported_with_their_index() {
+        use crate::config::ssh_opts::{ForwardKind, PortForward};
+        let mut p = ssh("f", None);
+        if let ProfileKind::Ssh(opts) = &mut p.kind {
+            let socks = PortForward {
+                kind: ForwardKind::Dynamic,
+                port: 1080,
+                ..PortForward::default()
+            };
+            let no_target = PortForward {
+                port: 8080,
+                ..PortForward::default()
+            };
+            opts.forwarded_ports = Some(vec![socks, no_target]);
+        }
+        let config = Config {
+            profiles: vec![p],
+            ..Config::default()
+        };
+        let issues = validate(&config);
+        assert_eq!(
+            issues_of(&issues, "f"),
+            [&ConfigIssue::BadForward {
+                profile: ProfileId("f".into()),
+                index: 1,
+                reason: "the target address is empty",
+            }]
+        );
     }
 
     #[test]

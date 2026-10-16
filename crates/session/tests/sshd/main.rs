@@ -18,6 +18,7 @@
 mod support;
 
 mod auth;
+mod forward;
 mod hostile;
 mod hostkeys;
 mod route;

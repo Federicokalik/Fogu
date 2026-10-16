@@ -104,6 +104,7 @@ fn issue_field(issue: &ConfigIssue) -> FieldId {
     match issue {
         ConfigIssue::MissingHost(_) => FieldId::Host,
         ConfigIssue::JumpHostCycle { .. } => FieldId::JumpHost,
+        ConfigIssue::BadForward { .. } => FieldId::Forwards,
         ConfigIssue::UnknownGroup { .. } => FieldId::Group,
         _ => FieldId::Name,
     }

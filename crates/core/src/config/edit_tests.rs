@@ -308,7 +308,7 @@ fn update_writes_nested_values_inline_and_back_to_default_removes_them() {
     assert_eq!(
         added,
         [
-            "forwarded_ports = [{ type = \"local\", host = \"127.0.0.1\", port = 8080, target_address = \"web\", target_port = 80, description = \"\" }]",
+            "forwarded_ports = [{ type = \"local\", host = \"127.0.0.1\", port = 8080, target_address = \"web\", target_port = 80 }]",
             "algorithms = { kex = [\"curve25519-sha256\"], cipher = [], hmac = [], server_host_key = [], compression = [] }",
         ],
         "{after}"
