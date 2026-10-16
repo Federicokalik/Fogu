@@ -25,6 +25,7 @@ use crate::palette::Colors;
 use crate::panes::{CloseTarget, CwdQuery};
 use crate::paste::PendingPaste;
 use crate::profile_picker::ProfilePicker;
+use crate::profiles::ProfilesView;
 use crate::restart;
 use crate::sftp;
 use crate::tab::{PaneId, Tab, TabId};
@@ -70,6 +71,8 @@ pub struct App {
     pub(crate) pending_clipboard: Vec<PendingClipboard>,
     pub(crate) blink: Blink,
     pub(crate) picker: Option<ProfilePicker>,
+    /// The profile manager sidebar.
+    pub(crate) profiles: ProfilesView,
     /// A close waiting for the "close live SSH session?" confirmation.
     pub(crate) pending_close: Option<CloseTarget>,
     /// `--config-dir` (SSH `known_hosts` location); `None` = the default.
@@ -90,6 +93,15 @@ pub struct App {
     /// Test builds: command ends of the SSH stubs' SFTP handles.
     #[cfg(test)]
     pub(crate) stub_sftp: Vec<tokio::sync::mpsc::Receiver<fogu_session::SftpRequest>>,
+}
+
+/// "Default shell" + the installed shells; test builds don't depend on the machine's
+/// `/etc/shells`.
+fn builtins() -> Vec<fogu_core::Profile> {
+    if cfg!(test) {
+        return vec![fogu_core::Profile::default_shell()];
+    }
+    fogu_core::builtin::builtin_profiles(std::path::Path::new(fogu_core::builtin::ETC_SHELLS))
 }
 
 impl App {
@@ -133,6 +145,7 @@ impl App {
             pending_clipboard: Vec::new(),
             blink: Blink::new(Instant::now()),
             picker: None,
+            profiles: ProfilesView::new(config.appearance.profiles_sidebar_width, builtins()),
             pending_close: None,
             config_dir: None,
             modifiers: keyboard::Modifiers::default(),
@@ -163,6 +176,9 @@ impl App {
         let mut app = Self::new(runtime, config, resolved);
         app.exit_after_first_frame = options.exit_after_first_frame;
         app.config_dir = options.config_dir;
+        if let Some(dir) = options.state_dir {
+            app.load_recent(dir.join(fogu_core::recent::RECENT_FILE));
+        }
         let mut tasks = Vec::new();
         let font_notes = font_problems
             .into_iter()
@@ -229,6 +245,7 @@ impl App {
             Message::Frame => iced::exit(),
             Message::Prompt(message) => self.on_prompt_msg(message),
             Message::Picker(message) => self.on_picker(message),
+            Message::Profiles(message) => self.on_profiles(message),
             Message::Enter => self.on_enter(),
             Message::ConfirmClose(confirmed) => self.on_confirm_close(confirmed),
             Message::Sftp(message) => self.on_sftp(message),

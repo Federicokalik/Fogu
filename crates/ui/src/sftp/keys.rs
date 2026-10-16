@@ -29,9 +29,13 @@ impl App {
             && tab.panes.values().all(|p| p.prompt.is_none())
     }
 
-    /// A mouse press anywhere: the panel takes the keyboard when the pointer is over it.
+    /// A mouse press anywhere: the SFTP panel takes the keyboard when the pointer is over it,
+    /// and so does the profile sidebar. The sidebar gives it back on a click into a pane
+    /// (`focus_pane`) or into the panel, not here: this event can arrive after the click that
+    /// just opened the sidebar under the pointer.
     pub(crate) fn on_mouse_pressed(&mut self) {
         let active = self.active;
+        let mut in_panel = false;
         if let Some(panel) = self
             .tabs
             .iter_mut()
@@ -39,6 +43,15 @@ impl App {
             .and_then(|t| t.sftp.as_mut())
         {
             panel.focused = panel.visible && panel.hovered;
+            in_panel = panel.focused;
+        }
+        let sidebar = &mut self.profiles;
+        if std::mem::take(&mut sidebar.skip_press) {
+            // That press opened a profile: the keyboard stays with the new terminal.
+        } else if sidebar.open && sidebar.hovered {
+            sidebar.focused = true;
+        } else if in_panel {
+            sidebar.focused = false;
         }
     }
 
@@ -55,6 +68,18 @@ impl App {
                 return self.on_action(action);
             }
             return self.on_panel_key(modified, mods);
+        }
+        if self.sidebar_has_keys() {
+            use crate::profiles::ProfilesMsg;
+            if let Some(action) = crate::keys::hotkey(&self.config.hotkeys, key, modified, mods) {
+                return self.on_action(action);
+            }
+            return match key {
+                Key::Named(Named::ArrowUp) => self.on_profiles(ProfilesMsg::Move(-1)),
+                Key::Named(Named::ArrowDown) => self.on_profiles(ProfilesMsg::Move(1)),
+                Key::Named(Named::Enter) => self.on_profiles(ProfilesMsg::Submit),
+                _ => Task::none(),
+            };
         }
         match key {
             Key::Named(Named::Enter) => self.on_enter(),

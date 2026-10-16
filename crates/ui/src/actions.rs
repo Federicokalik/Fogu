@@ -12,7 +12,7 @@ use iced::{Task, clipboard, window};
 
 use crate::app::App;
 use crate::appearance::cursor_shape;
-use crate::context_menu::{ContextMenu, MENU_INPUT, parse_color};
+use crate::context_menu::{ContextMenu, MENU_INPUT};
 use crate::message::{Message, PasteSource};
 use crate::notifications::{Level, Notification};
 use crate::panes::{CloseTarget, CwdFor, CwdQuery};
@@ -266,6 +266,7 @@ impl App {
             }
             Action::OpenProfilePicker => return self.open_picker(),
             Action::ToggleSftp => return self.toggle_sftp(),
+            Action::ToggleProfiles => return self.toggle_profiles(),
             // Not implemented yet; the user is told rather than left guessing.
             Action::SelectAll => {
                 tracing::debug!(%action, "action not implemented yet");
@@ -373,7 +374,11 @@ impl App {
             Message::ActivateTab(id) => self.activate(id),
             Message::CloseTab(id) => return self.request_close(CloseTarget::Tab(id)),
             Message::HoverTab(id) => self.hovered_tab = id,
-            Message::TabBarCursor(at) => self.tab_bar_cursor = at,
+            Message::TabBarCursor(at) => {
+                // The bar starts right of the profile sidebar.
+                let left = self.profiles.left_of_main();
+                self.tab_bar_cursor = iced::Point::new(at.x + left, at.y);
+            }
             Message::StartRename(id) => return self.start_rename(id),
             Message::RenameInput(value) => {
                 if let Some(rename) = &mut self.renaming {
@@ -415,14 +420,13 @@ impl App {
         Task::none()
     }
 
-    /// "Custom hex…": a valid colour is applied (tab colour or background), anything else marks
-    /// the field.
+    /// Enter in the menu's field: a valid colour / non-empty name is applied, anything else
+    /// marks the field.
     fn submit_menu_input(&mut self) -> Task<Message> {
         let Some(input) = self.menu.as_mut().and_then(|m| m.input.as_mut()) else {
             return Task::none();
         };
-        if let Some(color) = parse_color(&input.value) {
-            let message = (input.submit)(color);
+        if let Some(message) = input.submit.message(&input.value) {
             return self.update(message);
         }
         input.invalid = true;

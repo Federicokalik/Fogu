@@ -76,15 +76,36 @@ impl MenuItem {
     }
 }
 
-/// A single-line "Custom hex…" field at the bottom of the menu.
+/// What Enter in the menu's field does.
+#[derive(Clone, Copy, Debug)]
+pub enum MenuSubmit {
+    /// Parse a `#RRGGBB` colour ("Custom hex…"); anything else marks the field.
+    Color(fn(RgbColor) -> Message),
+    /// Send the trimmed text when not empty ("New group…").
+    Text(fn(String) -> Message),
+}
+
+impl MenuSubmit {
+    /// The message for `value`, or `None` when it is not acceptable.
+    pub fn message(self, value: &str) -> Option<Message> {
+        match self {
+            Self::Color(pick) => parse_color(value).map(pick),
+            Self::Text(send) => {
+                let text = value.trim();
+                (!text.is_empty()).then(|| send(text.to_owned()))
+            }
+        }
+    }
+}
+
+/// A single-line field at the bottom of the menu ("Custom hex…", "New group…").
 #[derive(Clone, Debug)]
 pub struct MenuInput {
     pub placeholder: &'static str,
     pub value: String,
     /// The last submit was rejected.
     pub invalid: bool,
-    /// What a valid colour does.
-    pub submit: fn(RgbColor) -> Message,
+    pub submit: MenuSubmit,
 }
 
 /// A labelled slider at the bottom of the menu (background opacity, in percent).
@@ -174,7 +195,7 @@ impl ContextMenu {
             placeholder: "Custom hex… #RRGGBB",
             value: String::new(),
             invalid: false,
-            submit: pick,
+            submit: MenuSubmit::Color(pick),
         });
         menu
     }
@@ -275,7 +296,7 @@ fn menu_box(menu: &ContextMenu) -> Element<'_, Message> {
                 .size(13)
                 .padding(6),
         );
-        if input.invalid {
+        if input.invalid && matches!(input.submit, MenuSubmit::Color(_)) {
             col = col.push(
                 text("Not a #RRGGBB colour")
                     .size(11)

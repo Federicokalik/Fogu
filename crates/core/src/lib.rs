@@ -1,14 +1,17 @@
 //! `fogu-core`: pure config/model crate (config schema, profiles, `SplitTree`, colour
 //! schemes, keymap parsing, `Action` enum, recovery-state model). No tokio, no GUI, no I/O
-//! (except [`config::load`]/[`config::set_profile_background`], plain `std::fs`).
+//! (except [`config::load`], the in-place `config.toml` edits, [`builtin`]'s `/etc/shells`
+//! read and [`recent`]'s state file; plain `std::fs`).
 
 mod action;
 mod background;
+pub mod builtin;
 pub mod config;
 pub mod fsutil;
 mod keychord;
 mod profile;
 mod quick_connect;
+pub mod recent;
 mod scheme;
 mod size;
 mod split;

@@ -2,10 +2,12 @@
 //! has `#[serde(default)]`; `Default` impls are the single source of defaults (no separate
 //! "defaults" file).
 
+mod edit;
 mod io;
 pub mod sftp;
 pub mod ssh_opts;
 
+pub use edit::{ProfileEdit, edit_profiles, slug, unique_group_id, unique_profile_id};
 pub use io::{ConfigError, ConfigIssue, config_dir, load, set_profile_background, validate};
 pub use sftp::SftpCfg;
 
@@ -78,6 +80,12 @@ pub struct Appearance {
     /// Alpha (0..=1) of the terminal's default background over a tab background; unset = 0.75
     /// over an image, 0 over a solid colour. Explicit SGR backgrounds always stay opaque.
     pub terminal_bg_alpha: Option<f32>,
+    /// Show the generated "Default shell" + `/etc/shells` profiles (profile sidebar and picker).
+    pub show_builtin_profiles: bool,
+    /// How many recently opened profiles the sidebar's "Recent" section shows (0 hides it).
+    pub recent_profiles: usize,
+    /// Initial width of the profile sidebar, in logical px (drag its edge to resize).
+    pub profiles_sidebar_width: f32,
 }
 
 impl Default for Appearance {
@@ -92,6 +100,9 @@ impl Default for Appearance {
             color_scheme: "Fogu Dark".to_owned(),
             tabs_location: TabsLocation::default(),
             terminal_bg_alpha: None,
+            show_builtin_profiles: true,
+            recent_profiles: 3,
+            profiles_sidebar_width: 280.0,
         }
     }
 }

@@ -39,6 +39,7 @@ fn main() -> fogu_ui::Result {
         notices,
         exit_after_first_frame: cli.exit_after_first_frame,
         config_dir: cli.config_dir.clone(),
+        state_dir: state_dir.ok(),
     };
     fogu_ui::run(Arc::new(config), options)
 }

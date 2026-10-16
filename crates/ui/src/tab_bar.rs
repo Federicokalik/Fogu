@@ -24,6 +24,8 @@ const UNDERLINE_H: f32 = 3.0;
 const TITLE_SIZE: f32 = 13.0;
 /// Warning badge colour (amber).
 const WARN: Color = Color::from_rgb(0.96, 0.65, 0.14);
+/// Toggle buttons (SFTP, profiles) while their panel is open.
+const ACTIVE: Color = Color::from_rgb(0.0, 0.565, 1.0);
 /// Id of the inline rename field.
 pub const RENAME_INPUT: &str = "fogu-rename-input";
 
@@ -44,6 +46,8 @@ pub struct TabBar<'a> {
     pub colors: &'a Colors,
     /// The active tab has an SSH pane: show the SFTP button (`true` = panel open).
     pub sftp: Option<bool>,
+    /// The profile sidebar is open (its toggle button is highlighted).
+    pub profiles: bool,
 }
 
 /// `title` cut to [`MAX_TITLE_CHARS`] characters, ending in `…` when cut.
@@ -162,13 +166,21 @@ impl<'a> TabBar<'a> {
             .style(button::text)
             .on_press(Message::Action(Action::OpenProfilePicker));
         let bar_bg = self.bar_bg();
-        let mut bar_row = row![tabs, plus, profiles].align_y(Alignment::Center);
+        let sidebar = button(
+            text("☰")
+                .size(14)
+                .color(if self.profiles { ACTIVE } else { fg }),
+        )
+        .padding([2, 10])
+        .style(button::text)
+        .on_press(Message::Action(Action::ToggleProfiles));
+        let tip = container(text("Profiles (toggle-profiles)").size(12))
+            .padding(4)
+            .style(container::rounded_box);
+        let sidebar = tooltip(sidebar, tip, tooltip::Position::Bottom);
+        let mut bar_row = row![sidebar, tabs, plus, profiles].align_y(Alignment::Center);
         if let Some(open) = self.sftp {
-            let color = if open {
-                to_iced(fogu_core::RgbColor::from_hex(0x00_90FF))
-            } else {
-                fg
-            };
+            let color = if open { ACTIVE } else { fg };
             let sftp = button(text("SFTP").size(12).color(color))
                 .padding([2, 8])
                 .style(button::text)

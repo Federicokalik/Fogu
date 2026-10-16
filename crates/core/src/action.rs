@@ -104,6 +104,8 @@ pub enum Action {
     OpenProfilePicker,
     /// Shows/hides the SFTP side panel of the active SSH tab.
     ToggleSftp,
+    /// Shows/hides the profile manager sidebar.
+    ToggleProfiles,
 }
 
 /// An `Action` string was not one of the known slugs (e.g. `"new-tab"`, `"go-to-tab-3"`,
@@ -143,6 +145,7 @@ impl fmt::Display for Action {
             Self::RestartTab => write!(f, "restart-tab"),
             Self::OpenProfilePicker => write!(f, "open-profile-picker"),
             Self::ToggleSftp => write!(f, "toggle-sftp"),
+            Self::ToggleProfiles => write!(f, "toggle-profiles"),
         }
     }
 }
@@ -189,6 +192,7 @@ impl FromStr for Action {
             "restart-tab" => Self::RestartTab,
             "open-profile-picker" => Self::OpenProfilePicker,
             "toggle-sftp" => Self::ToggleSftp,
+            "toggle-profiles" => Self::ToggleProfiles,
             _ => return Err(ActionParseError(s.to_owned())),
         })
     }
@@ -294,6 +298,8 @@ impl Hotkeys {
         bindings.insert(Action::RestartTab, chords(&[]));
         bindings.insert(Action::OpenProfilePicker, chords(&["Ctrl-Shift-E"]));
         bindings.insert(Action::ToggleSftp, chords(&["Ctrl-Shift-O"]));
+        // M = manager.
+        bindings.insert(Action::ToggleProfiles, chords(&["Ctrl-Shift-M"]));
         Self::new(bindings)
     }
 
@@ -383,6 +389,7 @@ paste = []"#,
             Action::PaneNav(Dir::Left),
             Action::OpenProfilePicker,
             Action::ToggleSftp,
+            Action::ToggleProfiles,
         ];
         for action in actions {
             let s = action.to_string();

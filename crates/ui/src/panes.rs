@@ -234,9 +234,10 @@ impl App {
     }
 
     /// Focuses pane `id` of the active tab (click, navigation, new split); also commits an
-    /// inline rename and takes keyboard focus back from the tab bar.
+    /// inline rename and takes keyboard focus back from the tab bar and the profile sidebar.
     pub(crate) fn focus_pane(&mut self, id: PaneId) {
         self.commit_rename();
+        self.profiles.focused = false;
         let active = self.active;
         let Some(tab) = self.tabs.iter().find(|t| t.id == active) else {
             return;

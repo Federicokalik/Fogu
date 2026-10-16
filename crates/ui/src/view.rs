@@ -13,6 +13,7 @@ use crate::modal::{self, overlay};
 use crate::mouse::MouseConfig;
 use crate::palette::to_iced;
 use crate::profile_picker;
+use crate::profiles;
 use crate::prompt;
 use crate::sftp;
 use crate::split_container::SplitContainer;
@@ -29,7 +30,9 @@ impl App {
         let typing_elsewhere = self.renaming.is_some()
             || self.menu.is_some()
             || self.picker.is_some()
-            || self.pending_close.is_some();
+            || self.pending_close.is_some()
+            || self.profiles.pending_delete.is_some()
+            || (self.profiles.open && self.profiles.focused);
         let sftp_panel = tab.sftp.as_ref().filter(|p| p.visible);
         let panel_has_keys = sftp_panel.is_some_and(|p| p.focused);
         let mouse = MouseConfig {
@@ -103,6 +106,7 @@ impl App {
                 .values()
                 .any(|p| p.sftp.is_some())
                 .then_some(sftp_panel.is_some()),
+            profiles: self.profiles.open,
         }
         .view();
         // Toasts are layered over the panes only, never over the tab bar.
@@ -110,13 +114,36 @@ impl App {
         if let Some(toasts) = self.toasts.view(self.metrics.cell_h) {
             panes = iced::widget::stack![panes, toasts].into();
         }
-        let modal = self.paste_modal().or_else(|| self.close_modal());
-        let base = overlay(column![bar, panes].into(), modal);
-        let base = match sftp_panel.and_then(|p| sftp::dialog(tab.id, p)) {
+        let main = column![bar, panes].into();
+        let main = profiles::view::with_sidebar(main, &self.profiles, &self.config, &self.colors);
+        let dialog = sftp_panel.and_then(|p| sftp::dialog(tab.id, p));
+        self.overlays(main, dialog)
+    }
+
+    /// Modals, the SFTP dialog, the picker and the context menu over `base`.
+    fn overlays<'a>(
+        &'a self,
+        base: Element<'a, Message>,
+        sftp_dialog: Option<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let modal = self
+            .paste_modal()
+            .or_else(|| self.close_modal())
+            .or_else(|| self.delete_modal());
+        let base = overlay(base, modal);
+        let base = match sftp_dialog {
             Some(dialog) => modal::over(base, dialog),
             None => base,
         };
-        let base = profile_picker::overlay(base, self.picker.as_ref(), &self.config);
+        let picker_rows = self
+            .picker
+            .as_ref()
+            .map(|_| profile_picker::listing(self).1);
+        let base = profile_picker::overlay(
+            base,
+            self.picker.as_ref(),
+            picker_rows.as_deref().unwrap_or_default(),
+        );
         context_menu::overlay(base, self.menu.as_ref(), self.window_size)
     }
 

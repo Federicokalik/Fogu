@@ -278,10 +278,14 @@ impl App {
         self.on_prompt_msg(message)
     }
 
-    /// Escape closes the innermost overlay: picker, close confirmation, the front pane's
-    /// prompt (declined), menu, inline rename.
+    /// Escape closes the innermost overlay: picker, close / delete confirmation, the front
+    /// pane's prompt (declined), menu, the sidebar's search (then its keyboard focus), inline
+    /// rename.
     pub(crate) fn on_escape(&mut self) {
-        if self.picker.take().is_some() || self.pending_close.take().is_some() {
+        if self.picker.take().is_some()
+            || self.pending_close.take().is_some()
+            || self.profiles.pending_delete.take().is_some()
+        {
             return;
         }
         if let Some(pane) = self.active_pane().filter(|p| p.prompt.is_some()) {
@@ -289,7 +293,7 @@ impl App {
             self.answer(id, PromptReply::Reject);
             return;
         }
-        if self.menu.take().is_some() {
+        if self.menu.take().is_some() || self.sidebar_escape() {
             return;
         }
         let active = self.active;

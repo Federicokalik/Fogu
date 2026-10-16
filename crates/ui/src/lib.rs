@@ -3,8 +3,8 @@
 //!
 //! One window with tabs of split panes running local shells or SSH sessions: keyboard input
 //! through the keymap, scrollback, mouse selection + copy, sanitized/bracketed paste, zoom,
-//! clear, tab rename/colour, a tab context menu, mouse-resizable splits, a profile picker and
-//! the SSH prompt / host-key dialogs.
+//! clear, tab rename/colour, a tab context menu, mouse-resizable splits, a profile picker, the
+//! profile manager sidebar and the SSH prompt / host-key dialogs.
 
 mod actions;
 mod app;
@@ -13,6 +13,7 @@ mod background;
 mod background_menu;
 mod blink;
 mod context_menu;
+mod fuzzy_list;
 mod keys;
 mod lifecycle;
 mod message;
@@ -24,6 +25,7 @@ mod palette;
 mod panes;
 mod paste;
 mod profile_picker;
+mod profiles;
 mod prompt;
 mod restart;
 mod runs;
@@ -56,6 +58,8 @@ pub struct RunOptions {
     /// `--config-dir`: SSH sessions keep their `known_hosts` there (default:
     /// `$XDG_CONFIG_HOME/fogu`).
     pub config_dir: Option<std::path::PathBuf>,
+    /// `$XDG_STATE_HOME/fogu`: the profile sidebar's Recent list is kept there.
+    pub state_dir: Option<std::path::PathBuf>,
 }
 
 /// `WM_CLASS` / Wayland app id; matches the `.desktop` file's `StartupWMClass`.

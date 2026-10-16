@@ -45,17 +45,17 @@ pub(super) fn px_rows(px: f32) -> usize {
     (px / ROW_H).floor().clamp(0.0, 1e9) as usize
 }
 
-/// The colours the panel draws with (from the terminal scheme).
+/// The colours the panel (and the profile sidebar) draws with (from the terminal scheme).
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Look {
-    pub(super) bg: Color,
-    pub(super) fg: Color,
-    pub(super) dim: Color,
-    pub(super) accent: Color,
+pub(crate) struct Look {
+    pub(crate) bg: Color,
+    pub(crate) fg: Color,
+    pub(crate) dim: Color,
+    pub(crate) accent: Color,
 }
 
 impl Look {
-    pub(super) fn new(colors: &Colors) -> Self {
+    pub(crate) fn new(colors: &Colors) -> Self {
         let bg = palette::to_iced(colors.background());
         let fg = palette::to_iced(colors.foreground());
         Self {

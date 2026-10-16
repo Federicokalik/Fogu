@@ -13,7 +13,7 @@ use crate::profile::ProfileId;
 use crate::scheme::ColorScheme;
 
 /// The config file's name inside [`config_dir`].
-const FILE_NAME: &str = "config.toml";
+pub(super) const FILE_NAME: &str = "config.toml";
 /// Permissions for the config file and its backup (may contain nothing secret today, but
 /// `profiles` will later carry hostnames/usernames some users consider sensitive).
 const FILE_MODE: u32 = 0o600;
@@ -190,7 +190,7 @@ fn background_value(background: &Background) -> toml_edit::Value {
     toml_edit::Value::InlineTable(outer)
 }
 
-fn write_atomic(dir: &Path, contents: &[u8]) -> Result<(), ConfigError> {
+pub(super) fn write_atomic(dir: &Path, contents: &[u8]) -> Result<(), ConfigError> {
     let dest = dir.join(FILE_NAME);
     let tmp = dir.join(format!("{FILE_NAME}.tmp"));
     write_new_file(&tmp, contents)?;
