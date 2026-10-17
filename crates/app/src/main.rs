@@ -40,6 +40,8 @@ fn main() -> fogu_ui::Result {
         exit_after_first_frame: cli.exit_after_first_frame,
         config_dir: cli.config_dir.clone(),
         state_dir: state_dir.ok(),
+        // Benchmarks measure a cold start with one tab.
+        no_recovery: cli.no_recovery || cli.exit_after_first_frame,
     };
     fogu_ui::run(Arc::new(config), options)
 }

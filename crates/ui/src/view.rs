@@ -157,7 +157,8 @@ impl App {
         let modal = self
             .paste_modal()
             .or_else(|| self.close_modal())
-            .or_else(|| self.delete_modal());
+            .or_else(|| self.delete_modal())
+            .or_else(|| self.clear_sessions_modal());
         let base = overlay(base, modal);
         let dialog = self
             .secret_dialog
@@ -202,6 +203,7 @@ impl App {
             });
         let window_events = event::listen_with(|event, status, _window| match event {
             iced::Event::Window(window::Event::Focused) => Some(Message::Focused(true)),
+            iced::Event::Window(window::Event::CloseRequested) => Some(Message::CloseRequested),
             iced::Event::Window(window::Event::Unfocused) => Some(Message::Focused(false)),
             iced::Event::Window(window::Event::Rescaled(scale)) => {
                 Some(Message::ScaleFactor(scale))

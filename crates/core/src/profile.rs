@@ -168,6 +168,10 @@ pub struct Profile {
     /// Colour or image drawn under this profile's tabs (a tab may override it).
     #[serde(default)]
     pub background: Option<Background>,
+    /// Save this profile's scrollback for tab recovery (unset = `recovery.restore_scrollback`);
+    /// `false` for SSH hosts whose output must never touch the disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_scrollback: Option<bool>,
     /// Kind-specific options, flattened into the same TOML table (`type = "local"` / `"ssh"`).
     #[serde(flatten)]
     pub kind: ProfileKind,
@@ -186,6 +190,7 @@ impl Profile {
             disable_dynamic_title: false,
             behavior_on_session_end: SessionEndBehavior::default(),
             background: None,
+            restore_scrollback: None,
             kind: ProfileKind::Local(LocalOpts::default()),
         }
     }

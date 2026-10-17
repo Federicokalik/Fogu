@@ -1,0 +1,36 @@
+---
+source: crates/core/src/recovery_tests.rs
+expression: "std::fs::read_to_string(dir.join(SESSION_FILE)).unwrap()"
+---
+version = 1
+saved_at = 1792000000
+active_tab = 1
+
+[[tabs]]
+title_override = "logs"
+color = "#30a46c"
+background = "none"
+focused = 1
+
+[tabs.layout.root.split]
+dir = "horizontal"
+ratio = 0.5
+
+[tabs.layout.root.split.a.leaf]
+key = "a-1"
+profile_id = "work"
+cwd = "/srv"
+
+[tabs.layout.root.split.b.leaf]
+key = "a-2"
+profile_id = "builtin:local:default"
+cwd = "/srv"
+
+[[tabs]]
+background = "profile"
+focused = 0
+
+[tabs.layout.root.leaf]
+key = "b-1"
+profile_id = "work"
+cwd = "/srv"

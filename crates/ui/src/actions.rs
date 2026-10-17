@@ -20,7 +20,7 @@ use crate::tab::{Pane, PaneId, Tab, TabId};
 use crate::tab_bar::{RENAME_INPUT, Rename};
 
 /// Grid of the first tab, before the first layout resizes it.
-const INITIAL_SIZE: Size = Size {
+pub(crate) const INITIAL_SIZE: Size = Size {
     cols: 80,
     rows: 24,
     px_w: 0,
@@ -285,6 +285,10 @@ impl App {
             Action::OpenProfilePicker => return self.open_picker(),
             Action::ToggleSftp => return self.toggle_sftp(),
             Action::ToggleProfiles => return self.toggle_profiles(),
+            Action::ClearSavedSessions => match &mut self.recovery {
+                Some(recovery) => recovery.pending_clear = true,
+                None => return self.notify(Notification::new(Level::Info, "Tab recovery is off")),
+            },
             // Not implemented yet; the user is told rather than left guessing.
             Action::SelectAll => {
                 tracing::debug!(%action, "action not implemented yet");
@@ -309,6 +313,15 @@ impl App {
         };
         if let Some(id) = self.tabs.get(target).map(|t| t.id) {
             self.activate(id);
+        }
+    }
+
+    /// Asks every running local pane for its cwd (tab recovery keeps the answers).
+    pub(crate) fn query_local_cwds(&self) {
+        for pane in self.tabs.iter().flat_map(|t| t.panes.values()) {
+            if !pane.is_ssh() && pane.state.is_running() {
+                let _sent = pane.control(SessionInput::QueryCwd);
+            }
         }
     }
 
@@ -352,6 +365,7 @@ impl App {
             self.hovered_tab = None;
         }
         if self.tabs.is_empty() {
+            self.forget_session();
             return iced::exit();
         }
         if self.active == id {

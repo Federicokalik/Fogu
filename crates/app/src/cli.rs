@@ -22,6 +22,9 @@ pub struct Cli {
     /// Exit right after the first presented frame (used by the benchmarks).
     #[arg(long, hide = true)]
     pub exit_after_first_frame: bool,
+    /// Start with one new tab: don't restore the saved tabs and don't save this session.
+    #[arg(long)]
+    pub no_recovery: bool,
 }
 
 /// `--software-render` must reach iced as `ICED_BACKEND=tiny-skia` before it starts. Setting an

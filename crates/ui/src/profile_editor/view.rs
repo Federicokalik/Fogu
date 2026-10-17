@@ -32,7 +32,7 @@ pub fn page<'a>(
     config: &Config,
     look: Look,
 ) -> Element<'a, Message> {
-    let mut sections: Vec<Row<'a>> = vec![general(ed, look)];
+    let mut sections: Vec<Row<'a>> = vec![general(ed, config, look)];
     match &ed.draft.kind {
         ProfileKind::Local(local) => sections.extend(local_sections(ed, local, config, look)),
         ProfileKind::Ssh(ssh) => sections.extend(super::view_ssh::sections(ed, ssh, config, look)),
@@ -155,7 +155,7 @@ pub(super) fn labels<T>(options: &[(&str, T)]) -> Vec<String> {
     options.iter().map(|(l, _)| (*l).to_owned()).collect()
 }
 
-fn general(ed: &ProfileEditor, look: Look) -> Row<'_> {
+fn general<'a>(ed: &'a ProfileEditor, config: &Config, look: Look) -> Row<'a> {
     let p = &ed.draft;
     let group = ed
         .groups
@@ -204,6 +204,13 @@ fn general(ed: &ProfileEditor, look: Look) -> Row<'_> {
             FieldId::DisableDynamicTitle,
             "Keep the profile name as tab title",
             p.disable_dynamic_title,
+        ),
+        forms::toggle(
+            look,
+            FieldId::RestoreScrollback,
+            "Save scrollback for tab recovery",
+            p.restore_scrollback
+                .unwrap_or(config.recovery.restore_scrollback),
         ),
         forms::choice(
             look,

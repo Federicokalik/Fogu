@@ -90,7 +90,8 @@ impl Background {
 }
 
 /// A tab's own choice, which wins over its profile's background.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TabBackground {
     /// Whatever the tab's profile says.
     #[default]

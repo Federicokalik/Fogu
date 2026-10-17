@@ -106,6 +106,8 @@ pub enum Action {
     ToggleSftp,
     /// Shows/hides the profile manager sidebar.
     ToggleProfiles,
+    /// Deletes the saved tab-recovery files (asks first).
+    ClearSavedSessions,
 }
 
 /// An `Action` string was not one of the known slugs (e.g. `"new-tab"`, `"go-to-tab-3"`,
@@ -146,6 +148,7 @@ impl fmt::Display for Action {
             Self::OpenProfilePicker => write!(f, "open-profile-picker"),
             Self::ToggleSftp => write!(f, "toggle-sftp"),
             Self::ToggleProfiles => write!(f, "toggle-profiles"),
+            Self::ClearSavedSessions => write!(f, "clear-saved-sessions"),
         }
     }
 }
@@ -193,6 +196,7 @@ impl FromStr for Action {
             "open-profile-picker" => Self::OpenProfilePicker,
             "toggle-sftp" => Self::ToggleSftp,
             "toggle-profiles" => Self::ToggleProfiles,
+            "clear-saved-sessions" => Self::ClearSavedSessions,
             _ => return Err(ActionParseError(s.to_owned())),
         })
     }
@@ -300,6 +304,7 @@ impl Hotkeys {
         bindings.insert(Action::ToggleSftp, chords(&["Ctrl-Shift-O"]));
         // M = manager.
         bindings.insert(Action::ToggleProfiles, chords(&["Ctrl-Shift-M"]));
+        bindings.insert(Action::ClearSavedSessions, chords(&[]));
         Self::new(bindings)
     }
 
@@ -390,6 +395,7 @@ paste = []"#,
             Action::OpenProfilePicker,
             Action::ToggleSftp,
             Action::ToggleProfiles,
+            Action::ClearSavedSessions,
         ];
         for action in actions {
             let s = action.to_string();

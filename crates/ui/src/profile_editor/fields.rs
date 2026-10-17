@@ -23,6 +23,7 @@ pub enum FieldId {
     Icon,
     Color,
     DisableDynamicTitle,
+    RestoreScrollback,
     SessionEnd,
     Osc52,
     BgKind,
@@ -266,6 +267,7 @@ impl ProfileEditor {
                 self.draft.color = self.hex(id, t, current);
             }
             (FieldId::DisableDynamicTitle, FieldValue::Bool(b)) => p.disable_dynamic_title = *b,
+            (FieldId::RestoreScrollback, FieldValue::Bool(b)) => p.restore_scrollback = Some(*b),
             (FieldId::SessionEnd, FieldValue::Choice(i)) => {
                 p.behavior_on_session_end =
                     SESSION_END.get(*i).map_or_else(Default::default, |c| c.1);

@@ -220,6 +220,31 @@ pub struct Config {
     pub sftp: SftpCfg,
     /// SSH settings that are not per-profile.
     pub ssh: SshCfg,
+    /// Tab recovery on restart.
+    pub recovery: RecoveryCfg,
+}
+
+/// `[recovery]`: rebuild the tabs on restart. Saved scrollback may contain passwords or
+/// other secrets shown in the terminal. It is stored unencrypted, readable only by your user.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecoveryCfg {
+    /// Save and restore the tabs, splits and their profiles. `false` also deletes saved files.
+    pub enabled: bool,
+    /// Also save each pane's scrollback (profiles may override with `restore_scrollback`).
+    pub restore_scrollback: bool,
+    /// Lines of scrollback saved per pane.
+    pub scrollback_lines: usize,
+}
+
+impl Default for RecoveryCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            restore_scrollback: true,
+            scrollback_lines: 1000,
+        }
+    }
 }
 
 /// `[ssh]`: SSH settings that are not per-profile.
@@ -252,6 +277,7 @@ impl Default for Config {
             default_profile: None,
             sftp: SftpCfg::default(),
             ssh: SshCfg::default(),
+            recovery: RecoveryCfg::default(),
         }
     }
 }

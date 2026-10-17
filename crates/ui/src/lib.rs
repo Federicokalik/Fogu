@@ -30,6 +30,7 @@ mod profile_editor;
 mod profile_picker;
 mod profiles;
 mod prompt;
+mod recovery;
 mod restart;
 mod runs;
 mod secret_dialog;
@@ -62,8 +63,10 @@ pub struct RunOptions {
     /// `--config-dir`: SSH sessions keep their `known_hosts` there (default:
     /// `$XDG_CONFIG_HOME/fogu`).
     pub config_dir: Option<std::path::PathBuf>,
-    /// `$XDG_STATE_HOME/fogu`: the profile sidebar's Recent list is kept there.
+    /// `$XDG_STATE_HOME/fogu`: the profile sidebar's Recent list and tab recovery files.
     pub state_dir: Option<std::path::PathBuf>,
+    /// `--no-recovery`: start with one default tab, neither restore nor save the session.
+    pub no_recovery: bool,
 }
 
 /// `WM_CLASS` / Wayland app id; matches the `.desktop` file's `StartupWMClass`.
@@ -89,6 +92,8 @@ pub fn run(config: Arc<Config>, options: RunOptions) -> Result {
             application_id: APP_ID.to_owned(),
             ..Default::default()
         },
+        // `Message::CloseRequested` saves the session (tab recovery), then exits.
+        exit_on_close_request: false,
         ..Default::default()
     };
     iced::application(

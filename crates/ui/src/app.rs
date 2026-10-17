@@ -88,6 +88,8 @@ pub struct App {
     /// Decoded tab background images.
     pub(crate) backgrounds: background::Cache,
     pub(crate) exit_after_first_frame: bool,
+    /// Tab recovery saving state (`None`: off, no state directory, or `--no-recovery`).
+    pub(crate) recovery: Option<crate::recovery::Recovery>,
     /// Test builds: input ends of the stub sessions (what the UI sent) and the effective
     /// profile each stub session was opened with.
     #[cfg(test)]
@@ -169,6 +171,7 @@ impl App {
             desktop: sftp::Desktop::default(),
             backgrounds: background::Cache::default(),
             exit_after_first_frame: false,
+            recovery: None,
             config,
             #[cfg(test)]
             stub_inputs: Vec::new(),
@@ -193,10 +196,19 @@ impl App {
         let mut app = Self::new(runtime, config, resolved);
         app.exit_after_first_frame = options.exit_after_first_frame;
         app.config_dir = options.config_dir;
+        let mut tasks = vec![app.refresh_ssh_hosts()];
+        let mut restored = false;
         if let Some(dir) = options.state_dir {
             app.load_recent(dir.join(fogu_core::recent::RECENT_FILE));
+            if !options.no_recovery {
+                let enabled = app.config.recovery.enabled;
+                restored = app.restore_session(&dir, enabled);
+                if enabled {
+                    app.recovery = Some(crate::recovery::Recovery::new(dir));
+                    tasks.push(app.after(Duration::from_secs(1), Message::RecoveryTick));
+                }
+            }
         }
-        let mut tasks = vec![app.refresh_ssh_hosts()];
         let font_notes = font_problems
             .into_iter()
             .map(|p| Notification::new(Level::Warn, "Font").detail(p));
@@ -206,8 +218,10 @@ impl App {
         if !app.toasts.is_empty() {
             tasks.push(app.after(AUTO_DISMISS, Message::ToastExpire));
         }
-        let profile = app.default_profile();
-        app.open_tab(&profile, None);
+        if !restored {
+            let profile = app.default_profile();
+            app.open_tab(&profile, None);
+        }
         tasks.push(
             window::oldest()
                 .and_then(window::scale_factor)
@@ -253,6 +267,12 @@ impl App {
                 Task::none()
             }
             Message::ReconnectTick(pane) => self.reconnect_tick(pane),
+            Message::RecoveryTick => self.recovery_tick(),
+            Message::CloseRequested => {
+                self.save_on_exit();
+                iced::exit()
+            }
+            Message::ConfirmClearSessions(yes) => self.confirm_clear_sessions(yes),
             Message::BlinkTick => {
                 let (blink, focused) = (self.config.appearance.cursor_blink, self.focused);
                 if self.blink.tick(Instant::now(), blink, focused) {

@@ -382,6 +382,25 @@ impl<T> SplitTree<T> {
         self.split(onto, side, removed)
     }
 
+    /// Puts every split ratio back into [`MIN_RATIO`]..=[`MAX_RATIO`] (`NaN` → even): for trees
+    /// read from a file.
+    pub fn clamp_ratios(&mut self) {
+        fn walk<T>(node: &mut Node<T>) {
+            if let Node::Split { ratio, a, b, .. } = node {
+                *ratio = if ratio.is_nan() {
+                    0.5
+                } else {
+                    ratio.clamp(MIN_RATIO, MAX_RATIO)
+                };
+                walk(a);
+                walk(b);
+            }
+        }
+        if let Some(root) = &mut self.root {
+            walk(root);
+        }
+    }
+
     /// Transforms every leaf, keeping the tree's shape and ratios. Used by tab recovery to
     /// turn a live `SplitTree<PaneId>` into a serializable `SplitTree<PaneSpec>` and back.
     pub fn map<U>(self, f: impl FnMut(T) -> U) -> SplitTree<U> {

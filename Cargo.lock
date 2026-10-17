@@ -1588,7 +1588,9 @@ dependencies = [
  "image",
  "rfd",
  "secrecy",
+ "serde_json",
  "tokio",
+ "toml",
  "tracing",
 ]
 

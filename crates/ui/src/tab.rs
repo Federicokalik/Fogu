@@ -167,6 +167,8 @@ pub struct Pane {
     pub warnings: Vec<SessionWarning>,
     /// SSH panes: the last cwd the remote shell reported (OSC 7, raw remote path).
     pub remote_cwd: Option<String>,
+    /// Local panes: the last known working directory (OSC 7 or a cwd query), for tab recovery.
+    pub local_cwd: Option<std::path::PathBuf>,
     /// SSH panes: the session's port forwards (latest status of each; stopped ones dropped).
     pub forwards: Vec<ForwardStatus>,
     /// SSH panes: the connection the session runs on (shared with `reuse_session`).
@@ -207,6 +209,7 @@ impl Pane {
             prompt: None,
             warnings: Vec::new(),
             remote_cwd: None,
+            local_cwd: None,
             forwards: Vec::new(),
             connection: None,
             reconnect_in: None,

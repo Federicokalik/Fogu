@@ -298,6 +298,9 @@ impl App {
             remote,
             "cwd reported"
         );
+        if !remote && let Some(pane) = self.pane_mut(pane_id) {
+            pane.local_cwd = Some(path.clone());
+        }
         let Some(query) = self.pending_cwd else {
             return;
         };

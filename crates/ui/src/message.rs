@@ -132,6 +132,12 @@ pub enum Message {
     ToastAccept(u64),
     /// A toast's display time may be up: drop the expired ones.
     ToastExpire,
+    /// Tab recovery: compare the layout with the last save (every second).
+    RecoveryTick,
+    /// The window's close button: save the session, then exit.
+    CloseRequested,
+    /// The answer to "Clear saved sessions?".
+    ConfirmClearSessions(bool),
     /// One second of pane `.0`'s automatic reconnect countdown passed.
     ReconnectTick(PaneId),
     /// The cursor blink timer fired.

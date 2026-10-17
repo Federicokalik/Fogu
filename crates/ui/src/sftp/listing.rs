@@ -316,10 +316,13 @@ pub fn permissions(e: &Entry) -> String {
 
 /// `YYYY-MM-DD HH:MM` (UTC) from seconds since the epoch; empty when unknown.
 pub fn modified(e: &Entry) -> String {
-    let Some(secs) = e.mtime else {
-        return String::new();
-    };
-    let secs = i64::from(secs);
+    e.mtime
+        .map(|secs| utc_minutes(i64::from(secs)))
+        .unwrap_or_default()
+}
+
+/// `YYYY-MM-DD HH:MM` (UTC) from seconds since the epoch.
+pub fn utc_minutes(secs: i64) -> String {
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let (y, m, d) = civil_from_days(days);
     format!(

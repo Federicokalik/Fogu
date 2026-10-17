@@ -12,6 +12,7 @@ mod keychord;
 mod profile;
 mod quick_connect;
 pub mod recent;
+pub mod recovery;
 mod scheme;
 mod secret_key;
 pub mod shellquote;

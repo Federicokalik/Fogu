@@ -152,6 +152,10 @@ impl ContextMenu {
             ));
         }
         items.push(close);
+        items.push(MenuItem::new(
+            "Clear saved sessions…",
+            MenuAction::Run(Action::ClearSavedSessions),
+        ));
         Self::new(anchor, items)
     }
 
