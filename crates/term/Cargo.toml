@@ -11,6 +11,9 @@ workspace = true
 fogu-core = { path = "../core" }
 alacritty_terminal.workspace = true
 regex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+serde_json.workspace = true

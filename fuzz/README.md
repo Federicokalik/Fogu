@@ -4,6 +4,7 @@ Needs the nightly toolchain and `cargo-fuzz` (`cargo install cargo-fuzz --locked
 the rest of the workspace requires. Run from the repository root:
 
 ```sh
+cargo +nightly fuzz run history_load -- -max_total_time=60
 cargo +nightly fuzz run login_script_window -- -max_total_time=60
 cargo +nightly fuzz run osc_payloads -- -max_total_time=60
 cargo +nightly fuzz run sftp_name_sanitize -- -max_total_time=60

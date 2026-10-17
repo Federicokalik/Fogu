@@ -235,6 +235,20 @@ impl TermHandle {
         parser.advance(&mut *self.term.lock(), &line);
     }
 
+    /// The last `max_lines` rows of the primary screen and its history as inert runs
+    /// ([`history`](crate::history)); `now` = unix seconds stored with them.
+    pub fn capture_history(&self, max_lines: usize, now: u64) -> crate::history::SavedHistory {
+        crate::history::capture(&mut self.term.lock(), max_lines, now)
+    }
+
+    /// Redraws `saved` through the parser (text and SGR built from its attributes only, control
+    /// characters shown as U+FFFD). Call [`validate`](crate::history::validate) first for loaded
+    /// data. Undelivered events are dropped: the restored text can't produce any.
+    pub fn restore_history(&mut self, saved: &crate::history::SavedHistory) {
+        self.feed(&crate::history::generate(saved));
+        lock(&self.shared).events.clear();
+    }
+
     /// Starts a new selection of `kind` at grid `point` (clamped to the grid; line 0 is the top
     /// of the live screen, negative lines are history).
     pub fn start_selection(&mut self, kind: SelectionType, point: Point, side: Side) {

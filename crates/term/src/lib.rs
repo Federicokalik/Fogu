@@ -5,6 +5,7 @@
 
 mod event_proxy;
 mod handle;
+pub mod history;
 pub mod input;
 pub mod login_script;
 mod osc;

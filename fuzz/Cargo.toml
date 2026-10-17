@@ -11,6 +11,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 fogu-term = { path = "../crates/term" }
 fogu-core = { path = "../crates/core" }
+serde_json = "1.0.154"
 # No `ssh` feature: `validate_name`/`display_name` are pure and live in the always-built
 # `sftp` module, so the fuzz build stays free of russh/ring.
 fogu-session = { path = "../crates/session", default-features = false }
@@ -43,6 +44,13 @@ bench = false
 [[bin]]
 name = "login_script_window"
 path = "fuzz_targets/login_script_window.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "history_load"
+path = "fuzz_targets/history_load.rs"
 test = false
 doc = false
 bench = false

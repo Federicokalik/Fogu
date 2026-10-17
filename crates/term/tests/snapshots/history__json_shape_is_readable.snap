@@ -1,0 +1,30 @@
+---
+source: crates/term/tests/history.rs
+expression: "serde_json::to_string_pretty(&saved).unwrap()"
+---
+{
+  "version": 1,
+  "cols": 20,
+  "captured_at": 1792000000,
+  "rows": [
+    {
+      "runs": [
+        {
+          "text": "ok",
+          "fg": {
+            "Named": 2
+          },
+          "bg": "Default",
+          "flags": 1
+        },
+        {
+          "text": " done",
+          "fg": "Default",
+          "bg": "Default",
+          "flags": 0
+        }
+      ],
+      "wrapped": false
+    }
+  ]
+}

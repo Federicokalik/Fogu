@@ -57,6 +57,9 @@ insta = "1.49.0"
 # why: `Config`/`Profile`/`ColorScheme` (de)serialisation; `derive` only, no
 # other feature needed.
 serde = { version = "1.0.229", features = ["derive"] }
+# why: JSON for the tab-recovery history file: human-debuggable and easy to
+# validate on load.
+serde_json = "1.0.154"
 # why: native config file format: human-editable, comments allowed, no YAML
 # type-coercion surprises. `preserve_order`: tables keep struct field order, so keys the
 # profile editor adds to config.toml come in the documented order (indexmap is already in the tree).
