@@ -62,33 +62,60 @@ impl PaneState {
         )
     }
 
+    /// No exit status: the connection dropped (transport error, server gone) or the session
+    /// failed. What `behavior_on_session_end = "auto"` reconnects after.
+    pub fn dropped(&self) -> bool {
+        matches!(
+            self,
+            Self::Crashed(_)
+                | Self::Exited(ExitInfo {
+                    code: None,
+                    signal: None
+                })
+        )
+    }
+
+    /// The overlay during an SSH pane's automatic reconnect countdown.
+    pub fn reconnect_line(&self, secs: u8) -> Option<String> {
+        self.remote_reason().map(|why| {
+            format!(
+                "[Disconnected ({why})] \u{2014} Reconnecting in {secs} s \u{00b7} any key now \u{00b7} Esc cancels"
+            )
+        })
+    }
+
+    /// Why an SSH pane is disconnected, short; `None` while running.
+    fn remote_reason(&self) -> Option<String> {
+        let why = match self {
+            Self::Running => return None,
+            Self::Exited(ExitInfo {
+                signal: Some(signal),
+                ..
+            }) => format!("signal {signal}"),
+            Self::Exited(ExitInfo {
+                code: Some(code), ..
+            }) => format!("exit code {code}"),
+            // No exit status: the server or network closed the connection.
+            Self::Exited(_) => "connection closed".to_owned(),
+            // Short: "Press any key to reconnect" must stay visible; the full reason is in the
+            // terminal and the error toast.
+            Self::Crashed(why) if why.chars().count() > REMOTE_DETAIL_CHARS => {
+                let mut short: String = why.chars().take(REMOTE_DETAIL_CHARS - 1).collect();
+                short.push('…');
+                short
+            }
+            Self::Crashed(why) => why.clone(),
+        };
+        Some(why)
+    }
+
     /// The overlay drawn over an ended pane; `None` while running. `remote` panes (SSH) say
     /// "Disconnected" and offer a reconnect instead of a restart.
     pub fn status_line(&self, remote: bool) -> Option<String> {
         if remote {
-            let why = match self {
-                Self::Running => return None,
-                Self::Exited(ExitInfo {
-                    signal: Some(signal),
-                    ..
-                }) => format!("signal {signal}"),
-                Self::Exited(ExitInfo {
-                    code: Some(code), ..
-                }) => format!("exit code {code}"),
-                // No exit status: the server or network closed the connection.
-                Self::Exited(_) => "connection closed".to_owned(),
-                // Short: "Press any key to reconnect" must stay visible; the full reason is in the
-                // terminal and the error toast.
-                Self::Crashed(why) if why.chars().count() > REMOTE_DETAIL_CHARS => {
-                    let mut short: String = why.chars().take(REMOTE_DETAIL_CHARS - 1).collect();
-                    short.push('…');
-                    short
-                }
-                Self::Crashed(why) => why.clone(),
-            };
-            return Some(format!(
-                "[Disconnected ({why})] \u{2014} Press any key to reconnect"
-            ));
+            return self
+                .remote_reason()
+                .map(|why| format!("[Disconnected ({why})] \u{2014} Press any key to reconnect"));
         }
         let what = match self {
             Self::Running => return None,
@@ -144,6 +171,9 @@ pub struct Pane {
     pub forwards: Vec<ForwardStatus>,
     /// SSH panes: the connection the session runs on (shared with `reuse_session`).
     pub connection: Option<ConnectionId>,
+    /// Seconds left before an ended SSH pane reconnects by itself (`behavior_on_session_end`
+    /// `reconnect` / `auto`); `None` = no countdown (never started or cancelled with Esc).
+    pub reconnect_in: Option<u8>,
 }
 
 impl Pane {
@@ -179,6 +209,7 @@ impl Pane {
             remote_cwd: None,
             forwards: Vec::new(),
             connection: None,
+            reconnect_in: None,
         }
     }
 

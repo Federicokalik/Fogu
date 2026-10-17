@@ -182,9 +182,14 @@ pub fn entries(
         .iter()
         .filter(|_| config.appearance.show_builtin_profiles)
         .map(|p| entry(p.clone(), Origin::Builtin));
-    let stored = config
-        .profiles
-        .iter()
+    // Ascending `weight`; a stable sort keeps file order among equal weights.
+    let mut by_weight: Vec<&Profile> = config.profiles.iter().collect();
+    by_weight.sort_by_key(|p| match resolve(p, &config.profile_defaults) {
+        EffectiveProfile::Ssh(ssh) => ssh.weight,
+        EffectiveProfile::Local(_) => 0,
+    });
+    let stored = by_weight
+        .into_iter()
         .map(|p| entry(p.clone(), Origin::Stored));
     let from_ssh_config = ssh_hosts
         .iter()

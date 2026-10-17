@@ -71,6 +71,9 @@ async fn shell(
         code: None,
         signal: None,
     };
+    ui.pump
+        .start_shell(ssh.cwd.as_deref(), &ssh.scripts)
+        .await?;
     let mut first_data = true;
     let mut resize: Option<(Size, Instant)> = None;
     let end = loop {

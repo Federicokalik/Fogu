@@ -4,7 +4,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use fogu_core::{Osc52Policy, Profile, ProfileKind, effective_osc52_write};
 use fogu_session::{ClipboardRequest, SessionError, SessionOutput, SessionWarning};
@@ -20,6 +20,8 @@ use crate::tab::{PaneId, PaneState};
 
 /// OSC 52 writes waiting for the user's decision at once; older ones are dropped.
 const MAX_PENDING_CLIPBOARD: usize = 4;
+/// Countdown before an SSH pane reconnects by itself (`behavior_on_session_end`).
+const RECONNECT_SECS: u8 = 2;
 
 /// An OSC 52 write behind an "ask" toast. `Debug` never shows the payload.
 pub(crate) struct PendingClipboard {
@@ -131,6 +133,14 @@ impl App {
                 .profile
                 .behavior_on_session_end
                 .closes(state.is_clean_exit());
+        // Only a pane that got connected reconnects by itself: a failing login must not loop.
+        let reconnect = pane.is_ssh()
+            && pane.connection.is_some()
+            && !pane.closing
+            && pane
+                .profile
+                .behavior_on_session_end
+                .reconnects(state.dropped());
         // A question the session can no longer take an answer to.
         pane.prompt = None;
         // The session stopped its forwards (or left them to the tabs still on the connection)
@@ -146,10 +156,34 @@ impl App {
         pane.status = state.status_line(pane.is_ssh());
         pane.state = state;
         pane.refresh();
+        if reconnect {
+            pane.reconnect_in = Some(RECONNECT_SECS);
+            pane.status = pane.state.reconnect_line(RECONNECT_SECS);
+            pane.refresh();
+            return self.after(Duration::from_secs(1), Message::ReconnectTick(pane_id));
+        }
         if pane.closing || by_policy {
             return self.remove_pane(pane_id);
         }
         Task::none()
+    }
+
+    /// One second of a reconnect countdown: show the time left, or reconnect at zero. A pane
+    /// that was restarted, closed or cancelled (Esc) meanwhile is left alone.
+    pub(crate) fn reconnect_tick(&mut self, pane_id: PaneId) -> Task<Message> {
+        let Some(pane) = self.pane_mut(pane_id) else {
+            return Task::none();
+        };
+        let Some(left) = pane.reconnect_in.filter(|_| !pane.state.is_running()) else {
+            return Task::none();
+        };
+        if left <= 1 {
+            return self.restart_pane(pane_id);
+        }
+        pane.reconnect_in = Some(left - 1);
+        pane.status = pane.state.reconnect_line(left - 1);
+        pane.refresh();
+        self.after(Duration::from_secs(1), Message::ReconnectTick(pane_id))
     }
 
     /// A non-fatal session condition: a toast now (the tab badge comes from `Pane::warnings`).
@@ -300,6 +334,7 @@ pub(crate) fn warning_title(warning: &SessionWarning) -> &'static str {
         SessionWarning::UnknownAlgorithms(_) => "Unknown SSH algorithms ignored",
         SessionWarning::WeakAlgorithms(_) => "Weaker SSH algorithms enabled",
         SessionWarning::SecretStore(_) => "Stored secrets",
+        SessionWarning::ShellSetup(_) => "Shell start-up",
     }
 }
 
@@ -328,5 +363,6 @@ pub(crate) fn warning_detail(warning: &SessionWarning) -> String {
             format!("Outside the secure defaults: {}", names.join(", "))
         }
         SessionWarning::SecretStore(text) => format!("{text}. You are asked instead."),
+        SessionWarning::ShellSetup(text) => text.clone(),
     }
 }

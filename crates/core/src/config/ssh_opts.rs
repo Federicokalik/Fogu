@@ -32,7 +32,7 @@ pub const DEFAULT_REUSE_LINGER_S: u32 = 10;
 /// Stored option names whose behaviour is not implemented yet: the profile editor marks them
 /// "not supported yet". [`EffectiveSsh::unsupported`] warns about the same options at connect
 /// time when they are set.
-pub const NOT_SUPPORTED_YET: &[&str] = &["input_backspace", "scripts", "cwd", "remember_cwd"];
+pub const NOT_SUPPORTED_YET: &[&str] = &["input_backspace"];
 
 /// Which authentication methods to try.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,15 +425,10 @@ impl EffectiveSsh {
     /// yet: x11"). Never silently ignored.
     #[must_use]
     pub fn unsupported(&self) -> Vec<String> {
-        let checks = [
-            (
-                self.input_backspace != Backspace::Backspace,
-                "input_backspace",
-            ),
-            (!self.scripts.is_empty(), "scripts"),
-            (self.cwd.is_some(), "cwd"),
-            (self.remember_cwd, "remember_cwd"),
-        ];
+        let checks = [(
+            self.input_backspace != Backspace::Backspace,
+            "input_backspace",
+        )];
         checks
             .into_iter()
             .filter(|(set, _)| *set)

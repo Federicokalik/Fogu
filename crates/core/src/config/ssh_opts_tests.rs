@@ -110,10 +110,7 @@ fn every_field_resolves_and_is_reported_unsupported() {
     assert!(ssh.agent_forward && ssh.x11 && !ssh.reuse_session);
     assert_eq!(ssh.reuse_linger, Duration::ZERO);
     assert!(!ssh.stored_secrets);
-    assert_eq!(
-        ssh.unsupported(),
-        ["input_backspace", "scripts", "cwd", "remember_cwd",]
-    );
+    assert_eq!(ssh.unsupported(), ["input_backspace"]);
 }
 
 #[test]

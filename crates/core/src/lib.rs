@@ -14,6 +14,7 @@ mod quick_connect;
 pub mod recent;
 mod scheme;
 mod secret_key;
+pub mod shellquote;
 mod size;
 mod split;
 pub mod ssh_config;

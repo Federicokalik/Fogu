@@ -76,9 +76,19 @@ impl App {
         let Some(index) = self.tab_of(target) else {
             return;
         };
+        // Only a split of the same profile continues in the target's remote cwd.
+        let same_profile = profile
+            .as_ref()
+            .is_none_or(|p| self.pane(target).is_some_and(|t| t.profile.id == p.id));
         let Some(profile) = profile.or_else(|| self.pane(target).map(|p| p.profile.clone())) else {
             return;
         };
+        let cwd = cwd.or_else(|| {
+            self.pane(target)
+                .filter(|_| same_profile)
+                .and_then(|p| p.remote_cwd.clone())
+                .map(PathBuf::from)
+        });
         let pane = self.open_pane(&profile, cwd);
         let id = pane.id;
         let active = self.active;

@@ -156,10 +156,24 @@ pub(crate) async fn connect_or_start(configured: Option<&Path>) -> Option<Agent>
 /// Starts `ssh-agent -a <socket> tail --pid=<us> -f /dev/null`: OpenSSH's agent runs the command
 /// as its child and exits with it, so it never outlives Fogu.
 fn start_private() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+    // Never under a shared /tmp: another user could pre-create the directory and swap the
+    // socket before a decrypted RSA key is handed to it.
+    let Some(base) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) else {
+        tracing::warn!("no XDG_RUNTIME_DIR: not starting a private ssh-agent");
+        return None;
+    };
     let dir = base.join("fogu");
     if let Err(err) = fogu_core::fsutil::create_private_dir(&dir) {
         tracing::warn!(error = %err, "cannot create the private agent directory");
+        return None;
+    }
+    let ours = std::fs::symlink_metadata(&dir).is_ok_and(|m| {
+        m.is_dir()
+            && m.uid() == rustix::process::getuid().as_raw()
+            && m.permissions().mode() & 0o777 == 0o700
+    });
+    if !ours {
+        tracing::warn!(path = %dir.display(), "private agent directory is not ours or not 0700");
         return None;
     }
     let socket = dir.join(format!("agent-{}.sock", std::process::id()));

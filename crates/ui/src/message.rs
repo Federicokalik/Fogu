@@ -132,6 +132,8 @@ pub enum Message {
     ToastAccept(u64),
     /// A toast's display time may be up: drop the expired ones.
     ToastExpire,
+    /// One second of pane `.0`'s automatic reconnect countdown passed.
+    ReconnectTick(PaneId),
     /// The cursor blink timer fired.
     BlinkTick,
     /// A frame was presented (`--exit-after-first-frame`).

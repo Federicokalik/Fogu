@@ -2,6 +2,8 @@
 //! ended pane starts its profile again, and the pane keeps its screen and scrollback below a dim
 //! separator (`terminal.keep_history_on_restart`).
 
+use std::path::PathBuf;
+
 use fogu_core::Size;
 use fogu_term::input;
 use fogu_term::{TermHandle, TermMode};
@@ -29,6 +31,12 @@ pub(crate) fn restarts(message: &Message, alt_is_meta: bool) -> bool {
     }
 }
 
+/// `true` for a plain Esc key press (cancels an automatic reconnect countdown).
+pub(crate) fn is_escape(message: &Message, alt_is_meta: bool) -> bool {
+    matches!(message, Message::Key(key)
+        if input::encode_key(key, TermMode::empty(), alt_is_meta).as_deref() == Some(b"\x1b"))
+}
+
 impl App {
     /// A blank terminal of `size` with the configured scrollback and word separators.
     pub(crate) fn new_term(&self, size: Size) -> TermHandle {
@@ -54,6 +62,7 @@ impl App {
             return Task::none();
         };
         let (profile, size) = (old.profile.clone(), old.size());
+        let remote_cwd = old.remote_cwd.clone().map(PathBuf::from);
         let kept = keep && !old.state.is_running();
         let term = if kept {
             let separator = if old.is_ssh() { RECONNECTED } else { RESTARTED };
@@ -65,7 +74,7 @@ impl App {
             drop(old);
             self.new_term(size)
         };
-        let pane = self.start_pane(&profile, None, (term, kept), size);
+        let pane = self.start_pane(&profile, remote_cwd, (term, kept), size);
         let new = pane.id;
         let Some(tab) = self.tabs.get_mut(index) else {
             return Task::none();

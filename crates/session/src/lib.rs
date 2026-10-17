@@ -229,6 +229,8 @@ pub enum SessionWarning {
     /// Stored passwords / passphrases can't be used or saved right now (sanitized reason); the
     /// user is asked instead.
     SecretStore(String),
+    /// The profile's `cwd` or login scripts could not be used (sanitized reason).
+    ShellSetup(String),
 }
 
 /// Identifies one SSH connection of this process (never reused).

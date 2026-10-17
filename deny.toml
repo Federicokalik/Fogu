@@ -11,6 +11,11 @@ ignore = [
     # unmaintained, no safe upgrade, pulled transitively through iced's cosmic-text/sctk-adwaita
     # font stack (fontdb/ab_glyph); revisit when iced bumps cosmic-text.
     "RUSTSEC-2026-0192", # ttf-parser, via cosmic-text/ab_glyph
+    # unmaintained (merged into zbus 6), no vulnerability; zbus 5 is pulled by iced_winit (mundy),
+    # rfd (ashpd) and oo7, none on zbus 6 yet; revisit when they move to zbus 6.
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
 ]
 
 [licenses]

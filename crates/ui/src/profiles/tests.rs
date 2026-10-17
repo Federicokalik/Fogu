@@ -475,3 +475,24 @@ fn jump_hosts_resolve_through_stored_profiles_and_bad_ones_are_kept_as_reasons()
     };
     assert!(matches!(opened.jump, fogu_core::Jump::Via(_)));
 }
+
+#[test]
+fn stored_profiles_follow_their_weight() {
+    let mut light = ssh("Light", "a.lan", None);
+    if let ProfileKind::Ssh(o) = &mut light.kind {
+        o.weight = Some(-1);
+    }
+    let mut heavy = ssh("Heavy", "b.lan", None);
+    if let ProfileKind::Ssh(o) = &mut heavy.kind {
+        o.weight = Some(5);
+    }
+    let config = Config {
+        profiles: vec![heavy, ssh("Plain", "c.lan", None), light],
+        ..Config::default()
+    };
+    let names: Vec<String> = entries(&config, &[], &[], None)
+        .iter()
+        .map(|e| e.profile.name.clone())
+        .collect();
+    assert_eq!(names, ["Light", "Plain", "Heavy"]);
+}

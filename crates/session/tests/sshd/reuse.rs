@@ -98,7 +98,10 @@ fn two_tabs_of_one_profile_share_one_connection_and_its_forwards() {
 
     // The second tab: no host-key prompt (`no_prompts` panics), same connection, the
     // forward replayed with the same id rather than started again.
-    let mut b: TestClient = Client::connect_shared(&rt, "lab", &ssh, sshd.paths(), no_prompts);
+    // A split with `remember_cwd` starts in another directory: still the same connection.
+    let mut split = ssh.clone();
+    split.cwd = Some("/tmp".into());
+    let mut b: TestClient = Client::connect_shared(&rt, "lab", &split, sshd.paths(), no_prompts);
     assert_eq!(connection(&mut b), first);
     let replayed = b.until(|e| matches!(e, SessionOutput::ForwardStatus(_)));
     assert!(
@@ -192,6 +195,8 @@ fn without_agent_forwarding_the_server_has_no_agent() {
     sshd.trust();
     let mut client: TestClient = Client::connect(&sshd.profile(), sshd.paths(), no_prompts);
     client.wait_shell();
-    client.send("echo sock-[${SSH_AUTH_SOCK:-none}]\r");
-    client.expect_text("sock-[none]");
+    // sshd names a forwarded agent socket `…/ssh-XXXX/agent.<pid>`. The login shell may set its
+    // own SSH_AUTH_SOCK (e.g. a zsh plugin on a developer machine), so only sshd's counts.
+    client.send("case \"${SSH_AUTH_SOCK:-}\" in */agent.*) echo fwd-yes;; *) echo fwd-no;; esac\r");
+    client.expect_text("fwd-no");
 }

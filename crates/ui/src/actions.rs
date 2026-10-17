@@ -114,8 +114,13 @@ impl App {
         term.set_default_cursor_shape(cursor_shape(self.config.appearance.cursor_shape));
         term.set_cell_size_px(self.metrics.cell_w_px, self.metrics.cell_h_px);
         let mut effective = resolve(profile, &self.config.profile_defaults);
-        if let (Some(cwd), EffectiveProfile::Local(local)) = (cwd, &mut effective) {
-            local.cwd = Some(cwd);
+        match (cwd, &mut effective) {
+            (Some(cwd), EffectiveProfile::Local(local)) => local.cwd = Some(cwd),
+            // An SSH pane's last remote cwd (reconnect, split) with `remember_cwd`.
+            (Some(cwd), EffectiveProfile::Ssh(ssh)) if ssh.remember_cwd => {
+                ssh.cwd = Some(cwd.to_string_lossy().into_owned());
+            }
+            _ => {}
         }
         if let EffectiveProfile::Ssh(ssh) = &mut effective {
             ssh.clear_service_messages_on_connect &= !kept_history;

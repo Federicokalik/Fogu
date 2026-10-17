@@ -6,12 +6,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
+#[cfg(feature = "ssh")]
+use fogu_core::LoginScript;
+use fogu_term::login_script::LoginScriptMatcher;
 use fogu_term::{OscEvent, OscScanner, TermEvent, TermHandle};
 use tokio::sync::mpsc::Sender;
 
-use crate::{ClipboardRequest, SessionOutput};
+use crate::{ClipboardRequest, SessionOutput, SessionWarning};
 
 /// Largest single transport write.
 pub(crate) const WRITE_CHUNK: usize = 4 * 1024;
@@ -22,6 +26,12 @@ pub(crate) const MAX_PENDING_FOR_REPLIES: usize = 1024 * 1024;
 /// User input (`SessionInput::Data`) is dropped while this much is already waiting to be
 /// written (the program stopped reading its tty); resizes, close and cwd queries keep flowing.
 pub(crate) const MAX_PENDING_INPUT: usize = 4 * 1024 * 1024;
+/// Login scripts that have not all fired by then are dropped.
+const LOGIN_SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Appended to every login-script reply: what the Enter key sends.
+#[cfg(feature = "ssh")]
+const LOGIN_SCRIPT_NEWLINE: &[u8] = b"\r";
+
 /// The UI dropped its event receiver; stop quietly.
 pub(crate) struct Gone;
 
@@ -40,6 +50,10 @@ pub(crate) struct Pump {
     local_hostname: Option<String>,
     /// `InputDropped` was already reported for the current backlog.
     pub(crate) overflow_reported: bool,
+    /// Login scripts still running on the shell's output, and when they started.
+    login: Option<(LoginScriptMatcher, Instant)>,
+    /// Typed when the shell's first output arrives (the profile's `cwd`).
+    startup: Option<Vec<u8>>,
 }
 
 impl Pump {
@@ -54,7 +68,66 @@ impl Pump {
             osc: OscScanner::new(),
             local_hostname: (!remote).then(local_hostname),
             overflow_reported: false,
+            login: None,
+            startup: None,
         }
+    }
+
+    // Only SSH profiles have `cwd`/`scripts` to run in the shell (local shells start in theirs).
+    #[cfg(feature = "ssh")]
+    /// Arms the shell's start-up work: `cd` into `cwd` and the login `scripts`, both run on the
+    /// shell's output from now on (not on the "Connecting…" lines fed before).
+    pub(crate) async fn start_shell(
+        &mut self,
+        cwd: Option<&str>,
+        scripts: &[LoginScript],
+    ) -> Result<(), Gone> {
+        if let Some(cwd) = cwd {
+            match fogu_core::shellquote::cd_command(cwd) {
+                Ok(line) => self.startup = Some(line),
+                Err(why) => self.setup_warning(format!("cwd not used: {why}")).await?,
+            }
+        }
+        if !scripts.is_empty() {
+            let (matcher, problems) = LoginScriptMatcher::new(scripts, LOGIN_SCRIPT_NEWLINE);
+            for problem in problems {
+                self.setup_warning(problem).await?;
+            }
+            self.login = Some((matcher, Instant::now()));
+        }
+        Ok(())
+    }
+
+    async fn setup_warning(&self, why: String) -> Result<(), Gone> {
+        tracing::warn!(%why, "shell setup");
+        self.emit(SessionOutput::Warning(SessionWarning::ShellSetup(why)))
+            .await
+    }
+
+    /// Start-up `cd` and login-script replies for a chunk of shell output.
+    async fn shell_setup(&mut self, bytes: &[u8]) -> Result<(), Gone> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        if let Some(line) = self.startup.take() {
+            self.pending.extend_from_slice(&line);
+        }
+        let Some((matcher, started)) = &mut self.login else {
+            return Ok(());
+        };
+        if started.elapsed() > LOGIN_SCRIPT_TIMEOUT {
+            self.login = None;
+            return self
+                .setup_warning("login scripts timed out".to_owned())
+                .await;
+        }
+        for reply in matcher.process(bytes) {
+            self.pending.extend_from_slice(&reply);
+        }
+        if matcher.done() {
+            self.login = None;
+        }
+        Ok(())
     }
 
     /// Queues a terminal reply (`PtyWrite`) unless the backlog is over
@@ -90,6 +163,7 @@ impl Pump {
     }
 
     pub(crate) async fn feed(&mut self, bytes: &[u8]) -> Result<(), Gone> {
+        self.shell_setup(bytes).await?;
         // Non-consuming: `bytes` is fed to the terminal unchanged below.
         let osc_events = self.osc.scan(bytes);
         self.term.feed(bytes);

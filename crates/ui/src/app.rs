@@ -252,6 +252,7 @@ impl App {
                 self.expire_toasts();
                 Task::none()
             }
+            Message::ReconnectTick(pane) => self.reconnect_tick(pane),
             Message::BlinkTick => {
                 let (blink, focused) = (self.config.appearance.cursor_blink, self.focused);
                 if self.blink.tick(Instant::now(), blink, focused) {
@@ -330,7 +331,11 @@ impl App {
         };
         match message {
             Message::Key(_) | Message::Text(_) if !pane.state.is_running() => {
-                if !pane.closing && restart::restarts(&message, alt_is_meta) {
+                if pane.reconnect_in.is_some() && restart::is_escape(&message, alt_is_meta) {
+                    pane.reconnect_in = None;
+                    pane.status = pane.state.status_line(pane.is_ssh());
+                    pane.refresh();
+                } else if !pane.closing && restart::restarts(&message, alt_is_meta) {
                     return self.restart_pane(id);
                 }
             }

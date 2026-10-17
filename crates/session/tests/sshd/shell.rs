@@ -87,3 +87,31 @@ fn banner_escape_sequences_arrive_sanitized() {
     let grid = client.view.dump_grid();
     assert!(grid.contains("Welcome[31mRED]0;pwned end"), "{grid}");
 }
+
+#[test]
+fn cwd_and_login_scripts_run_once_the_shell_starts() {
+    let Some(sshd) = TestSshd::start() else {
+        return;
+    };
+    sshd.trust();
+    let mut ssh = sshd.profile();
+    ssh.cwd = Some("/tmp".to_owned());
+    ssh.scripts = vec![
+        fogu_core::LoginScript {
+            expect: String::new(),
+            send: r"echo script-\x41-$((6*7))".to_owned(),
+            is_regex: false,
+            optional: false,
+        },
+        fogu_core::LoginScript {
+            expect: "script-A-42".to_owned(),
+            send: "echo second-$(pwd)".to_owned(),
+            is_regex: false,
+            optional: false,
+        },
+    ];
+    let mut client = Client::connect(&ssh, sshd.paths(), no_prompts);
+    client.wait_shell();
+    // The `cd` goes first, so the second script sees /tmp.
+    client.expect_text("second-/tmp");
+}

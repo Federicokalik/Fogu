@@ -227,7 +227,7 @@ impl App {
         let Some(pane) = self.pane_mut(pane_id) else {
             return Task::none();
         };
-        tracing::info!(?id, ?kind, ?via, "session prompt");
+        tracing::debug!(?id, ?kind, ?via, "session prompt");
         let state = PromptState::new(id, kind, via);
         let has_field = state.fields() > 0;
         if let Some(old) = pane.prompt.replace(state) {
@@ -297,7 +297,7 @@ impl App {
         let Some(prompt) = pane.prompt.take() else {
             return;
         };
-        tracing::info!(id = ?prompt.id, ?reply, "prompt answered");
+        tracing::debug!(id = ?prompt.id, ?reply, "prompt answered");
         if !pane.control(SessionInput::PromptReply(prompt.id, reply)) {
             tracing::warn!("session gone; prompt answer dropped");
         }

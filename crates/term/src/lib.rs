@@ -6,6 +6,7 @@
 mod event_proxy;
 mod handle;
 pub mod input;
+pub mod login_script;
 mod osc;
 mod snapshot;
 

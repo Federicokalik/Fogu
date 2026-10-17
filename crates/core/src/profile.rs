@@ -99,6 +99,18 @@ pub enum SessionEndBehavior {
 }
 
 impl SessionEndBehavior {
+    /// Whether a connected SSH pane whose session ended reconnects by itself:
+    /// `Reconnect` always, `Auto` only when the connection `dropped` (no exit status: a
+    /// transport error or the server going away), never after a deliberate exit.
+    #[must_use]
+    pub fn reconnects(self, dropped: bool) -> bool {
+        match self {
+            Self::Reconnect => true,
+            Self::Auto => dropped,
+            Self::Keep | Self::Close | Self::CloseIfClean => false,
+        }
+    }
+
     /// Whether a pane whose process ended goes away now. `clean` = exit code 0, not killed by a
     /// signal. A crashed session (spawn failure, I/O error, task panic) is never closed
     /// automatically: the user has to see why.

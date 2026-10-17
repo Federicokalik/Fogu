@@ -3,8 +3,10 @@
 
 use std::sync::Arc;
 
-use fogu_core::{Action, Config, EffectiveProfile, Profile, ProfileId, ProfileKind, SshOpts};
-use fogu_session::{ExitInfo, SessionInput, SessionOutput, SessionRuntime};
+use fogu_core::{
+    Action, Config, EffectiveProfile, Profile, ProfileId, ProfileKind, SessionEndBehavior, SshOpts,
+};
+use fogu_session::{ConnectionId, ExitInfo, SessionInput, SessionOutput, SessionRuntime};
 use fogu_term::TermMode;
 use fogu_term::input::{KeyCode, KeyInput, Mods};
 use iced::keyboard::key::Named;
@@ -203,4 +205,124 @@ fn restarting_a_running_pane_starts_blank() {
         .feed(b"still running\r\n");
     send(&mut app, Message::Action(Action::RestartTab));
     assert!(!screen(&app).contains("still running"));
+}
+
+fn ssh_with(end: SessionEndBehavior, remember_cwd: bool) -> Profile {
+    let mut profile = ssh_profile();
+    profile.behavior_on_session_end = end;
+    if let ProfileKind::Ssh(ssh) = &mut profile.kind {
+        ssh.remember_cwd = Some(remember_cwd);
+    }
+    profile
+}
+
+/// The active SSH pane got connected (with `cwd` reported), then its session ended with `info`.
+fn connected_then(app: &mut App, info: ExitInfo, cwd: Option<&str>) -> PaneId {
+    let id = pane(app);
+    send(
+        app,
+        Message::Session(id, SessionOutput::Connection(ConnectionId(1))),
+    );
+    app.active_pane_mut().unwrap().remote_cwd = cwd.map(str::to_owned);
+    send(app, Message::Session(id, SessionOutput::Exited(info)));
+    id
+}
+
+const KILLED: ExitInfo = ExitInfo {
+    code: None,
+    signal: Some(9),
+};
+const DROPPED: ExitInfo = ExitInfo {
+    code: None,
+    signal: None,
+};
+
+#[test]
+fn reconnect_counts_down_then_reconnects_in_the_remembered_cwd() {
+    let profile = ssh_with(SessionEndBehavior::Reconnect, true);
+    let mut app = app_with(Config::default(), Some(profile));
+    let old = connected_then(&mut app, KILLED, Some("/srv/app"));
+    let status = app.pane(old).unwrap().status.clone().unwrap();
+    assert!(status.contains("Reconnecting in 2 s"), "{status}");
+    send(&mut app, Message::ReconnectTick(old));
+    let status = app.pane(old).unwrap().status.clone().unwrap();
+    assert!(status.contains("Reconnecting in 1 s"), "{status}");
+    send(&mut app, Message::ReconnectTick(old));
+    assert_ne!(pane(&app), old, "reconnected in place");
+    let cwd = match app.stub_profiles.last().unwrap() {
+        EffectiveProfile::Ssh(ssh) => ssh.cwd.clone(),
+        EffectiveProfile::Local(_) => None,
+    };
+    assert_eq!(cwd.as_deref(), Some("/srv/app"));
+}
+
+#[test]
+fn esc_cancels_the_countdown_and_a_failed_login_never_counts_down() {
+    let mut app = app_with(
+        Config::default(),
+        Some(ssh_with(SessionEndBehavior::Reconnect, false)),
+    );
+    let old = connected_then(&mut app, KILLED, None);
+    send(&mut app, key(KeyCode::Escape, Mods::default()));
+    assert_eq!(pane(&app), old, "Esc does not reconnect");
+    let status = app.pane(old).unwrap().status.clone().unwrap();
+    assert!(status.ends_with("Press any key to reconnect"), "{status}");
+    send(&mut app, Message::ReconnectTick(old));
+    assert_eq!(pane(&app), old, "a cancelled countdown stays cancelled");
+    // Never connected (login failed): no automatic retry loop.
+    let mut app = app_with(
+        Config::default(),
+        Some(ssh_with(SessionEndBehavior::Reconnect, false)),
+    );
+    let id = pane(&app);
+    send(
+        &mut app,
+        Message::Session(id, SessionOutput::Exited(DROPPED)),
+    );
+    assert_eq!(app.pane(id).unwrap().reconnect_in, None);
+}
+
+#[test]
+fn auto_reconnects_only_a_dropped_connection() {
+    let auto = || Some(ssh_with(SessionEndBehavior::Auto, false));
+    let mut app = app_with(Config::default(), auto());
+    let id = connected_then(&mut app, DROPPED, None);
+    assert_eq!(app.pane(id).unwrap().reconnect_in, Some(2));
+    let mut app = app_with(Config::default(), auto());
+    let exit3 = ExitInfo {
+        code: Some(3),
+        signal: None,
+    };
+    let id = connected_then(&mut app, exit3, None);
+    assert_eq!(
+        app.pane(id).unwrap().reconnect_in,
+        None,
+        "a real exit is kept"
+    );
+    let mut app = app_with(Config::default(), auto());
+    let clean = ExitInfo {
+        code: Some(0),
+        signal: None,
+    };
+    let id = connected_then(&mut app, clean, None);
+    assert!(app.pane(id).is_none(), "`exit` closes the tab");
+}
+
+#[test]
+fn a_split_of_the_same_profile_starts_in_the_remembered_cwd() {
+    let profile = ssh_with(SessionEndBehavior::Keep, true);
+    let mut app = app_with(Config::default(), Some(profile.clone()));
+    let target = pane(&app);
+    app.active_pane_mut().unwrap().remote_cwd = Some("/srv".to_owned());
+    let last_cwd = |app: &App| match app.stub_profiles.last().unwrap() {
+        EffectiveProfile::Ssh(ssh) => ssh.cwd.clone(),
+        EffectiveProfile::Local(_) => None,
+    };
+    // Sidebar middle-click passes the profile explicitly.
+    app.split_now(target, fogu_core::Side::Right, None, Some(profile));
+    assert_eq!(last_cwd(&app).as_deref(), Some("/srv"));
+    let mut other = ssh_with(SessionEndBehavior::Keep, true);
+    other.id = ProfileId("other".to_owned());
+    app.split_now(target, fogu_core::Side::Right, None, Some(other));
+    assert_eq!(last_cwd(&app), None, "another profile's host");
 }

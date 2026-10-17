@@ -38,10 +38,12 @@ pub(crate) type Key = (ProfileId, EffectiveSsh);
 /// The pooled connections.
 type Live = Vec<(Key, Arc<Shared>)>;
 
-/// The pool key of `ssh` opened from `profile` (per-pane display choices left out).
+/// The pool key of `ssh` opened from `profile` (per-pane choices left out).
 pub(crate) fn key(profile: ProfileId, ssh: &EffectiveSsh) -> Key {
     let mut ssh = ssh.clone();
     ssh.clear_service_messages_on_connect = true;
+    // Typed into the new shell only: a split/reconnect with `remember_cwd` still shares.
+    ssh.cwd = None;
     (profile, ssh)
 }
 

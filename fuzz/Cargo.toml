@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 fogu-term = { path = "../crates/term" }
+fogu-core = { path = "../crates/core" }
 # No `ssh` feature: `validate_name`/`display_name` are pure and live in the always-built
 # `sftp` module, so the fuzz build stays free of russh/ring.
 fogu-session = { path = "../crates/session", default-features = false }
@@ -38,3 +39,10 @@ bench = false
 # Deliberately not a member of the parent workspace:
 # cargo-fuzz needs nightly + ASan instrumentation that the rest of the crates must never pick up.
 [workspace]
+
+[[bin]]
+name = "login_script_window"
+path = "fuzz_targets/login_script_window.rs"
+test = false
+doc = false
+bench = false
