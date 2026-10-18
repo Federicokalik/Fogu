@@ -157,6 +157,8 @@ impl<'a> TabBar<'a> {
         let tabs = scrollable(headers)
             .direction(Direction::Horizontal(scroller))
             .width(Length::Fill);
+        // A right-click on the empty part of the bar (tab headers take their own first).
+        let tabs = mouse_area(tabs).on_right_press(Message::TabBarMenu);
         let fg = palette::to_iced(self.colors.foreground());
         let plus = button(text("+").size(16).color(fg))
             .padding([2, 12])

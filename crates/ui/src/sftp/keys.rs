@@ -69,6 +69,21 @@ impl App {
         modified: &Key,
         mods: Modifiers,
     ) -> Task<Message> {
+        if let Some(menu) = &mut self.menu
+            && menu.input.is_none()
+        {
+            match key {
+                Key::Named(Named::ArrowUp) => menu.move_selection(false),
+                Key::Named(Named::ArrowDown) => menu.move_selection(true),
+                Key::Named(Named::Enter) => {
+                    if let Some(message) = menu.chosen() {
+                        return self.update(message);
+                    }
+                }
+                _ => {}
+            }
+            return Task::none();
+        }
         if self.panel_has_keys() {
             if let Some(action) = crate::keys::hotkey(&self.config.hotkeys, key, modified, mods) {
                 return self.on_action(action);

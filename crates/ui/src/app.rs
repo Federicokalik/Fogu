@@ -90,6 +90,10 @@ pub struct App {
     pub(crate) exit_after_first_frame: bool,
     /// Tab recovery saving state (`None`: off, no state directory, or `--no-recovery`).
     pub(crate) recovery: Option<crate::recovery::Recovery>,
+    /// The pane whose context menu is open (its "Current process" line updates).
+    pub(crate) pane_menu: Option<PaneId>,
+    /// A profile editor tab with unsaved changes waits for "Discard changes?".
+    pub(crate) pending_discard: Option<TabId>,
     /// Test builds: input ends of the stub sessions (what the UI sent) and the effective
     /// profile each stub session was opened with.
     #[cfg(test)]
@@ -172,6 +176,8 @@ impl App {
             backgrounds: background::Cache::default(),
             exit_after_first_frame: false,
             recovery: None,
+            pane_menu: None,
+            pending_discard: None,
             config,
             #[cfg(test)]
             stub_inputs: Vec::new(),
@@ -268,6 +274,17 @@ impl App {
             }
             Message::ReconnectTick(pane) => self.reconnect_tick(pane),
             Message::RecoveryTick => self.recovery_tick(),
+            Message::PaneMenu(_)
+            | Message::MenuSplit
+            | Message::MenuNewWith
+            | Message::PaneNotify(..)
+            | Message::PaneSaveAsProfile(_)
+            | Message::PaneExport(_)
+            | Message::PaneExportTo(..)
+            | Message::DividerMenu(..)
+            | Message::TabBarMenu
+            | Message::TabSaveToProfile
+            | Message::ConfirmDiscard(_) => self.on_menu_message(message),
             Message::CloseRequested => {
                 self.save_on_exit();
                 iced::exit()
@@ -398,6 +415,9 @@ impl App {
     pub(crate) fn on_focused(&mut self, focused: bool) {
         if focused && self.renaming.is_some() {
             self.commit_rename();
+        }
+        if !focused {
+            self.menu = None;
         }
         if focused != self.focused
             && let Some(pane) = self.active_pane()

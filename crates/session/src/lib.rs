@@ -154,6 +154,9 @@ pub enum SessionInput {
     /// SSH: add or remove a port forward at runtime (ignored by local sessions and before the
     /// shell is up).
     Forward(ForwardCmd),
+    /// Local: report [`SessionOutput::ForegroundDone`] once the program running in the shell
+    /// (now, or the next one started) ends; `false` cancels. Ignored by SSH sessions.
+    WatchForeground(bool),
     /// Close the transport; the session answers with `Exited`.
     Close,
 }
@@ -167,6 +170,11 @@ pub enum SessionOutput {
     Title(String),
     /// Terminal bell.
     Bell,
+    /// Local, with a [`SessionInput::QueryCwd`] reply: the program running in the shell
+    /// (`/proc/<pid>/comm`, sanitized), `None` when the shell itself is in front.
+    Foreground(Option<String>),
+    /// Local: the watched program ended ([`SessionInput::WatchForeground`]); its name.
+    ForegroundDone(String),
     /// Current working directory (OSC 7/1337, or an on-demand [`SessionInput::QueryCwd`] reply).
     Cwd {
         /// The reported directory.

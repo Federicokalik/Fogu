@@ -26,6 +26,8 @@ pub struct MouseConfig {
     pub wheel_lines: u32,
     /// Middle-click pastes from PRIMARY.
     pub paste_on_middle_click: bool,
+    /// What a right-click does (`terminal.right_click`).
+    pub right_click: fogu_core::config::RightClickAction,
 }
 
 /// Where the grid sits on screen.
@@ -141,6 +143,17 @@ impl MouseState {
             Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(grid.bounds) => {
                 self.wheel(*delta, grid, shell);
                 return true;
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(Button::Right)) => {
+                if let Some(p) = cursor.position_over(grid.bounds) {
+                    let shift = self.modifiers.shift();
+                    shell.publish(crate::pane_menu::right_click(
+                        grid.config.right_click,
+                        shift,
+                        p,
+                    ));
+                    return true;
+                }
             }
             Event::Mouse(mouse::Event::ButtonPressed(Button::Middle))
                 if grid.config.paste_on_middle_click && cursor.is_over(grid.bounds) =>

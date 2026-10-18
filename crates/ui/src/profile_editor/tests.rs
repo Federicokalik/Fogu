@@ -538,3 +538,24 @@ fn unknown_algorithm_names_block_save_until_unticked() {
     field(&mut app, FieldId::Alg(AlgKind::Hmac), toggle("hmac-sha1"));
     assert!(editor(&app).can_save(), "{:?}", editor(&app).issues);
 }
+
+#[test]
+fn closing_an_edited_editor_tab_asks_first() {
+    let t = tmp();
+    let mut app = app_in(&t.0);
+    profiles(&mut app, ProfilesMsg::Edit(id("pi")));
+    let tab = editor_tab(&app);
+    // Untouched: closes at once.
+    let _ = app.update(Message::CloseTab(tab));
+    assert!(app.tabs.iter().all(|t| t.id != tab));
+    profiles(&mut app, ProfilesMsg::Edit(id("pi")));
+    let tab = editor_tab(&app);
+    text(&mut app, FieldId::Port, "2200");
+    let _ = app.update(Message::CloseTab(tab));
+    assert_eq!(app.pending_discard, Some(tab), "asks first");
+    let _ = app.update(Message::ConfirmDiscard(false));
+    assert!(app.tabs.iter().any(|t| t.id == tab), "kept editing");
+    let _ = app.update(Message::CloseTab(tab));
+    let _ = app.update(Message::ConfirmDiscard(true));
+    assert!(app.tabs.iter().all(|t| t.id != tab));
+}

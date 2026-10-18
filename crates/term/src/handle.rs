@@ -266,6 +266,22 @@ impl TermHandle {
         }
     }
 
+    /// Selects everything: the whole history and the screen.
+    pub fn select_all(&mut self) {
+        let mut term = self.term.lock();
+        let top = Point::new(
+            term.grid().topmost_line(),
+            alacritty_terminal::index::Column(0),
+        );
+        let bottom = Point::new(
+            term.grid().bottommost_line(),
+            alacritty_terminal::index::Column(term.columns().saturating_sub(1)),
+        );
+        let mut selection = Selection::new(SelectionType::Simple, top, Side::Left);
+        selection.update(bottom, Side::Right);
+        term.selection = Some(selection);
+    }
+
     /// Drops the current selection.
     pub fn clear_selection(&mut self) {
         self.term.lock().selection = None;

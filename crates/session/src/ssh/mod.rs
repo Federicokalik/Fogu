@@ -175,7 +175,7 @@ impl Ui {
                 tracing::debug!("input before the shell started dropped");
             }
             Some(SessionInput::PromptReply(id, _)) => tracing::debug!(?id, "stale prompt reply"),
-            Some(SessionInput::QueryCwd) => {}
+            Some(SessionInput::QueryCwd | SessionInput::WatchForeground(_)) => {}
             Some(SessionInput::Forward(_)) => {
                 tracing::debug!("forward command before the shell started dropped");
             }

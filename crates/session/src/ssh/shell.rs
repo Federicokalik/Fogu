@@ -92,7 +92,7 @@ async fn shell(
                 Some(SessionInput::Resize(size)) => resize = Some((size, Instant::now() + RESIZE_DEBOUNCE)),
                 Some(SessionInput::PromptReply(id, _)) => tracing::debug!(?id, "stale prompt reply"),
                 // The remote cwd comes from OSC 7 only; nothing to query locally.
-                Some(SessionInput::QueryCwd) => {}
+                Some(SessionInput::QueryCwd | SessionInput::WatchForeground(_)) => {}
                 Some(SessionInput::Forward(cmd)) => lease.forward(cmd),
                 Some(SessionInput::Close) | None => break Err(Stop::Closed),
             },

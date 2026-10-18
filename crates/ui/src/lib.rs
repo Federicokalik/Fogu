@@ -24,6 +24,7 @@ mod modal;
 mod mouse;
 mod notifications;
 mod palette;
+mod pane_menu;
 mod panes;
 mod paste;
 mod profile_editor;

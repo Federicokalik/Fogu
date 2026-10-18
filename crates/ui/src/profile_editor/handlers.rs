@@ -64,6 +64,13 @@ impl App {
         self.open_editor(draft, source)
     }
 
+    /// A new profile drafted from `draft` (pane menu "Save as profile…"): a fresh id, the
+    /// editor opens on it unsaved.
+    pub(crate) fn new_profile_from(&mut self, mut draft: Profile) -> Task<Message> {
+        draft.id = unique_profile_id(&self.config, "new-profile");
+        self.open_editor(draft, Source::New)
+    }
+
     /// New ▸ Local / SSH: an empty draft.
     pub(crate) fn new_profile(&mut self, ssh: bool) -> Task<Message> {
         let kind = if ssh {

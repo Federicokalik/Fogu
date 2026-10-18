@@ -132,6 +132,29 @@ pub enum Message {
     ToastAccept(u64),
     /// A toast's display time may be up: drop the expired ones.
     ToastExpire,
+    /// Right-click on the focused pane at this window point (`terminal.right_click = menu`, or
+    /// Shift held).
+    PaneMenu(iced::Point),
+    /// The menu's "Split ▸".
+    MenuSplit,
+    /// The menu's "New terminal with ▸" / "New tab ▸": the profile list.
+    MenuNewWith,
+    /// The pane menu's notification toggles.
+    PaneNotify(PaneId, crate::pane_menu::NotifyKind),
+    /// The pane menu's "Save as profile…".
+    PaneSaveAsProfile(PaneId),
+    /// The pane menu's "Export to file…".
+    PaneExport(PaneId),
+    /// The export's save dialog answered (`None`: cancelled).
+    PaneExportTo(PaneId, Option<std::path::PathBuf>),
+    /// Right-click on a split divider of this tab.
+    DividerMenu(TabId, iced::Point),
+    /// Right-click on the tab bar's empty area.
+    TabBarMenu,
+    /// The answer to "Discard changes?" for a profile editor tab.
+    ConfirmDiscard(bool),
+    /// The tab menu's "Save to profile": the tab's colour and background into its profile.
+    TabSaveToProfile,
     /// Tab recovery: compare the layout with the last save (every second).
     RecoveryTick,
     /// The window's close button: save the session, then exit.

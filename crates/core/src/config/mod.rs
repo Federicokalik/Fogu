@@ -64,11 +64,9 @@ pub enum RightClickAction {
     /// Opens the context menu.
     #[default]
     Menu,
-    /// Pastes from the clipboard.
+    /// Pastes the primary selection (Shift+right-click still opens the menu).
     Paste,
-    /// Pastes from the clipboard (kept distinct from `Paste` so a future context menu can tell
-    /// "always clipboard" from "always primary" apart if that's ever added; today both paste
-    /// from CLIPBOARD).
+    /// Pastes the clipboard (Shift+right-click still opens the menu).
     Clipboard,
 }
 

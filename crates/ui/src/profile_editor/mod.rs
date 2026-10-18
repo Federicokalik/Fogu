@@ -43,6 +43,8 @@ pub enum Source {
 pub struct ProfileEditor {
     /// The profile as edited so far.
     pub draft: Profile,
+    /// The draft when the editor opened (closing asks first when they differ).
+    pub original: Profile,
     pub source: Source,
     /// Issues `core::validate` finds for the draft (inline, block Save).
     pub issues: Vec<ConfigIssue>,
@@ -77,6 +79,7 @@ impl ProfileEditor {
             ProfileKind::Ssh(_) => Vec::new(),
         };
         Self {
+            original: draft.clone(),
             draft,
             source,
             issues: Vec::new(),
@@ -89,6 +92,11 @@ impl ProfileEditor {
             stored: Vec::new(),
             title: String::new(),
         }
+    }
+
+    /// Unsaved changes.
+    pub fn dirty(&self) -> bool {
+        self.draft != self.original
     }
 
     /// Read-only (a `~/.ssh/config` host).

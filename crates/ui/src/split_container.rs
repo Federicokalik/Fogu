@@ -194,6 +194,16 @@ impl<'a> SplitContainer<'a> {
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 state.drag.take().is_some()
             }
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+                let Some(at) = cursor.position() else {
+                    return false;
+                };
+                if !matches!(self.divider_at(bounds, at), Some(Drag::Split(_))) {
+                    return false;
+                }
+                shell.publish(Message::DividerMenu(self.tab, at));
+                true
+            }
             _ => false,
         }
     }

@@ -135,6 +135,15 @@ impl PaneState {
     }
 }
 
+/// A pane's notification toggles (pane context menu).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PaneNotify {
+    /// Toast when the program running in the shell ends (local panes).
+    pub done: bool,
+    /// Toast when output arrives while the pane's tab is in the background.
+    pub activity: bool,
+}
+
 /// One terminal pane: its grid, the session's input side and the last drawn snapshot.
 #[derive(Debug)]
 pub struct Pane {
@@ -169,6 +178,10 @@ pub struct Pane {
     pub remote_cwd: Option<String>,
     /// Local panes: the last known working directory (OSC 7 or a cwd query), for tab recovery.
     pub local_cwd: Option<std::path::PathBuf>,
+    /// Local panes: the program in front of the shell at the last cwd query (`None`: the shell).
+    pub foreground: Option<String>,
+    /// The pane menu's "Notify when done" / "Notify on activity" toggles.
+    pub notify: PaneNotify,
     /// SSH panes: the session's port forwards (latest status of each; stopped ones dropped).
     pub forwards: Vec<ForwardStatus>,
     /// SSH panes: the connection the session runs on (shared with `reuse_session`).
@@ -210,6 +223,8 @@ impl Pane {
             warnings: Vec::new(),
             remote_cwd: None,
             local_cwd: None,
+            foreground: None,
+            notify: PaneNotify::default(),
             forwards: Vec::new(),
             connection: None,
             reconnect_in: None,

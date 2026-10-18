@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use fogu_core::{Action, EffectiveProfile, Profile, ProfileId, Side, Size, resolve};
+use fogu_core::{Action, Dir, EffectiveProfile, Profile, ProfileId, Side, Size, resolve};
 use fogu_session::{SessionHandle, SessionInput};
 use fogu_term::{Scroll, TermHandle, input, sanitize_title};
 use iced::widget::operation;
@@ -15,7 +15,7 @@ use crate::appearance::cursor_shape;
 use crate::context_menu::{ContextMenu, MENU_INPUT};
 use crate::message::{Message, PasteSource};
 use crate::notifications::{Level, Notification};
-use crate::panes::{CloseTarget, CwdFor, CwdQuery};
+use crate::panes::{CloseTarget, CwdFor, CwdQuery, SPLIT_CWD_WAIT};
 use crate::tab::{Pane, PaneId, Tab, TabId};
 use crate::tab_bar::{RENAME_INPUT, Rename};
 
@@ -289,13 +289,20 @@ impl App {
                 Some(recovery) => recovery.pending_clear = true,
                 None => return self.notify(Notification::new(Level::Info, "Tab recovery is off")),
             },
-            // Not implemented yet; the user is told rather than left guessing.
             Action::SelectAll => {
-                tracing::debug!(%action, "action not implemented yet");
-                let note = Notification::new(Level::Info, "Not available yet")
-                    .detail(format!("\"{action}\" arrives with context menus"));
-                return self.notify(note);
+                if let Some(pane) = self.active_pane_mut() {
+                    pane.term.select_all();
+                    pane.refresh();
+                }
             }
+            Action::DuplicateTab => return self.duplicate_tab(),
+            Action::CloseOtherTabs => {
+                return self.request_close(CloseTarget::OthersOf(self.active));
+            }
+            Action::CloseTabsRight => return self.request_close(CloseTarget::RightOf(self.active)),
+            Action::CopyPath => return self.copy_pane_path(),
+            Action::SwapPanes => self.swap_focused(),
+            Action::EqualizePanes => return self.update(Message::Equalize(self.active)),
         }
         Task::none()
     }
@@ -314,6 +321,82 @@ impl App {
         if let Some(id) = self.tabs.get(target).map(|t| t.id) {
             self.activate(id);
         }
+    }
+
+    /// The active pane's profile again in a new tab, in the same directory (a local shell is
+    /// asked first; an SSH pane uses its last reported cwd under `remember_cwd`).
+    fn duplicate_tab(&mut self) -> Task<Message> {
+        let Some(pane) = self.active_pane() else {
+            return Task::none();
+        };
+        let (id, profile) = (pane.id, pane.profile.clone());
+        let local_running = !pane.is_ssh() && pane.state.is_running();
+        let cwd = pane.remote_cwd.clone().map(PathBuf::from);
+        if local_running && self.ask_cwd(id, CwdFor::Duplicate) {
+            return self.after(SPLIT_CWD_WAIT, Message::CwdTimeout(id));
+        }
+        self.open_tab(&profile, cwd);
+        Task::none()
+    }
+
+    /// The focused pane's current directory to the clipboard.
+    fn copy_pane_path(&mut self) -> Task<Message> {
+        let Some(pane) = self.active_pane() else {
+            return Task::none();
+        };
+        if let Some(path) = pane.remote_cwd.clone().filter(|_| pane.is_ssh()) {
+            return clipboard::write(path);
+        }
+        let id = pane.id;
+        if !pane.is_ssh() && pane.state.is_running() && self.ask_cwd(id, CwdFor::Copy) {
+            return Task::none();
+        }
+        self.notify(
+            Notification::new(Level::Info, "Current directory unknown")
+                .detail("The shell has not reported its directory (OSC 7)."),
+        )
+    }
+
+    /// Swaps the focused pane with a neighbour (right, down, left, then up).
+    fn swap_focused(&mut self) {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == self.active) else {
+            return;
+        };
+        let focused = tab.focused;
+        let other = [Dir::Right, Dir::Down, Dir::Left, Dir::Up]
+            .into_iter()
+            .find_map(|dir| tab.layout.neighbor(&focused, dir).copied());
+        if let Some(other) = other {
+            tab.layout.swap(&focused, &other);
+        }
+    }
+
+    /// "Save to profile": the active tab's colour and background become its stored profile's.
+    pub(crate) fn save_tab_to_profile(&mut self) -> Task<Message> {
+        self.menu = None;
+        let Some(tab) = self.active_tab() else {
+            return Task::none();
+        };
+        let Some(old) = self
+            .config
+            .profiles
+            .iter()
+            .find(|p| p.id == tab.profile.id)
+            .cloned()
+        else {
+            return Task::none();
+        };
+        let mut new = old.clone();
+        new.color = tab.color;
+        match &tab.background {
+            fogu_core::TabBackground::Profile => {}
+            fogu_core::TabBackground::None => new.background = None,
+            fogu_core::TabBackground::Set(bg) => new.background = Some(bg.clone()),
+        }
+        self.save_edits(&[fogu_core::config::ProfileEdit::Update {
+            old: Box::new(old),
+            new: Box::new(new),
+        }])
     }
 
     /// Asks every running local pane for its cwd (tab recovery keeps the answers).
@@ -346,7 +429,12 @@ impl App {
             return Task::none();
         };
         if tab.panes.is_empty() {
-            return self.remove_tab(id); // a profile editor tab
+            // A profile editor tab: unsaved changes are confirmed first.
+            if tab.editor.as_ref().is_some_and(|e| e.dirty()) {
+                self.pending_discard = Some(id);
+                return Task::none();
+            }
+            return self.remove_tab(id);
         }
         let panes: Vec<PaneId> = tab.panes.keys().copied().collect();
         Task::batch(panes.into_iter().map(|pane| self.close_pane(pane)))
@@ -427,7 +515,10 @@ impl App {
                 let ssh = self
                     .active_tab()
                     .is_some_and(|t| t.panes.values().any(|p| p.sftp.is_some()));
-                self.menu = Some(ContextMenu::tab(self.tab_bar_cursor, ssh));
+                let stored = self
+                    .active_tab()
+                    .is_some_and(|t| self.config.profiles.iter().any(|p| p.id == t.profile.id));
+                self.menu = Some(ContextMenu::tab(self.tab_bar_cursor, ssh, stored));
             }
             Message::MenuColors => {
                 let anchor = self.menu.as_ref().map_or(self.tab_bar_cursor, |m| m.anchor);

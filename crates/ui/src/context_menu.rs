@@ -60,6 +60,8 @@ pub struct MenuItem {
     pub swatch: Option<RgbColor>,
     /// Hint shown on hover (e.g. why the item is disabled).
     pub tooltip: Option<&'static str>,
+    /// A toggle: drawn with a check mark when `Some(true)`.
+    pub checked: Option<bool>,
 }
 
 impl MenuItem {
@@ -72,7 +74,36 @@ impl MenuItem {
             separator: false,
             swatch: None,
             tooltip: None,
+            checked: None,
         }
+    }
+
+    /// A greyed-out item; `why` is shown on hover.
+    #[must_use]
+    pub fn disabled(mut self, why: &'static str) -> Self {
+        self.enabled = false;
+        self.tooltip = Some(why);
+        self
+    }
+
+    /// Enabled only when `on`; `why` explains otherwise.
+    #[must_use]
+    pub fn enabled_if(self, on: bool, why: &'static str) -> Self {
+        if on { self } else { self.disabled(why) }
+    }
+
+    /// With a separator line above it.
+    #[must_use]
+    pub fn after_separator(mut self) -> Self {
+        self.separator = true;
+        self
+    }
+
+    /// A toggle in state `on`.
+    #[must_use]
+    pub fn checked(mut self, on: bool) -> Self {
+        self.checked = Some(on);
+        self
     }
 }
 
@@ -125,14 +156,15 @@ pub struct ContextMenu {
     pub items: Vec<MenuItem>,
     pub input: Option<MenuInput>,
     pub slider: Option<MenuSlider>,
+    /// The item the arrow keys moved to.
+    pub selected: Option<usize>,
 }
 
 impl ContextMenu {
     /// The tab menu (applies to the active tab: right-click activates first); `ssh` adds the
-    /// SFTP panel toggle.
-    pub fn tab(anchor: Point, ssh: bool) -> Self {
-        let mut close = MenuItem::new("Close", MenuAction::Run(Action::CloseTab));
-        close.separator = true;
+    /// SFTP panel and port forwarding items, `stored` enables "Save to profile".
+    pub fn tab(anchor: Point, ssh: bool, stored: bool) -> Self {
+        let run = |label: &str, action| MenuItem::new(label, MenuAction::Run(action));
         let mut items = vec![
             MenuItem::new("Rename…", MenuAction::Run(Action::RenameTab)),
             MenuItem::new("Color ▸", MenuAction::Ui(Message::MenuColors)),
@@ -141,21 +173,26 @@ impl ContextMenu {
                 MenuAction::Ui(Message::Background(crate::background_menu::BgMsg::Menu)),
             ),
         ];
+        items.extend([
+            run("Duplicate", Action::DuplicateTab).after_separator(),
+            MenuItem::new("Split ▸", MenuAction::Ui(Message::MenuSplit)),
+            MenuItem::new("Save to profile", MenuAction::Ui(Message::TabSaveToProfile))
+                .enabled_if(stored, "Only for tabs of a stored profile")
+                .after_separator(),
+        ]);
         if ssh {
-            items.push(MenuItem::new(
-                "SFTP panel",
-                MenuAction::Run(Action::ToggleSftp),
-            ));
+            items.push(run("SFTP panel", Action::ToggleSftp).after_separator());
             items.push(MenuItem::new(
                 "Port forwarding…",
                 MenuAction::Ui(Message::Forwards(crate::forwards_dialog::ForwardsMsg::Open)),
             ));
         }
-        items.push(close);
-        items.push(MenuItem::new(
-            "Clear saved sessions…",
-            MenuAction::Run(Action::ClearSavedSessions),
-        ));
+        items.extend([
+            run("Close others", Action::CloseOtherTabs).after_separator(),
+            run("Close tabs to the right", Action::CloseTabsRight),
+            run("Close", Action::CloseTab),
+            run("Clear saved sessions…", Action::ClearSavedSessions).after_separator(),
+        ]);
         Self::new(anchor, items)
     }
 
@@ -166,7 +203,35 @@ impl ContextMenu {
             items,
             input: None,
             slider: None,
+            selected: None,
         }
+    }
+
+    /// Moves the keyboard selection to the next (`down`) or previous enabled item, wrapping.
+    pub fn move_selection(&mut self, down: bool) {
+        let enabled: Vec<usize> = (0..self.items.len())
+            .filter(|i| self.items.get(*i).is_some_and(|it| it.enabled))
+            .collect();
+        let len = enabled.len();
+        if len == 0 {
+            return;
+        }
+        let at = self
+            .selected
+            .and_then(|s| enabled.iter().position(|i| *i == s));
+        let next = match at {
+            Some(at) if down => (at + 1) % len,
+            Some(at) => (at + len - 1) % len,
+            None if down => 0,
+            None => len - 1,
+        };
+        self.selected = enabled.get(next).copied();
+    }
+
+    /// What Enter does: the selected item's message.
+    pub fn chosen(&self) -> Option<Message> {
+        let item = self.items.get(self.selected?)?;
+        item.enabled.then(|| item.action.message())
     }
 
     /// The tab colour palette: presets, "None" and a custom hex field.
@@ -208,15 +273,28 @@ impl ContextMenu {
         menu
     }
 
-    /// Top-left corner clamped so the menu stays inside `window`.
+    /// Top-left corner: at the anchor, flipped to the anchor's left / above it when the menu
+    /// would cross the window's right / bottom edge, and kept inside the window.
     fn position(&self, window: Size) -> Point {
         let extra = usize::from(self.input.is_some()) + usize::from(self.slider.is_some());
         let rows = self.items.len() + extra * 2;
         let height = crate::metrics::cells_f32(rows) * ROW_H + 8.0;
         Point::new(
-            self.anchor.x.min(window.width - MENU_W).max(0.0),
-            self.anchor.y.min(window.height - height).max(0.0),
+            flip(self.anchor.x, MENU_W, window.width),
+            flip(self.anchor.y, height, window.height),
         )
+    }
+}
+
+/// Start of a `size`-long span opened at `at` inside `0..limit`: `at` when it fits, else ending
+/// at `at` (flipped), else clamped.
+fn flip(at: f32, size: f32, limit: f32) -> f32 {
+    if at + size <= limit {
+        at
+    } else if at - size >= 0.0 {
+        at - size
+    } else {
+        (limit - size).max(0.0)
     }
 }
 
@@ -253,8 +331,11 @@ fn swatch<'a>(color: Option<RgbColor>) -> Element<'a, Message> {
         .into()
 }
 
-fn item_view(item: &MenuItem) -> Element<'_, Message> {
+fn item_view(item: &MenuItem, selected: bool) -> Element<'_, Message> {
     let mut label = row![].spacing(8).align_y(Alignment::Center);
+    if let Some(on) = item.checked {
+        label = label.push(text(if on { "✓" } else { " " }).size(13).width(12));
+    }
     if item.swatch.is_some() {
         label = label.push(swatch(item.swatch));
     }
@@ -262,7 +343,11 @@ fn item_view(item: &MenuItem) -> Element<'_, Message> {
     let button = button(label)
         .width(Length::Fill)
         .padding([4, 10])
-        .style(button::text)
+        .style(if selected {
+            button::secondary
+        } else {
+            button::text
+        })
         .on_press_maybe(item.enabled.then(|| item.action.message()));
     match item.tooltip {
         Some(hint) => tooltip(
@@ -279,11 +364,11 @@ fn item_view(item: &MenuItem) -> Element<'_, Message> {
 
 fn menu_box(menu: &ContextMenu) -> Element<'_, Message> {
     let mut col = column![].spacing(2);
-    for item in &menu.items {
+    for (i, item) in menu.items.iter().enumerate() {
         if item.separator {
             col = col.push(rule::horizontal(1));
         }
-        col = col.push(item_view(item));
+        col = col.push(item_view(item, menu.selected == Some(i)));
     }
     if let Some(s) = &menu.slider {
         col = col.push(rule::horizontal(1)).push(
@@ -359,10 +444,40 @@ mod tests {
     }
 
     #[test]
-    fn menu_stays_inside_the_window() {
-        let menu = ContextMenu::tab(Point::new(990.0, 5.0), false);
+    fn menus_flip_inward_near_the_edges() {
+        let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+        assert!(close(flip(100.0, 200.0, 1000.0), 100.0), "fits");
+        assert!(
+            close(flip(990.0, 200.0, 1000.0), 790.0),
+            "opens to the left"
+        );
+        assert!(close(flip(50.0, 200.0, 120.0), 0.0), "too big: clamped");
+        let menu = ContextMenu::tab(Point::new(990.0, 640.0), false, true);
         let at = menu.position(Size::new(1000.0, 650.0));
-        assert!((at.x - (1000.0 - MENU_W)).abs() < f32::EPSILON);
-        assert!((at.y - 5.0).abs() < f32::EPSILON);
+        assert!(close(at.x, 990.0 - MENU_W) && at.y < 640.0, "{at:?}");
+    }
+
+    #[test]
+    fn arrows_skip_disabled_items_and_enter_runs_the_selection() {
+        let mut menu = ContextMenu::new(
+            Point::ORIGIN,
+            vec![
+                MenuItem::new("a", MenuAction::Run(Action::Copy)),
+                MenuItem::new("b", MenuAction::Run(Action::Paste)).disabled("no"),
+                MenuItem::new("c", MenuAction::Run(Action::Clear)),
+            ],
+        );
+        assert!(menu.chosen().is_none());
+        menu.move_selection(true);
+        assert_eq!(menu.selected, Some(0));
+        menu.move_selection(true);
+        assert_eq!(menu.selected, Some(2), "b is skipped");
+        menu.move_selection(true);
+        assert_eq!(menu.selected, Some(0), "wraps");
+        menu.move_selection(false);
+        assert!(matches!(
+            menu.chosen(),
+            Some(Message::Action(Action::Clear))
+        ));
     }
 }

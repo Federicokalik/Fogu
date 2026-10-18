@@ -51,6 +51,21 @@ fn current_cwd(master: &OwnedFd, shell_pid: Option<u32>) -> Option<PathBuf> {
     })
 }
 
+/// The program in front of the shell (`/proc/<pgid>/comm`), `None` when the shell itself is.
+fn foreground(master: &OwnedFd, shell_pid: Option<u32>) -> Option<String> {
+    let group = rustix::termios::tcgetpgrp(master).ok()?;
+    let pid = u32::try_from(group.as_raw_nonzero().get()).ok()?;
+    if Some(pid) == shell_pid {
+        return None;
+    }
+    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    let name = crate::sanitize_remote(name.trim(), 64, false);
+    (!name.is_empty()).then_some(name)
+}
+
+/// How often a watched foreground program is checked.
+const WATCH_EVERY: Duration = Duration::from_secs(1);
+
 /// A spawned shell and our ends of its PTY.
 struct Local {
     reader: OwnedReadPty,
@@ -109,6 +124,9 @@ async fn run_loop(
     in_rx: &mut Receiver<SessionInput>,
     buf: &mut [u8],
 ) -> Result<End, Gone> {
+    // `WatchForeground`: the program seen in front (`Some(None)` = armed, none seen yet).
+    let mut watching: Option<Option<String>> = None;
+    let mut watch_tick = tokio::time::interval(WATCH_EVERY);
     loop {
         let sync_deadline = pump.term.sync_timeout();
         let chunk = pump.pending.len().min(WRITE_CHUNK);
@@ -130,6 +148,11 @@ async fn run_loop(
                     if let Some(path) = current_cwd(&local.master, local.child.id()) {
                         pump.emit(SessionOutput::Cwd { path, remote: false }).await?;
                     }
+                    let name = foreground(&local.master, local.child.id());
+                    pump.emit(SessionOutput::Foreground(name)).await?;
+                }
+                Some(SessionInput::WatchForeground(on)) => {
+                    watching = on.then(|| foreground(&local.master, local.child.id()));
                 }
                 Some(SessionInput::Close) | None => return Ok(End::Close),
             },
@@ -153,6 +176,13 @@ async fn run_loop(
             },
             () = sleep_until(sync_deadline.map_or_else(Instant::now, Instant::from_std)),
                 if sync_deadline.is_some() => pump.feed(&[]).await?,
+            _ = watch_tick.tick(), if watching.is_some() => {
+                let now = foreground(&local.master, local.child.id());
+                match (watching.take().flatten(), now) {
+                    (Some(name), None) => pump.emit(SessionOutput::ForegroundDone(name)).await?,
+                    (_, now) => watching = Some(now),
+                }
+            }
             status = local.child.wait() => return Ok(End::Exited(status)),
         }
     }

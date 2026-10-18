@@ -18,7 +18,7 @@ use crate::tab::{Pane, PaneId, TabId};
 /// Transport resize debounce during drags.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(50);
 /// How long a split waits for the focused pane's cwd before opening without one.
-const SPLIT_CWD_WAIT: Duration = Duration::from_millis(500);
+pub(crate) const SPLIT_CWD_WAIT: Duration = Duration::from_millis(500);
 
 /// What a pending cwd query is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +27,10 @@ pub(crate) enum CwdFor {
     Tab,
     /// `SplitRight`/`SplitDown`: open the new pane there, on this side of the queried pane.
     Split(Side),
+    /// `DuplicateTab`: open the pane's profile there in a new tab.
+    Duplicate,
+    /// `CopyPath`: put it on the clipboard.
+    Copy,
 }
 
 /// What a close request (keymap, `×`, middle-click) is for; kept while the "close live SSH
@@ -37,6 +41,10 @@ pub(crate) enum CloseTarget {
     Tab(TabId),
     /// One pane.
     Pane(PaneId),
+    /// Every tab but this one.
+    OthersOf(TabId),
+    /// The tabs right of this one.
+    RightOf(TabId),
 }
 
 /// A `QueryCwd` sent to `pane` at `asked`.
@@ -111,9 +119,18 @@ impl App {
         let Some(query) = self.pending_cwd.filter(|q| q.pane == pane) else {
             return;
         };
-        if let CwdFor::Split(side) = query.purpose {
-            self.pending_cwd = None;
-            self.split_now(pane, side, None, None);
+        match query.purpose {
+            CwdFor::Split(side) => {
+                self.pending_cwd = None;
+                self.split_now(pane, side, None, None);
+            }
+            CwdFor::Duplicate => {
+                self.pending_cwd = None;
+                if let Some(profile) = self.pane(pane).map(|p| p.profile.clone()) {
+                    self.open_tab(&profile, None);
+                }
+            }
+            CwdFor::Tab | CwdFor::Copy => {}
         }
     }
 
@@ -133,12 +150,12 @@ impl App {
     /// go (`warn_on_close`), otherwise closes now.
     pub(crate) fn request_close(&mut self, target: CloseTarget) -> Task<Message> {
         let warn = match target {
-            CloseTarget::Tab(id) => self
-                .tabs
-                .iter()
-                .find(|t| t.id == id)
-                .is_some_and(|t| t.panes.values().any(|p| self.warns_on_close(p))),
             CloseTarget::Pane(id) => self.pane(id).is_some_and(|p| self.warns_on_close(p)),
+            _ => self
+                .closing_tabs(target)
+                .iter()
+                .filter_map(|id| self.tabs.iter().find(|t| t.id == *id))
+                .any(|t| t.panes.values().any(|p| self.warns_on_close(p))),
         };
         if warn {
             self.pending_close = Some(target);
@@ -156,23 +173,47 @@ impl App {
     }
 
     fn close_now(&mut self, target: CloseTarget) -> Task<Message> {
+        if let CloseTarget::Pane(id) = target {
+            return self.close_pane(id);
+        }
+        let tabs = self.closing_tabs(target);
+        Task::batch(
+            tabs.into_iter()
+                .map(|id| self.close_tab(id))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// The tabs a tab-level `target` closes, left to right.
+    fn closing_tabs(&self, target: CloseTarget) -> Vec<TabId> {
+        let index = |id| self.tabs.iter().position(|t| t.id == id);
+        let ids = self.tabs.iter().enumerate().map(|(i, t)| (i, t.id));
         match target {
-            CloseTarget::Tab(id) => self.close_tab(id),
-            CloseTarget::Pane(id) => self.close_pane(id),
+            CloseTarget::Tab(id) => vec![id],
+            CloseTarget::Pane(_) => Vec::new(),
+            CloseTarget::OthersOf(keep) => ids
+                .filter(|(_, id)| *id != keep)
+                .map(|(_, id)| id)
+                .collect(),
+            CloseTarget::RightOf(from) => match index(from) {
+                Some(at) => ids.filter(|(i, _)| *i > at).map(|(_, id)| id).collect(),
+                None => Vec::new(),
+            },
         }
     }
 
     /// What closing `target` stops: whether an SSH connection ends, and how many listening
     /// port forwards stop. A connection other open panes still use keeps its forwards.
     fn close_effects(&self, target: CloseTarget) -> (bool, usize) {
-        let closing: Vec<&Pane> = match target {
-            CloseTarget::Tab(id) => self
-                .tabs
+        let closing: Vec<&Pane> = if let CloseTarget::Pane(id) = target {
+            self.pane(id).into_iter().collect()
+        } else {
+            let tabs = self.closing_tabs(target);
+            self.tabs
                 .iter()
-                .filter(|t| t.id == id)
+                .filter(|t| tabs.contains(&t.id))
                 .flat_map(|t| t.panes.values())
-                .collect(),
-            CloseTarget::Pane(id) => self.pane(id).into_iter().collect(),
+                .collect()
         };
         let closing_ids: Vec<PaneId> = closing.iter().map(|p| p.id).collect();
         let still_used = |conn| {
@@ -317,6 +358,7 @@ impl App {
                 }
             }
             Message::Equalize(tab) => {
+                self.menu = None;
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab) {
                     tab.layout.equalize();
                 }

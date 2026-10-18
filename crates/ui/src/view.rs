@@ -44,6 +44,7 @@ impl App {
         let mouse = MouseConfig {
             wheel_lines: self.config.terminal.wheel_lines,
             paste_on_middle_click: self.config.terminal.paste_on_middle_click,
+            right_click: self.config.terminal.right_click,
         };
         let (backdrop, terminal_alpha) = self.backdrop(tab);
         let panes = tab
@@ -158,7 +159,8 @@ impl App {
             .paste_modal()
             .or_else(|| self.close_modal())
             .or_else(|| self.delete_modal())
-            .or_else(|| self.clear_sessions_modal());
+            .or_else(|| self.clear_sessions_modal())
+            .or_else(|| self.discard_modal());
         let base = overlay(base, modal);
         let dialog = self
             .secret_dialog

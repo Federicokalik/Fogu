@@ -246,8 +246,28 @@ impl App {
             return Task::none();
         };
         match event {
-            // Inactive panes keep `dirty` set (no further wakeups) until activated.
+            // Inactive panes keep `dirty` set (no further wakeups) until activated, so this
+            // toasts once per stretch in the background.
+            SessionOutput::Wakeup if !is_active && pane.notify.activity => {
+                let title = tab.title().to_owned();
+                return self.notify(
+                    Notification::new(Level::Info, "Activity")
+                        .detail(format!("New output in \"{title}\"")),
+                );
+            }
             SessionOutput::Wakeup if is_active => pane.refresh(),
+            SessionOutput::Foreground(name) => {
+                pane.foreground = name;
+                self.refresh_pane_menu(pane_id);
+            }
+            SessionOutput::ForegroundDone(name) => {
+                pane.notify.done = false;
+                let title = tab.title().to_owned();
+                return self.notify(
+                    Notification::new(Level::Info, format!("{name} finished"))
+                        .detail(format!("in \"{title}\"")),
+                );
+            }
             SessionOutput::Title(title) => {
                 pane.title_from_osc = (!title.is_empty()).then_some(title);
             }
@@ -268,7 +288,7 @@ impl App {
             SessionOutput::Cwd { path, remote: true } => {
                 return self.on_remote_cwd(pane_id, &path);
             }
-            SessionOutput::Cwd { path, remote } => self.on_cwd(pane_id, path, remote),
+            SessionOutput::Cwd { path, remote } => return self.on_cwd(pane_id, path, remote),
             SessionOutput::Prompt(id, kind, via) => return self.on_prompt(pane_id, id, kind, via),
             SessionOutput::ForwardStatus(status) => {
                 crate::forwards_dialog::apply_status(&mut pane.forwards, status);
@@ -292,7 +312,7 @@ impl App {
 
     /// A cwd report. Attacker-controlled text: only logged sanitized, and only a local
     /// (`remote: false`) path answering a fresh query opens a tab or a split.
-    fn on_cwd(&mut self, pane_id: PaneId, path: PathBuf, remote: bool) {
+    fn on_cwd(&mut self, pane_id: PaneId, path: PathBuf, remote: bool) -> Task<Message> {
         tracing::debug!(
             cwd = %sanitize_title(&path.to_string_lossy()),
             remote,
@@ -302,10 +322,10 @@ impl App {
             pane.local_cwd = Some(path.clone());
         }
         let Some(query) = self.pending_cwd else {
-            return;
+            return Task::none();
         };
         if query.pane != pane_id || remote || query.asked.elapsed() > CWD_QUERY_TIMEOUT {
-            return;
+            return Task::none();
         }
         self.pending_cwd = None;
         match query.purpose {
@@ -318,7 +338,14 @@ impl App {
                 self.open_tab(&profile, Some(path));
             }
             CwdFor::Split(side) => self.split_now(pane_id, side, Some(path), None),
+            CwdFor::Duplicate => {
+                if let Some(profile) = self.pane(pane_id).map(|p| p.profile.clone()) {
+                    self.open_tab(&profile, Some(path));
+                }
+            }
+            CwdFor::Copy => return clipboard::write(path.to_string_lossy().into_owned()),
         }
+        Task::none()
     }
 }
 

@@ -108,6 +108,18 @@ pub enum Action {
     ToggleProfiles,
     /// Deletes the saved tab-recovery files (asks first).
     ClearSavedSessions,
+    /// Opens the active tab's profile again in a new tab, in the same directory.
+    DuplicateTab,
+    /// Closes every tab but the active one.
+    CloseOtherTabs,
+    /// Closes the tabs to the right of the active one.
+    CloseTabsRight,
+    /// Copies the focused pane's current directory.
+    CopyPath,
+    /// Swaps the focused pane with its neighbour in the same split.
+    SwapPanes,
+    /// Gives every pane of the active tab the same share.
+    EqualizePanes,
 }
 
 /// An `Action` string was not one of the known slugs (e.g. `"new-tab"`, `"go-to-tab-3"`,
@@ -149,6 +161,12 @@ impl fmt::Display for Action {
             Self::ToggleSftp => write!(f, "toggle-sftp"),
             Self::ToggleProfiles => write!(f, "toggle-profiles"),
             Self::ClearSavedSessions => write!(f, "clear-saved-sessions"),
+            Self::DuplicateTab => write!(f, "duplicate-tab"),
+            Self::CloseOtherTabs => write!(f, "close-other-tabs"),
+            Self::CloseTabsRight => write!(f, "close-tabs-right"),
+            Self::CopyPath => write!(f, "copy-current-path"),
+            Self::SwapPanes => write!(f, "swap-panes"),
+            Self::EqualizePanes => write!(f, "equalize-panes"),
         }
     }
 }
@@ -197,6 +215,12 @@ impl FromStr for Action {
             "toggle-sftp" => Self::ToggleSftp,
             "toggle-profiles" => Self::ToggleProfiles,
             "clear-saved-sessions" => Self::ClearSavedSessions,
+            "duplicate-tab" => Self::DuplicateTab,
+            "close-other-tabs" => Self::CloseOtherTabs,
+            "close-tabs-right" => Self::CloseTabsRight,
+            "copy-current-path" => Self::CopyPath,
+            "swap-panes" => Self::SwapPanes,
+            "equalize-panes" => Self::EqualizePanes,
             _ => return Err(ActionParseError(s.to_owned())),
         })
     }
@@ -305,6 +329,12 @@ impl Hotkeys {
         // M = manager.
         bindings.insert(Action::ToggleProfiles, chords(&["Ctrl-Shift-M"]));
         bindings.insert(Action::ClearSavedSessions, chords(&[]));
+        bindings.insert(Action::DuplicateTab, chords(&[]));
+        bindings.insert(Action::CloseOtherTabs, chords(&[]));
+        bindings.insert(Action::CloseTabsRight, chords(&[]));
+        bindings.insert(Action::CopyPath, chords(&[]));
+        bindings.insert(Action::SwapPanes, chords(&[]));
+        bindings.insert(Action::EqualizePanes, chords(&[]));
         Self::new(bindings)
     }
 
@@ -396,6 +426,12 @@ paste = []"#,
             Action::ToggleSftp,
             Action::ToggleProfiles,
             Action::ClearSavedSessions,
+            Action::DuplicateTab,
+            Action::CloseOtherTabs,
+            Action::CloseTabsRight,
+            Action::CopyPath,
+            Action::SwapPanes,
+            Action::EqualizePanes,
         ];
         for action in actions {
             let s = action.to_string();
