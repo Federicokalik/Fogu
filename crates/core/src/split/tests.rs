@@ -240,3 +240,28 @@ fn map_transforms_leaves_and_preserves_shape() {
     let round_tripped = mapped.map(|s| s.parse::<u32>().unwrap());
     assert_eq!(round_tripped, t);
 }
+
+#[test]
+fn graft_puts_a_whole_tree_beside_the_target_and_still_tiles() {
+    let mut tree = build(&[(2, 0, Side::Right)]);
+    let mut other = SplitTree::new(10);
+    assert!(other.split(&10, Side::Bottom, 11));
+    assert!(tree.graft(&2, Side::Bottom, other));
+    assert_eq!(tree.leaves(), vec![&0, &2, &10, &11]);
+    let rects = tree.layout(area(), 0.0);
+    let total: f32 = rects.iter().map(|(_, r)| r.w * r.h).sum();
+    assert!((total - area().w * area().h).abs() < 1.0, "tiles the area");
+    for (i, (_, a)) in rects.iter().enumerate() {
+        for (_, b) in rects.iter().skip(i + 1) {
+            assert!(!rects_overlap(*a, *b));
+        }
+    }
+    // 0 keeps the left half; 2 and the grafted 10/11 share the right half.
+    let one = rects.iter().find(|(v, _)| *v == 0).unwrap().1;
+    assert!((one.w - area().w / 2.0).abs() < 1.0);
+    assert!(
+        !tree.graft(&99, Side::Left, SplitTree::new(5)),
+        "unknown target"
+    );
+    assert_eq!(tree.leaves().len(), 4);
+}

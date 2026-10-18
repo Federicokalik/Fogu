@@ -318,6 +318,9 @@ pub struct Tab {
     pub background: TabBackground,
     /// A profile editor tab: no panes, the editor page instead of the split container.
     pub editor: Option<Box<ProfileEditor>>,
+    /// "Maximize pane": the one-pane tree shown instead of `layout` until the layout or the
+    /// focus changes.
+    pub solo: Option<SplitTree<PaneId>>,
 }
 
 impl Tab {
@@ -334,6 +337,7 @@ impl Tab {
             panes: BTreeMap::from([(pane.id, pane)]),
             sftp: None,
             editor: None,
+            solo: None,
         }
     }
 
@@ -352,6 +356,7 @@ impl Tab {
             profile: Profile::default_shell(),
             background: TabBackground::None,
             editor: Some(Box::new(editor)),
+            solo: None,
         }
     }
 

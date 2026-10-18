@@ -120,6 +120,10 @@ pub enum Action {
     SwapPanes,
     /// Gives every pane of the active tab the same share.
     EqualizePanes,
+    /// Shows only the focused pane in its tab, or all of them again.
+    MaximizePane,
+    /// Grows the focused pane toward `Dir` by `terminal.pane_resize_step`.
+    ResizePane(Dir),
 }
 
 /// An `Action` string was not one of the known slugs (e.g. `"new-tab"`, `"go-to-tab-3"`,
@@ -141,6 +145,8 @@ impl fmt::Display for Action {
             Self::SplitDown => write!(f, "split-down"),
             Self::ClosePane => write!(f, "close-pane"),
             Self::PaneNav(dir) => write!(f, "pane-nav-{}", dir.as_str()),
+            Self::ResizePane(dir) => write!(f, "resize-pane-{}", dir.as_str()),
+            Self::MaximizePane => write!(f, "pane-maximize"),
             Self::Copy => write!(f, "copy"),
             Self::Paste => write!(f, "paste"),
             Self::PastePrimary => write!(f, "paste-primary"),
@@ -186,6 +192,11 @@ impl FromStr for Action {
                 .map(Self::PaneNav)
                 .ok_or_else(|| ActionParseError(s.to_owned()));
         }
+        if let Some(rest) = s.strip_prefix("resize-pane-") {
+            return Dir::parse(rest)
+                .map(Self::ResizePane)
+                .ok_or_else(|| ActionParseError(s.to_owned()));
+        }
         Ok(match s {
             "new-tab" => Self::NewTab,
             "close-tab" => Self::CloseTab,
@@ -221,6 +232,7 @@ impl FromStr for Action {
             "copy-current-path" => Self::CopyPath,
             "swap-panes" => Self::SwapPanes,
             "equalize-panes" => Self::EqualizePanes,
+            "pane-maximize" => Self::MaximizePane,
             _ => return Err(ActionParseError(s.to_owned())),
         })
     }
@@ -335,6 +347,16 @@ impl Hotkeys {
         bindings.insert(Action::CopyPath, chords(&[]));
         bindings.insert(Action::SwapPanes, chords(&[]));
         bindings.insert(Action::EqualizePanes, chords(&[]));
+        bindings.insert(Action::MaximizePane, chords(&["Ctrl-Alt-Enter"]));
+        // Ctrl+Alt+arrows already move focus, Shift makes them resize.
+        for (dir, key) in [
+            (Dir::Left, "Ctrl-Alt-Shift-Left"),
+            (Dir::Right, "Ctrl-Alt-Shift-Right"),
+            (Dir::Up, "Ctrl-Alt-Shift-Up"),
+            (Dir::Down, "Ctrl-Alt-Shift-Down"),
+        ] {
+            bindings.insert(Action::ResizePane(dir), chords(&[key]));
+        }
         Self::new(bindings)
     }
 
@@ -432,6 +454,8 @@ paste = []"#,
             Action::CopyPath,
             Action::SwapPanes,
             Action::EqualizePanes,
+            Action::MaximizePane,
+            Action::ResizePane(Dir::Up),
         ];
         for action in actions {
             let s = action.to_string();

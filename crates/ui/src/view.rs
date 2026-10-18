@@ -3,11 +3,12 @@
 //! keyboard events).
 
 use iced::keyboard::{self, key::Named};
-use iced::widget::column;
+use iced::widget::{column, container};
 use iced::{Element, Subscription, event, window};
 
 use crate::app::App;
 use crate::context_menu;
+use crate::drag::{DragMsg, Payload};
 use crate::message::Message;
 use crate::modal::{self, overlay};
 use crate::mouse::MouseConfig;
@@ -20,6 +21,9 @@ use crate::split_container::SplitContainer;
 use crate::subscription::{session_events, sftp_events};
 use crate::tab_bar::TabBar;
 use crate::terminal_view::TerminalView;
+
+/// Height of the drag strip above each pane of a split tab.
+const GRIP_H: f32 = 6.0;
 
 impl App {
     /// Tab bar above the active tab's split container, plus modal / menu overlays.
@@ -47,8 +51,9 @@ impl App {
             right_click: self.config.terminal.right_click,
         };
         let (backdrop, terminal_alpha) = self.backdrop(tab);
-        let panes = tab
-            .layout
+        let layout = tab.solo.as_ref().unwrap_or(&tab.layout);
+        let grips = layout.leaves().len() > 1;
+        let panes = layout
             .leaves()
             .into_iter()
             .filter_map(|id| tab.panes.get(id))
@@ -74,6 +79,11 @@ impl App {
                 .default_bg_alpha(terminal_alpha)
                 .into();
                 let view = view.map(move |message| message.for_pane(id));
+                let view = if grips {
+                    column![self.pane_grip(id), view].into()
+                } else {
+                    view
+                };
                 // A prompt is modal over the pane that asked, not over the whole window.
                 match &pane.prompt {
                     Some(state) => (id, modal::over(view, prompt::view(id, state))),
@@ -85,12 +95,15 @@ impl App {
         divider.a = 0.3;
         let mut split = SplitContainer::new(
             tab.id,
-            &tab.layout,
+            layout,
             panes,
             to_iced(self.colors.background()),
             divider,
         )
         .backdrop(backdrop);
+        if let Some(drag) = self.drag.as_ref().filter(|d| d.started) {
+            split = split.dropping(drag.target, self.look.accent);
+        }
         // Focused pane border: the tab colour, else the accent once there is more than one pane.
         let border = tab
             .color
@@ -182,10 +195,37 @@ impl App {
             self.look,
         );
         let base = context_menu::overlay(base, self.menu.as_ref(), self.window_size, self.look);
+        let base = match self.drag_label() {
+            Some((at, label)) => {
+                let look = self.look;
+                let ghost = container(iced::widget::text(label).size(13))
+                    .padding([4, 10])
+                    .style(move |_theme: &iced::Theme| context_menu::panel_style(look));
+                let placed = container(ghost)
+                    .padding(iced::Padding::ZERO.left(at.x + 14.0).top(at.y + 14.0))
+                    .width(iced::Length::Fill)
+                    .height(iced::Length::Fill);
+                iced::widget::stack![base, placed].into()
+            }
+            None => base,
+        };
         if self.fullscreen {
             return base;
         }
         iced::widget::stack![base, crate::tab_bar::resize_edges()].into()
+    }
+
+    /// The strip above a pane (tabs with several panes) that drags it to another place.
+    fn pane_grip(&self, pane: crate::tab::PaneId) -> Element<'_, Message> {
+        let look = self.look;
+        let strip = container(iced::widget::space())
+            .width(iced::Length::Fill)
+            .height(GRIP_H)
+            .style(move |_theme: &iced::Theme| container::background(look.raised));
+        iced::widget::mouse_area(strip)
+            .interaction(iced::mouse::Interaction::Grab)
+            .on_press(Message::Drag(DragMsg::Start(Payload::Pane(pane))))
+            .into()
     }
 
     /// The port forwarding dialog, while its pane exists.
@@ -232,6 +272,10 @@ impl App {
                 Some(Message::Modifiers(mods))
             }
             iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Message::MousePressed),
+            // Always listened to: a quick click releases before a drag-only subscription starts.
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                Some(Message::Drag(DragMsg::Release))
+            }
             // X11 only (winit 0.30); one event per file.
             iced::Event::Window(window::Event::FileDropped(path)) => {
                 Some(Message::Desktop(sftp::DesktopMsg::Dropped(path)))
@@ -241,6 +285,15 @@ impl App {
         let frame = self
             .exit_after_first_frame
             .then(|| window::frames().map(|_| Message::Frame));
-        Subscription::batch(sessions.chain([window_events]).chain(frame))
+        // Pointer moves only reach `update` while a drag may be under way (releases always do).
+        let drag = self.drag.is_some().then(|| {
+            event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Some(Message::Drag(DragMsg::Move(position)))
+                }
+                _ => None,
+            })
+        });
+        Subscription::batch(sessions.chain([window_events]).chain(frame).chain(drag))
     }
 }

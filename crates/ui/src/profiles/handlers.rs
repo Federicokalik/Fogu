@@ -242,7 +242,7 @@ impl App {
     }
 
     /// Records `id` in Recent and saves the list (errors are logged: Recent is a convenience).
-    fn remember(&mut self, id: &ProfileId) {
+    pub(crate) fn remember(&mut self, id: &ProfileId) {
         let view = &mut self.profiles;
         view.recent.touch(id, now_secs());
         if let Some(path) = &view.recent_path

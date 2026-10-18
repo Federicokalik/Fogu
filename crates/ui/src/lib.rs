@@ -13,6 +13,7 @@ mod background;
 mod background_menu;
 mod blink;
 mod context_menu;
+mod drag;
 mod forms;
 mod forwards_dialog;
 mod fuzzy_list;

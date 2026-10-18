@@ -10,6 +10,7 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Length};
 
 use crate::context_menu::to_iced;
+use crate::drag::{DragMsg, Payload};
 use crate::icons::{Icon, icon};
 use crate::lifecycle::{warning_detail, warning_title};
 use crate::message::{Message, WindowCmd};
@@ -18,6 +19,8 @@ use crate::tab::{Tab, TabId};
 
 /// Header width in logical px.
 const TAB_W: f32 = 200.0;
+/// A header plus the 1 px between headers (drag targets in the bar).
+pub const TAB_STRIDE: f32 = TAB_W + 1.0;
 /// Height of the bar (it is the window's title bar).
 pub const BAR_H: f32 = 36.0;
 /// Titles longer than this many characters end in `…`.
@@ -139,7 +142,7 @@ impl<'a> TabBar<'a> {
             .width(TAB_W)
             .style(move |_theme: &iced::Theme| container::background(header_bg));
         mouse_area(body)
-            .on_press(Message::ActivateTab(tab.id))
+            .on_press(Message::Drag(DragMsg::Start(Payload::Tab(tab.id))))
             .on_middle_press(Message::CloseTab(tab.id))
             .on_double_click(Message::StartRename(tab.id))
             .on_right_press(Message::OpenTabMenu(tab.id))

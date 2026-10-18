@@ -306,8 +306,25 @@ impl App {
             Action::CopyPath => return self.copy_pane_path(),
             Action::SwapPanes => self.swap_focused(),
             Action::EqualizePanes => return self.update(Message::Equalize(self.active)),
+            Action::MaximizePane => self.toggle_maximize(),
+            Action::ResizePane(dir) => {
+                let step = self.config.terminal.pane_resize_step.clamp(0.01, 0.5);
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == self.active) {
+                    let focused = tab.focused;
+                    tab.layout.resize_step(&focused, dir, step);
+                }
+            }
         }
         Task::none()
+    }
+
+    /// Shows only the focused pane of the active tab, or all of them again.
+    fn toggle_maximize(&mut self) {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == self.active) else {
+            return;
+        };
+        tab.solo = (tab.solo.is_none() && tab.panes.len() > 1)
+            .then(|| fogu_core::SplitTree::new(tab.focused));
     }
 
     /// `NextTab` / `PrevTab` (wrapping) / `GoToTab(n)` (1-based; out of range is ignored).

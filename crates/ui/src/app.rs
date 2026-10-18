@@ -54,6 +54,8 @@ pub struct App {
     pub(crate) tab_bar_cursor: Point,
     /// Where the bar's empty area was pressed, until the pointer moves (then the window moves).
     pub(crate) bar_press: Option<Point>,
+    /// A press on a tab, pane grip or sidebar profile that may become a drag.
+    pub(crate) drag: Option<crate::drag::Drag>,
     pub(crate) window_size: iced::Size,
     pub(crate) fullscreen: bool,
     /// The cwd query in flight (`NewTabHere`, splits).
@@ -154,6 +156,7 @@ impl App {
             hovered_tab: None,
             tab_bar_cursor: Point::ORIGIN,
             bar_press: None,
+            drag: None,
             window_size: WINDOW_SIZE,
             fullscreen: false,
             pending_cwd: None,
@@ -245,6 +248,18 @@ impl App {
         (app, Task::batch(tasks))
     }
 
+    /// Title bar buttons, moves and resize edges.
+    fn on_window(&mut self, cmd: WindowCmd) -> Task<Message> {
+        self.bar_press = matches!(cmd, WindowCmd::Press).then_some(self.tab_bar_cursor);
+        let act = move |id| match cmd {
+            WindowCmd::Press | WindowCmd::Release => Task::none(),
+            WindowCmd::Resize(dir) => window::drag_resize(id, dir),
+            WindowCmd::Minimize => window::minimize(id, true),
+            WindowCmd::ToggleMaximize => window::toggle_maximize(id),
+        };
+        window::latest().and_then(act)
+    }
+
     /// The iced theme: stock widgets in the scheme's colours.
     pub fn theme(&self) -> iced::Theme {
         self.theme.clone()
@@ -299,16 +314,8 @@ impl App {
             | Message::TabBarMenu
             | Message::TabSaveToProfile
             | Message::ConfirmDiscard(_) => self.on_menu_message(message),
-            Message::Window(cmd) => {
-                self.bar_press = matches!(cmd, WindowCmd::Press).then_some(self.tab_bar_cursor);
-                let act = move |id| match cmd {
-                    WindowCmd::Press | WindowCmd::Release => Task::none(),
-                    WindowCmd::Resize(dir) => window::drag_resize(id, dir),
-                    WindowCmd::Minimize => window::minimize(id, true),
-                    WindowCmd::ToggleMaximize => window::toggle_maximize(id),
-                };
-                window::latest().and_then(act)
-            }
+            Message::Window(cmd) => self.on_window(cmd),
+            Message::Drag(message) => self.on_drag(message),
             Message::CloseRequested => {
                 self.save_on_exit();
                 iced::exit()

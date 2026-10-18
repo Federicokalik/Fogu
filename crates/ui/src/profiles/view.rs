@@ -11,6 +11,7 @@ use iced::{Alignment, Color, Element, Length, mouse};
 
 use super::handlers::{Launch, ProfilesMsg};
 use super::{Line, ProfilesView, QUICK_INPUT, SEARCH_INPUT, entries, lines, now_secs, rows};
+use crate::drag::{DragMsg, Payload};
 use crate::fuzzy_list::{self, RowEvents, RowLook};
 use crate::message::Message;
 use crate::palette::Look;
@@ -118,8 +119,10 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
                     ProfileClick::Single => (open, None),
                     ProfileClick::Double => (msg(ProfilesMsg::Select(pos)), Some(open)),
                 };
+                // The press may start a drag onto a pane; released in place it is a click.
+                let press = Payload::Profile(id.clone(), Box::new(press));
                 let events = RowEvents {
-                    press: Some(press),
+                    press: Some(Message::Drag(DragMsg::Start(press))),
                     double,
                     middle: Some(msg(ProfilesMsg::RowOpen(id.clone(), Launch::Split))),
                     right: Some(msg(ProfilesMsg::Menu(id, pos))),

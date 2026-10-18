@@ -106,6 +106,7 @@ impl App {
         if !tab.layout.split(&target, side, id) {
             return;
         }
+        tab.solo = None;
         tab.panes.insert(id, pane);
         if tab.id == active {
             self.focus_pane(id);
@@ -299,6 +300,7 @@ impl App {
         };
         tab.panes.remove(&id);
         tab.layout.remove(&id);
+        tab.solo = None;
         if tab.sftp.as_ref().is_some_and(|p| p.pane == id) {
             tab.sftp = None;
         }
@@ -341,6 +343,10 @@ impl App {
             self.focus_report(false);
             if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == active) {
                 tab.focused = id;
+                // A maximized pane gives way when focus moves to a hidden one.
+                if tab.solo.as_ref().is_some_and(|s| s.leaves() != [&id]) {
+                    tab.solo = None;
+                }
             }
             self.focus_report(true);
         }

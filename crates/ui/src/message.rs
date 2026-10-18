@@ -161,6 +161,8 @@ pub enum Message {
     CloseRequested,
     /// A title bar button or drag (the window has no OS decorations).
     Window(WindowCmd),
+    /// Dragging tabs, panes and sidebar profiles.
+    Drag(crate::drag::DragMsg),
     /// The answer to "Clear saved sessions?".
     ConfirmClearSessions(bool),
     /// One second of pane `.0`'s automatic reconnect countdown passed.

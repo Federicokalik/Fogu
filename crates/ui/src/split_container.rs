@@ -11,6 +11,7 @@ use iced::advanced::{Clipboard, Shell, mouse, overlay};
 use iced::{Border, Color, Element, Event, Length, Point, Rectangle, Size, Vector};
 
 use crate::background::Backdrop;
+use crate::drag::{DragMsg, Zone, drop_zone};
 use crate::message::Message;
 use crate::sftp::{PanelMsg, SftpMsg};
 use crate::tab::{PaneId, TabId};
@@ -36,6 +37,8 @@ pub struct SplitContainer<'a> {
     side: Option<f32>,
     /// The tab background under the panes.
     backdrop: Option<Backdrop>,
+    /// A drag is under way: the current drop target and the highlight colour.
+    drop: Option<(Option<(PaneId, Zone)>, Color)>,
 }
 
 impl std::fmt::Debug for SplitContainer<'_> {
@@ -92,6 +95,7 @@ impl<'a> SplitContainer<'a> {
             border: None,
             side: None,
             backdrop: None,
+            drop: None,
         }
     }
 
@@ -140,6 +144,23 @@ impl<'a> SplitContainer<'a> {
     pub fn backdrop(mut self, backdrop: Option<Backdrop>) -> Self {
         self.backdrop = backdrop;
         self
+    }
+
+    /// A drag is under way: pointer moves over a pane publish its drop zone, and `target`
+    /// is highlighted in `color`.
+    #[must_use]
+    pub fn dropping(mut self, target: Option<(PaneId, Zone)>, color: Color) -> Self {
+        self.drop = Some((target, color));
+        self
+    }
+
+    /// The pane and zone under `at`.
+    fn drop_at(&self, layout: Layout<'_>, at: Point) -> Option<(PaneId, Zone)> {
+        self.ids
+            .iter()
+            .zip(layout.children())
+            .find(|(_, l)| l.bounds().contains(at))
+            .map(|(id, l)| (*id, drop_zone(at, l.bounds())))
     }
 
     /// Outlines `pane` with a 1-px `color` border.
@@ -373,6 +394,14 @@ impl Widget<Message, iced::Theme, iced::Renderer> for SplitContainer<'_> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        if let (Some((current, _)), Event::Mouse(mouse::Event::CursorMoved { .. })) =
+            (self.drop, event)
+        {
+            let target = cursor.position().and_then(|at| self.drop_at(layout, at));
+            if target != current {
+                shell.publish(Message::Drag(DragMsg::Hover(target)));
+            }
+        }
         let state = tree.state.downcast_mut::<State>();
         if self.on_divider_event(state, event, layout.bounds(), cursor, shell) {
             shell.capture_event();
@@ -459,6 +488,19 @@ impl Widget<Message, iced::Theme, iced::Renderer> for SplitContainer<'_> {
             }
             for drag in self.dividers(bounds) {
                 fill(renderer, across(drag.divider(), 1.0), self.divider);
+            }
+            if let Some((Some((pane, zone)), color)) = self.drop
+                && let Some((_, l)) = self
+                    .ids
+                    .iter()
+                    .zip(layout.children())
+                    .find(|(id, _)| **id == pane)
+            {
+                fill(
+                    renderer,
+                    zone.highlight(l.bounds()),
+                    Color { a: 0.25, ..color },
+                );
             }
             let Some((pane, color)) = self.border else {
                 return;

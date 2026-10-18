@@ -223,7 +223,22 @@ impl<T> SplitTree<T> {
         let Some(root) = self.root.take() else {
             return false;
         };
-        let mut pending = Some(new_leaf);
+        let mut pending = Some(Node::Leaf(new_leaf));
+        self.root = Some(split_rec(root, target, side, &mut pending));
+        pending.is_none()
+    }
+
+    /// Splits the leaf equal to `target`, inserting the whole of `other` on `side` (a tab
+    /// dropped onto a pane). Returns `false` (leaving the tree unchanged) if no leaf equals
+    /// `target` or `other` is empty.
+    pub fn graft(&mut self, target: &T, side: Side, other: Self) -> bool
+    where
+        T: PartialEq,
+    {
+        let (Some(root), Some(other)) = (self.root.take(), other.root) else {
+            return false;
+        };
+        let mut pending = Some(other);
         self.root = Some(split_rec(root, target, side, &mut pending));
         pending.is_none()
     }

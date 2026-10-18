@@ -154,6 +154,8 @@ pub struct TerminalCfg {
     pub scroll_on_input: bool,
     /// Lines scrolled per wheel notch.
     pub wheel_lines: u32,
+    /// Share of the split a resize-pane hotkey moves.
+    pub pane_resize_step: f32,
     /// Default right-click behaviour.
     pub right_click: RightClickAction,
     /// Default OSC 52 (clipboard write) policy; profiles may override it
@@ -179,6 +181,7 @@ impl Default for TerminalCfg {
             alt_is_meta: true,
             scroll_on_input: true,
             wheel_lines: 3,
+            pane_resize_step: 0.1,
             right_click: RightClickAction::default(),
             osc52_write: Osc52Policy::default(),
             keep_history_on_restart: true,

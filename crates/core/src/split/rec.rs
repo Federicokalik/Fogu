@@ -142,16 +142,16 @@ pub(super) fn split_rec<T: PartialEq>(
     node: Node<T>,
     target: &T,
     side: Side,
-    pending: &mut Option<T>,
+    pending: &mut Option<Node<T>>,
 ) -> Node<T> {
     match node {
         Node::Leaf(v) => {
             if v == *target {
                 if let Some(new_leaf) = pending.take() {
                     let (a, b) = if side.new_leaf_is_a() {
-                        (Node::Leaf(new_leaf), Node::Leaf(v))
+                        (new_leaf, Node::Leaf(v))
                     } else {
-                        (Node::Leaf(v), Node::Leaf(new_leaf))
+                        (Node::Leaf(v), new_leaf)
                     };
                     return Node::Split {
                         dir: side.orientation(),
