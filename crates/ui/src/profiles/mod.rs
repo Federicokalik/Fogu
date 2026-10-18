@@ -150,17 +150,6 @@ impl ProfilesView {
     }
 }
 
-impl ProfilesView {
-    /// Logical px left of the tab bar and panes: the sidebar and its handle when open.
-    pub fn left_of_main(&self) -> f32 {
-        if self.open {
-            self.width + view::HANDLE_W
-        } else {
-            0.0
-        }
-    }
-}
-
 /// Built-ins (when shown), stored profiles, `~/.ssh/config` hosts, then quick-connect profiles
 /// from `recent`.
 pub fn entries(

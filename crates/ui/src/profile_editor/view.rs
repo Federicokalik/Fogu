@@ -12,7 +12,7 @@ use iced::{Alignment, Element, Length};
 use super::fields::{AlgKind, BG_FIT, BG_KIND, FieldId, OSC52, SESSION_END};
 use super::handlers::EditorMsg;
 use super::{ProfileEditor, Source};
-use crate::forms::{self, ERROR, Field, WARN};
+use crate::forms::{self, ERROR, Field, FieldValue, WARN};
 use crate::message::Message;
 use crate::sftp::panel::Look;
 use crate::tab::TabId;
@@ -77,8 +77,8 @@ fn header(tab: TabId, ed: &ProfileEditor, look: Look) -> Element<'_, Message> {
         column![row![title, space().width(Length::Fill), buttons].align_y(Alignment::Center)]
             .spacing(6);
     if ed.read_only() {
-        let banner = "From ~/.ssh/config: read-only here. Change it in that file, or copy it to \
-                      your profiles to edit it.";
+        let banner = "From ~/.ssh/config. Changing a field copies it to your profiles first; \
+                      the file itself is never changed.";
         head = head.push(text(banner).size(13).color(WARN));
         if let ProfileKind::Ssh(ssh) = &ed.draft.kind
             && !ssh.ignored_ssh_config.is_empty()
@@ -155,6 +155,11 @@ pub(super) fn labels<T>(options: &[(&str, T)]) -> Vec<String> {
     options.iter().map(|(l, _)| (*l).to_owned()).collect()
 }
 
+/// The last Group choice: name a new group inline.
+pub(crate) const NEW_GROUP: &str = "New group…";
+/// Id of the new group's name field.
+pub(crate) const NEW_GROUP_INPUT: &str = "fogu-editor-new-group";
+
 fn general<'a>(ed: &'a ProfileEditor, config: &Config, look: Look) -> Row<'a> {
     let p = &ed.draft;
     let group = ed
@@ -182,10 +187,22 @@ fn general<'a>(ed: &'a ProfileEditor, config: &Config, look: Look) -> Row<'a> {
                 look,
                 FieldId::Group,
                 "Group",
-                ed.groups.iter().map(|(_, l)| l.clone()).collect(),
+                ed.groups
+                    .iter()
+                    .map(|(_, l)| l.clone())
+                    .chain([NEW_GROUP.to_owned()])
+                    .collect(),
                 group,
             ),
         ),
+    ];
+    if let Some(name) = &ed.new_group {
+        let field = forms::input(FieldId::NewGroup, name, "Group name (Enter or Save)")
+            .id(iced::widget::Id::new(NEW_GROUP_INPUT))
+            .on_submit(forms::Field(FieldId::NewGroup, FieldValue::Add));
+        rows.push(forms::labeled(look, "New group", field.into()));
+    }
+    rows.extend([
         forms::text_field(
             look,
             FieldId::Icon,
@@ -226,7 +243,7 @@ fn general<'a>(ed: &'a ProfileEditor, config: &Config, look: Look) -> Row<'a> {
             labels(&OSC52),
             index_of(&OSC52, &osc52),
         ),
-    ];
+    ]);
     rows.extend(background(ed, look));
     forms::section(look, "General", rows)
 }

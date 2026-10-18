@@ -159,6 +159,8 @@ pub enum Message {
     RecoveryTick,
     /// The window's close button: save the session, then exit.
     CloseRequested,
+    /// A title bar button or drag (the window has no OS decorations).
+    Window(WindowCmd),
     /// The answer to "Clear saved sessions?".
     ConfirmClearSessions(bool),
     /// One second of pane `.0`'s automatic reconnect countdown passed.
@@ -216,4 +218,18 @@ impl Message {
             other => other,
         }
     }
+}
+
+/// What the title bar asks of the window.
+#[derive(Clone, Copy, Debug)]
+pub enum WindowCmd {
+    /// A press on the bar's empty area: the window moves once the pointer does (so a
+    /// double-click only maximizes).
+    Press,
+    /// The press ended without moving.
+    Release,
+    /// Resize from an edge or corner.
+    Resize(iced::window::Direction),
+    Minimize,
+    ToggleMaximize,
 }

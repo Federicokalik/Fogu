@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 fogu-session = { path = "../session", default-features = false }
 iced = { workspace = true }
+tiny-skia = { workspace = true }
 image.workspace = true
 fogu-core = { path = "../core" }
 fogu-term = { path = "../term" }

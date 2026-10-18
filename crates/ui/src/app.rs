@@ -18,10 +18,10 @@ use crate::background;
 use crate::blink::{self, Blink};
 use crate::context_menu::ContextMenu;
 use crate::lifecycle::PendingClipboard;
-use crate::message::{Message, PasteSource, SelectEvent};
+use crate::message::{Message, PasteSource, SelectEvent, WindowCmd};
 use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
 use crate::notifications::{AUTO_DISMISS, Level, Notification, Toasts};
-use crate::palette::Colors;
+use crate::palette::{Colors, Look};
 use crate::panes::{CloseTarget, CwdQuery};
 use crate::paste::PendingPaste;
 use crate::profile_picker::ProfilePicker;
@@ -52,6 +52,8 @@ pub struct App {
     pub(crate) hovered_tab: Option<TabId>,
     /// Last pointer position over the tab bar: the tab menu's anchor.
     pub(crate) tab_bar_cursor: Point,
+    /// Where the bar's empty area was pressed, until the pointer moves (then the window moves).
+    pub(crate) bar_press: Option<Point>,
     pub(crate) window_size: iced::Size,
     pub(crate) fullscreen: bool,
     /// The cwd query in flight (`NewTabHere`, splits).
@@ -65,6 +67,9 @@ pub struct App {
     pub(crate) metrics: CellMetrics,
     pub(crate) scale: f32,
     pub(crate) colors: Colors,
+    /// Chrome colours and the matching iced theme, both from `colors`.
+    pub(crate) look: Look,
+    pub(crate) theme: iced::Theme,
     pub(crate) focused: bool,
     pub(crate) pending_paste: Option<PendingPaste>,
     pub(crate) toasts: Toasts,
@@ -135,6 +140,7 @@ impl App {
         };
         let metrics = CellMetrics::new(resolved.units, font.size_px(), 1.0);
         let (scheme, scheme_note) = resolve_scheme(&config.appearance.color_scheme);
+        let colors = Colors::new(&scheme);
         let mut toasts = Toasts::default();
         if let Some(note) = scheme_note {
             toasts.push(note);
@@ -147,6 +153,7 @@ impl App {
             renaming: None,
             hovered_tab: None,
             tab_bar_cursor: Point::ORIGIN,
+            bar_press: None,
             window_size: WINDOW_SIZE,
             fullscreen: false,
             pending_cwd: None,
@@ -156,7 +163,9 @@ impl App {
             resolved,
             metrics,
             scale: 1.0,
-            colors: Colors::new(&scheme),
+            look: Look::new(&colors),
+            theme: Look::new(&colors).theme(&colors),
+            colors,
             focused: true,
             pending_paste: None,
             toasts,
@@ -236,6 +245,11 @@ impl App {
         (app, Task::batch(tasks))
     }
 
+    /// The iced theme: stock widgets in the scheme's colours.
+    pub fn theme(&self) -> iced::Theme {
+        self.theme.clone()
+    }
+
     /// Window title = the active tab's title.
     pub fn title(&self) -> String {
         match self.active_tab().map(Tab::title) {
@@ -285,6 +299,16 @@ impl App {
             | Message::TabBarMenu
             | Message::TabSaveToProfile
             | Message::ConfirmDiscard(_) => self.on_menu_message(message),
+            Message::Window(cmd) => {
+                self.bar_press = matches!(cmd, WindowCmd::Press).then_some(self.tab_bar_cursor);
+                let act = move |id| match cmd {
+                    WindowCmd::Press | WindowCmd::Release => Task::none(),
+                    WindowCmd::Resize(dir) => window::drag_resize(id, dir),
+                    WindowCmd::Minimize => window::minimize(id, true),
+                    WindowCmd::ToggleMaximize => window::toggle_maximize(id),
+                };
+                window::latest().and_then(act)
+            }
             Message::CloseRequested => {
                 self.save_on_exit();
                 iced::exit()

@@ -174,11 +174,16 @@ impl App {
                 }
             }
             ProfilesMsg::Hover(over) => view.hovered = over,
-            ProfilesMsg::Cursor(at) => view.cursor = at,
+            // Sidebar-local → window: it sits at the right edge, under the tab bar.
+            ProfilesMsg::Cursor(at) => {
+                let left = self.window_size.width - view.width;
+                view.cursor = iced::Point::new(at.x + left, at.y + crate::tab_bar::BAR_H);
+            }
             ProfilesMsg::ResizeStart => view.resizing = true,
             ProfilesMsg::ResizeTo(x) => {
                 let max = (self.window_size.width * 0.6).max(MIN_WIDTH);
-                view.width = x.clamp(MIN_WIDTH, max);
+                // The sidebar is on the right: its width runs from the pointer to the edge.
+                view.width = (self.window_size.width - x).clamp(MIN_WIDTH, max);
             }
             ProfilesMsg::ResizeEnd => view.resizing = false,
             ProfilesMsg::ConfirmDelete(yes) => {

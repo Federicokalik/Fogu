@@ -8,6 +8,7 @@ use iced::widget::{button, column, container, row, text};
 use iced::{Alignment, Color, Element, Length, Padding, Theme};
 
 use crate::message::Message;
+use crate::palette::Look;
 
 /// Toast width in logical px.
 const TOAST_W: f32 = 360.0;
@@ -167,11 +168,11 @@ impl Toasts {
 
     /// The stack pinned to the top-right of the area it is layered over, `top` px down so it
     /// clears the first terminal row; `None` when empty.
-    pub fn view(&self, top: f32) -> Option<Element<'_, Message>> {
+    pub fn view(&self, top: f32, look: Look) -> Option<Element<'_, Message>> {
         if self.items.is_empty() {
             return None;
         }
-        let stack = column(self.items.iter().map(toast_view)).spacing(8);
+        let stack = column(self.items.iter().map(|note| toast_view(note, look))).spacing(8);
         Some(
             container(stack)
                 .width(Length::Fill)
@@ -184,18 +185,25 @@ impl Toasts {
     }
 }
 
-fn toast_view(note: &Notification) -> Element<'_, Message> {
+fn toast_view(note: &Notification, look: Look) -> Element<'_, Message> {
     let id = note.id;
-    let mut body = column![text(&note.title).size(15)].spacing(4);
+    let flat = |label: &'static str, message| crate::sftp::panel::flat(label, look, Some(message));
+    let mut body = column![
+        text(&note.title)
+            .size(14)
+            .font(crate::UI_MEDIUM)
+            .color(look.fg)
+    ]
+    .spacing(4);
     if !note.detail.is_empty() {
-        body = body.push(text(&note.detail).size(13));
+        body = body.push(text(&note.detail).size(13).color(look.dim));
     }
     match &note.action {
         Some(ToastAction::ClipboardWrite) => {
             body = body.push(
                 row![
-                    button(text("Copy")).on_press(Message::ToastAccept(id)),
-                    button(text("Deny")).on_press(Message::DismissToast(id)),
+                    flat("Copy", Message::ToastAccept(id)),
+                    flat("Deny", Message::DismissToast(id)),
                 ]
                 .spacing(8),
             );
@@ -206,35 +214,57 @@ fn toast_view(note: &Notification) -> Element<'_, Message> {
             };
             let mut buttons = row![].spacing(8);
             if let Some(file) = file {
-                buttons = buttons.push(button(text("Open").size(13)).on_press(open(file)));
+                buttons = buttons.push(flat("Open", open(file)));
             }
-            body = body.push(
-                buttons.push(button(text("Show in file manager").size(13)).on_press(open(dir))),
-            );
+            body = body.push(buttons.push(flat("Show in file manager", open(dir))));
         }
         Some(ToastAction::SaveAsProfile(_)) => {
-            let save = Message::ToastAccept(id);
-            body = body.push(button(text("Save as profile…").size(13)).on_press(save));
+            body = body.push(flat("Save as profile…", Message::ToastAccept(id)));
         }
         None => {}
     }
-    let close = button(text("×")).on_press(Message::DismissToast(id));
-    let level = note.level;
-    container(row![body.width(Length::Fill), close].spacing(8))
-        .padding(10)
-        // Fixed width: a Fill child would stretch the column and defeat the right alignment.
-        .width(TOAST_W)
-        .style(move |theme: &Theme| {
-            let mut style = container::rounded_box(theme);
-            style.border.width = 2.0;
-            style.border.color = match level {
-                Level::Info => Color::from_rgb8(0x00, 0x90, 0xff),
-                Level::Warn => Color::from_rgb8(0xff, 0xc5, 0x3d),
-                Level::Error => Color::from_rgb8(0xe5, 0x48, 0x4d),
-            };
-            style
-        })
-        .into()
+    let close = button(crate::icons::icon(
+        crate::icons::Icon::Close,
+        10.0,
+        look.dim,
+    ))
+    .width(20)
+    .height(20)
+    .padding(0)
+    .style(move |_theme: &Theme, status| button::Style {
+        background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+            .then_some(look.hover.into()),
+        border: iced::Border::default().rounded(4),
+        ..button::Style::default()
+    })
+    .on_press(Message::DismissToast(id));
+    let level = match note.level {
+        Level::Info => look.accent,
+        Level::Warn => Color::from_rgb8(0xf5, 0xa6, 0x24),
+        Level::Error => look.danger,
+    };
+    let dot = container(iced::widget::space().width(8).height(8))
+        .padding(iced::Padding::ZERO)
+        .style(move |_theme: &Theme| container::Style {
+            background: Some(level.into()),
+            border: iced::Border::default().rounded(4),
+            ..container::Style::default()
+        });
+    let dot = container(dot).padding(Padding::ZERO.top(6));
+    container(
+        row![dot, body.width(Length::Fill), close]
+            .spacing(10)
+            .align_y(Alignment::Start),
+    )
+    .padding([12, 14])
+    // Fixed width: a Fill child would stretch the column and defeat the right alignment.
+    .width(TOAST_W)
+    .style(move |_theme: &Theme| {
+        let mut style = crate::context_menu::panel_style(look);
+        style.border.radius = 8.0.into();
+        style
+    })
+    .into()
 }
 
 #[cfg(test)]

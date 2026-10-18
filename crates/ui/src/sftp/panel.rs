@@ -13,7 +13,7 @@ use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
 use super::breadcrumb::segments;
 use super::{PanelMsg, SftpMsg, SftpPanelState};
 use crate::message::Message;
-use crate::palette::{self, Colors};
+use crate::palette::Colors;
 use crate::tab::TabId;
 
 /// Height of one list row (keyboard scrolling uses it too).
@@ -45,46 +45,14 @@ pub(super) fn px_rows(px: f32) -> usize {
     (px / ROW_H).floor().clamp(0.0, 1e9) as usize
 }
 
-/// The colours the panel (and the profile sidebar) draws with (from the terminal scheme).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Look {
-    pub(crate) bg: Color,
-    pub(crate) fg: Color,
-    pub(crate) dim: Color,
-    pub(crate) accent: Color,
-}
-
-impl Look {
-    pub(crate) fn new(colors: &Colors) -> Self {
-        let bg = palette::to_iced(colors.background());
-        let fg = palette::to_iced(colors.foreground());
-        Self {
-            bg: mix(bg, fg, 0.06),
-            fg,
-            dim: mix(fg, bg, 0.45),
-            // The scheme's bright blue: directories, selection, progress.
-            accent: palette::to_iced(colors.resolve(
-                fogu_term::Color::Named(fogu_term::NamedColor::BrightBlue),
-                false,
-            )),
-        }
-    }
-}
-
-fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color::from_rgb(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-    )
-}
+pub(crate) use crate::palette::Look;
 
 pub(super) fn msg(tab: TabId, message: PanelMsg) -> Message {
     Message::Sftp(SftpMsg::Panel(tab, message))
 }
 
 /// A flat text button in the panel's colours; `None` = disabled.
-pub(super) fn flat<'a>(
+pub(crate) fn flat<'a>(
     label: impl Into<String>,
     look: Look,
     on_press: Option<Message>,

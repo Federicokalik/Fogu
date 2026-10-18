@@ -67,7 +67,11 @@ pub enum FieldValue {
 pub struct Field<Id>(pub Id, pub FieldValue);
 
 /// `label` on the left, `control` on the right.
-fn labeled<'a, M: 'a>(look: Look, label: &str, control: Element<'a, M>) -> Element<'a, M> {
+pub(crate) fn labeled<'a, M: 'a>(
+    look: Look,
+    label: &str,
+    control: Element<'a, M>,
+) -> Element<'a, M> {
     row![
         text(label.to_owned())
             .size(LABEL_SIZE)
@@ -80,7 +84,7 @@ fn labeled<'a, M: 'a>(look: Look, label: &str, control: Element<'a, M>) -> Eleme
     .into()
 }
 
-fn input<'a, Id: Copy + 'a>(
+pub(crate) fn input<'a, Id: Copy + 'a>(
     id: Id,
     value: &str,
     placeholder: &str,

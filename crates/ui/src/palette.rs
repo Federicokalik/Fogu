@@ -101,6 +101,74 @@ fn set(table: &mut Palette, index: usize, value: Rgb) {
     }
 }
 
+/// The window chrome's colours (menus, panels, title bar), derived from the terminal scheme so
+/// dark and light schemes both work.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Look {
+    /// Panels, menus, the picker, the sidebar.
+    pub(crate) bg: iced::Color,
+    pub(crate) fg: iced::Color,
+    /// Muted text.
+    pub(crate) dim: iced::Color,
+    /// The scheme's bright blue: links, selection, active toggles.
+    pub(crate) accent: iced::Color,
+    /// The terminal background (the active tab).
+    pub(crate) base: iced::Color,
+    /// The title / tab bar.
+    pub(crate) raised: iced::Color,
+    /// 1 px borders and the sidebar handle.
+    pub(crate) border: iced::Color,
+    /// Hovered rows and buttons.
+    pub(crate) hover: iced::Color,
+    /// Close-button hover, errors.
+    pub(crate) danger: iced::Color,
+}
+
+impl Look {
+    pub(crate) fn new(colors: &Colors) -> Self {
+        let base = to_iced(colors.background());
+        let fg = to_iced(colors.foreground());
+        let dark = base.r * 0.299 + base.g * 0.587 + base.b * 0.114 < 0.5;
+        Self {
+            bg: mix(base, fg, 0.06),
+            fg,
+            dim: mix(fg, base, 0.45),
+            accent: to_iced(colors.resolve(Color::Named(NamedColor::BrightBlue), false)),
+            base,
+            raised: mix(base, iced::Color::BLACK, if dark { 0.3 } else { 0.06 }),
+            border: mix(base, fg, 0.18),
+            hover: iced::Color { a: 0.10, ..fg },
+            danger: iced::Color::from_rgb8(0xE5, 0x48, 0x4D),
+        }
+    }
+
+    /// The iced theme for stock widgets (text fields, sliders, scrollbars, tooltips), so none
+    /// of them is drawn in iced's default light colours.
+    pub(crate) fn theme(&self, colors: &Colors) -> iced::Theme {
+        let ansi = |c| to_iced(colors.resolve(Color::Named(c), false));
+        iced::Theme::custom(
+            "fogu",
+            iced::theme::Palette {
+                background: self.bg,
+                text: self.fg,
+                primary: self.accent,
+                success: ansi(NamedColor::Green),
+                warning: ansi(NamedColor::Yellow),
+                danger: self.danger,
+            },
+        )
+    }
+}
+
+/// Linear mix of two colours (`t` = share of `b`).
+pub(crate) fn mix(a: iced::Color, b: iced::Color, t: f32) -> iced::Color {
+    iced::Color::from_rgb(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+    )
+}
+
 /// Converts to an iced colour.
 pub fn to_iced(rgb: Rgb) -> iced::Color {
     iced::Color::from_rgb8(rgb.r, rgb.g, rgb.b)

@@ -26,6 +26,10 @@ version = "0.1.0"
 # images; we decode ourselves (bounded, off the UI thread) and hand iced raw RGBA, so iced's
 # default codec set (gif, tiff, exr, …) is not pulled in.
 iced = { version = "=0.14.0", features = ["wgpu", "tiny-skia", "advanced", "image-without-codecs"] }
+# why: rasterizes the title bar's stroke icons into image handles; already in the tree as
+# iced's software renderer, pinned to the same version. iced_wgpu 0.14's canvas meshes draw only
+# the last canvas of a frame, so `canvas` is not used.
+tiny-skia = "=0.11.4"
 # why: structured logging, used by `fogu`'s main().
 tracing = "0.1.44"
 # why: login-script `expect` regexes; linear-time matching with a

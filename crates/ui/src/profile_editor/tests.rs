@@ -442,18 +442,36 @@ fn ssh_config_hosts_open_read_only_and_can_be_copied() {
         ProfilesMsg::Edit(ProfileId("ssh-config:nas".into())),
     );
     assert!(editor(&app).read_only());
-    text(&mut app, FieldId::Host, "elsewhere");
-    let ProfileKind::Ssh(ssh) = &editor(&app).draft.kind else {
-        panic!("ssh");
-    };
-    assert_eq!(ssh.host.as_deref(), Some("10.1.1.1"), "read-only");
     editor_msg(&mut app, EditorMsg::Save);
-    assert_eq!(app.config.profiles.len(), 3);
-    editor_msg(&mut app, EditorMsg::CopyToMine);
+    assert_eq!(app.config.profiles.len(), 3, "nothing to save in place");
+    // The first change copies the host to the user's profiles and applies to the copy.
+    text(&mut app, FieldId::Host, "elsewhere");
     assert_eq!(app.config.profiles.len(), 4);
     let ed = editor(&app);
     assert!(matches!(&ed.source, Source::Stored(p) if p.id == id("nas")));
     assert!(!ed.read_only());
+    let ProfileKind::Ssh(ssh) = &ed.draft.kind else {
+        panic!("ssh");
+    };
+    assert_eq!(ssh.host.as_deref(), Some("elsewhere"));
+}
+
+#[test]
+fn new_group_from_the_editor_is_added_and_picked() {
+    let t = tmp();
+    let mut app = app_in(&t.0);
+    profiles(&mut app, ProfilesMsg::Edit(id("fish")));
+    let new = editor(&app).groups.len();
+    field(&mut app, FieldId::Group, V::Choice(new));
+    assert_eq!(editor(&app).new_group.as_deref(), Some(""));
+    text(&mut app, FieldId::NewGroup, "Databases");
+    field(&mut app, FieldId::NewGroup, V::Add);
+    assert!(app.config.groups.iter().any(|g| g.name == "Databases"));
+    let ed = editor(&app);
+    assert!(ed.new_group.is_none());
+    let group = ed.draft.group.as_ref().expect("picked");
+    assert!(app.config.groups.iter().any(|g| &g.id == group));
+    assert!(ed.dirty(), "Save writes the profile's new group");
 }
 
 #[test]
@@ -558,4 +576,92 @@ fn closing_an_edited_editor_tab_asks_first() {
     let _ = app.update(Message::CloseTab(tab));
     let _ = app.update(Message::ConfirmDiscard(true));
     assert!(app.tabs.iter().all(|t| t.id != tab));
+}
+
+/// The group of profile `pid` as a fresh load of `config.toml` sees it (what a restart shows).
+fn group_on_disk(t: &crate::profiles::tests::Tmp, pid: &str) -> Option<String> {
+    let (config, err) = load(&t.0);
+    assert!(err.is_none(), "{err:?}");
+    config
+        .profiles
+        .iter()
+        .find(|p| p.id.0 == pid)
+        .unwrap_or_else(|| panic!("{pid} not in config.toml:\n{}", config_text(t)))
+        .group
+        .as_ref()
+        .map(|g| g.0.clone())
+}
+
+fn group_index(app: &App, gid: &str) -> usize {
+    editor(app)
+        .groups
+        .iter()
+        .position(|(g, _)| g.as_ref().is_some_and(|g| g.0 == gid))
+        .unwrap()
+}
+
+#[test]
+fn an_existing_group_picked_in_the_editor_is_on_disk_after_save() {
+    let t = tmp();
+    let mut app = app_in(&t.0);
+    profiles(&mut app, ProfilesMsg::Edit(id("fish")));
+    let servers = group_index(&app, "servers");
+    field(&mut app, FieldId::Group, V::Choice(servers));
+    editor_msg(&mut app, EditorMsg::Save);
+    assert_eq!(group_on_disk(&t, "fish").as_deref(), Some("servers"));
+    // And back to Ungrouped.
+    profiles(&mut app, ProfilesMsg::Edit(id("fish")));
+    field(&mut app, FieldId::Group, V::Choice(0));
+    editor_msg(&mut app, EditorMsg::Save);
+    assert_eq!(group_on_disk(&t, "fish"), None);
+}
+
+#[test]
+fn a_new_group_made_in_the_editor_is_on_disk_after_save() {
+    let t = tmp();
+    let mut app = app_in(&t.0);
+    profiles(&mut app, ProfilesMsg::Edit(id("pi")));
+    let new = editor(&app).groups.len();
+    field(&mut app, FieldId::Group, V::Choice(new));
+    text(&mut app, FieldId::NewGroup, "Databases");
+    field(&mut app, FieldId::NewGroup, V::Add);
+    editor_msg(&mut app, EditorMsg::Save);
+    assert_eq!(group_on_disk(&t, "pi").as_deref(), Some("databases"));
+    let (config, _) = load(&t.0);
+    assert!(config.groups.iter().any(|g| g.name == "Databases"));
+}
+
+#[test]
+fn an_ssh_config_host_gets_its_group_on_disk_after_save() {
+    let t = tmp();
+    let mut app = app_in(&t.0);
+    app.profiles.ssh_hosts.profiles.push(Profile {
+        id: ProfileId("ssh-config:nas".into()),
+        name: "nas".into(),
+        kind: ProfileKind::Ssh(SshOpts {
+            host: Some("10.1.1.1".into()),
+            ..SshOpts::default()
+        }),
+        ..Profile::default_shell()
+    });
+    profiles(
+        &mut app,
+        ProfilesMsg::Edit(ProfileId("ssh-config:nas".into())),
+    );
+    let servers = group_index(&app, "servers");
+    field(&mut app, FieldId::Group, V::Choice(servers));
+    editor_msg(&mut app, EditorMsg::Save);
+    assert_eq!(group_on_disk(&t, "nas").as_deref(), Some("servers"));
+}
+
+#[test]
+fn a_new_group_name_typed_without_enter_is_created_by_save() {
+    let t = tmp();
+    let mut app = app_in(&t.0);
+    profiles(&mut app, ProfilesMsg::Edit(id("pi")));
+    let new = editor(&app).groups.len();
+    field(&mut app, FieldId::Group, V::Choice(new));
+    text(&mut app, FieldId::NewGroup, "Databases");
+    editor_msg(&mut app, EditorMsg::Save);
+    assert_eq!(group_on_disk(&t, "pi").as_deref(), Some("databases"));
 }

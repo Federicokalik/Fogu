@@ -28,7 +28,7 @@ impl App {
             return column![].into();
         };
         if let Some(editor) = &tab.editor {
-            let look = crate::sftp::panel::Look::new(&self.colors);
+            let look = self.look;
             let page = crate::profile_editor::page(tab.id, editor, &self.config, look);
             return self.chrome(page, None, None);
         }
@@ -124,7 +124,7 @@ impl App {
             active: self.active,
             hovered: self.hovered_tab,
             renaming: self.renaming.as_ref(),
-            colors: &self.colors,
+            look: self.look,
             sftp,
             forwards: self.active_tab().and_then(|tab| {
                 tab.panes
@@ -141,12 +141,11 @@ impl App {
         // the toast goes away.
         let toasts = self
             .toasts
-            .view(self.metrics.cell_h)
+            .view(self.metrics.cell_h, self.look)
             .unwrap_or_else(|| iced::widget::space().into());
-        let panes = iced::widget::stack![body, toasts];
-        let main = column![bar, panes].into();
-        let main = profiles::view::with_sidebar(main, &self.profiles, &self.config, &self.colors);
-        self.overlays(main, dialog)
+        let panes = iced::widget::stack![body, toasts].into();
+        let panes = profiles::view::with_sidebar(panes, &self.profiles, &self.config, self.look);
+        self.overlays(column![bar, panes].into(), dialog)
     }
 
     /// Modals, the SFTP dialog, the picker and the context menu over `base`.
@@ -180,8 +179,13 @@ impl App {
             base,
             self.picker.as_ref(),
             picker_rows.as_deref().unwrap_or_default(),
+            self.look,
         );
-        context_menu::overlay(base, self.menu.as_ref(), self.window_size)
+        let base = context_menu::overlay(base, self.menu.as_ref(), self.window_size, self.look);
+        if self.fullscreen {
+            return base;
+        }
+        iced::widget::stack![base, crate::tab_bar::resize_edges()].into()
     }
 
     /// The port forwarding dialog, while its pane exists.
@@ -189,7 +193,7 @@ impl App {
         let dialog = self.forwards.as_ref()?;
         let pane = self.pane(dialog.pane)?;
         let stored = self.config.profiles.iter().any(|p| p.id == pane.profile.id);
-        let look = crate::sftp::panel::Look::new(&self.colors);
+        let look = self.look;
         Some(crate::forwards_dialog::view(dialog, pane, stored, look))
     }
 

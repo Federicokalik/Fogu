@@ -3,18 +3,19 @@
 //! focused pane. Opening records it in Recent.
 
 use crate::app::App;
-use crate::fuzzy_list::{self, FuzzyRow};
+use crate::fuzzy_list::{self, FuzzyRow, RowEvents, RowLook};
 use crate::message::Message;
+use crate::palette::Look;
 use crate::profiles::{self, Entry, Launch, now_secs};
+use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
-    Id, button, column, container, mouse_area, opaque, operation, row, scrollable, space, stack,
-    text, text_input,
+    Id, column, container, mouse_area, opaque, operation, row, scrollable, space, stack, text_input,
 };
 use iced::{Alignment, Color, Element, Length, Task};
 
 /// Id of the filter field.
 pub const PICKER_INPUT: &str = "fogu-picker-input";
-const PANEL_W: f32 = 440.0;
+const PANEL_W: f32 = 480.0;
 
 /// The open picker.
 #[derive(Clone, Debug, Default)]
@@ -97,33 +98,35 @@ impl App {
     }
 }
 
-/// One list row: colour chip, name, subtitle, "Split".
-fn entry_row(index: usize, entry: &FuzzyRow, selected: bool) -> Element<'static, Message> {
-    let chip = entry.chip.unwrap_or(Color::TRANSPARENT);
-    let chip = container(space())
-        .width(4)
-        .height(30)
-        .style(move |_theme: &iced::Theme| container::background(chip));
-    let label = column![
-        text(entry.title.clone()),
-        text(entry.subtitle.clone()).size(12)
-    ];
+/// One list row (the sidebar's look) and its "Split" button.
+fn entry_row(
+    index: usize,
+    entry: &FuzzyRow,
+    selected: bool,
+    look: Look,
+) -> Element<'static, Message> {
     let open = |split| Message::Picker(PickerMsg::Open { index, split });
-    let main = button(row![chip, label].spacing(8).align_y(Alignment::Center))
-        .width(Length::Fill)
-        .style(if selected {
-            button::primary
-        } else {
-            button::text
-        })
-        .on_press(open(false));
-    let split = button(text("Split").size(12))
-        .style(button::secondary)
-        .on_press(open(true));
-    row![main, split]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
+    let row_look = RowLook {
+        fg: look.fg,
+        dim: look.dim,
+        selected: Color {
+            a: 0.35,
+            ..look.accent
+        },
+    };
+    let events = RowEvents {
+        press: Some(open(false)),
+        double: None,
+        middle: Some(open(true)),
+        right: None,
+    };
+    row![
+        fuzzy_list::row_view(entry, selected, row_look, events),
+        crate::sftp::panel::flat("Split", look, Some(open(true))),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 /// The picker panel over `base`; a click outside closes it.
@@ -131,25 +134,32 @@ pub(crate) fn overlay<'a>(
     base: Element<'a, Message>,
     picker: Option<&'a ProfilePicker>,
     rows: &[FuzzyRow],
+    look: Look,
 ) -> Element<'a, Message> {
     let Some(picker) = picker else { return base };
     let shown = fuzzy_list::rank(&picker.filter, rows);
     let mut list = column![].spacing(2);
     for (pos, &index) in shown.iter().enumerate() {
         if let Some(entry) = rows.get(index) {
-            list = list.push(entry_row(index, entry, pos == picker.selected));
+            list = list.push(entry_row(index, entry, pos == picker.selected, look));
         }
     }
     let filter = text_input("Filter profiles", &picker.filter)
         .id(Id::new(PICKER_INPUT))
         .on_input(|f| Message::Picker(PickerMsg::Filter(f)))
         .on_submit(Message::Picker(PickerMsg::Submit))
-        .padding(6);
-    let panel = container(column![filter, scrollable(list).height(Length::Shrink)].spacing(8))
+        .size(14)
+        .padding(8);
+    let scroller = Scrollbar::new().width(6).scroller_width(6);
+    // Room for the scrollbar right of the "Split" buttons.
+    let list = scrollable(list.padding(iced::Padding::ZERO.right(10)))
+        .direction(Direction::Vertical(scroller))
+        .height(Length::Shrink);
+    let panel = container(column![filter, list].spacing(8))
         .padding(8)
         .width(PANEL_W)
-        .max_height(420)
-        .style(container::bordered_box);
+        .max_height(480)
+        .style(move |_theme: &iced::Theme| crate::context_menu::panel_style(look));
     let dim = Color {
         a: 0.35,
         ..Color::BLACK
@@ -162,7 +172,7 @@ pub(crate) fn overlay<'a>(
     )
     .on_press(Message::Picker(PickerMsg::Close));
     let placed = container(opaque(panel))
-        .padding([40, 0])
+        .padding([48, 0])
         .center_x(Length::Fill);
     stack![base, opaque(click_away), placed].into()
 }

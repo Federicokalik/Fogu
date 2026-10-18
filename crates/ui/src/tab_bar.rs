@@ -10,22 +10,25 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Length};
 
 use crate::context_menu::to_iced;
+use crate::icons::{Icon, icon};
 use crate::lifecycle::{warning_detail, warning_title};
-use crate::message::Message;
-use crate::palette::{self, Colors};
+use crate::message::{Message, WindowCmd};
+use crate::palette::{Look, mix};
 use crate::tab::{Tab, TabId};
 
 /// Header width in logical px.
 const TAB_W: f32 = 200.0;
+/// Height of the bar (it is the window's title bar).
+pub const BAR_H: f32 = 36.0;
 /// Titles longer than this many characters end in `…`.
 const MAX_TITLE_CHARS: usize = 20;
-/// Height of the colour underline.
-const UNDERLINE_H: f32 = 3.0;
+/// Height of the colour / active underline.
+const UNDERLINE_H: f32 = 2.0;
 const TITLE_SIZE: f32 = 13.0;
+/// Width of the window's resize edges.
+const EDGE: f32 = 5.0;
 /// Warning badge colour (amber).
 const WARN: Color = Color::from_rgb(0.96, 0.65, 0.14);
-/// Toggle buttons (SFTP, profiles) while their panel is open.
-const ACTIVE: Color = Color::from_rgb(0.0, 0.565, 1.0);
 /// Id of the inline rename field.
 pub const RENAME_INPUT: &str = "fogu-rename-input";
 
@@ -43,7 +46,7 @@ pub struct TabBar<'a> {
     pub active: TabId,
     pub hovered: Option<TabId>,
     pub renaming: Option<&'a Rename>,
-    pub colors: &'a Colors,
+    pub look: Look,
     /// The active tab has an SSH pane: show the SFTP button (`true` = panel open).
     pub sftp: Option<bool>,
     /// The active tab has an SSH pane: show the "Ports" button with this many listening
@@ -63,15 +66,6 @@ pub fn truncate(title: &str) -> String {
     out
 }
 
-/// Linear mix of two colours (`t` = share of `b`).
-fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color::from_rgb(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-    )
-}
-
 fn solid<'a>(color: Color, width: Length, height: f32) -> Element<'a, Message> {
     container(space())
         .width(width)
@@ -81,17 +75,8 @@ fn solid<'a>(color: Color, width: Length, height: f32) -> Element<'a, Message> {
 }
 
 impl<'a> TabBar<'a> {
-    fn bar_bg(&self) -> Color {
-        mix(
-            palette::to_iced(self.colors.background()),
-            Color::BLACK,
-            0.3,
-        )
-    }
-
     fn header(&self, tab: &'a Tab) -> Element<'a, Message> {
-        let bg = palette::to_iced(self.colors.background());
-        let fg = palette::to_iced(self.colors.foreground());
+        let (bg, fg) = (self.look.base, self.look.fg);
         let active = tab.id == self.active;
         let hovered = self.hovered == Some(tab.id);
         let title: Element<'a, Message> = match self.renaming {
@@ -110,13 +95,20 @@ impl<'a> TabBar<'a> {
                 .into(),
         };
         let close: Element<'a, Message> = if active || hovered {
-            button(text("×").size(TITLE_SIZE).color(fg))
-                .padding([0, 4])
-                .style(button::text)
+            let look = self.look;
+            button(icon(Icon::Close, 10.0, fg))
+                .width(20)
+                .height(20)
+                .padding(0)
+                .style(move |_theme: &iced::Theme, status| {
+                    let mut style = hover_style(look, status, false);
+                    style.border = iced::Border::default().rounded(3);
+                    style
+                })
                 .on_press(Message::CloseTab(tab.id))
                 .into()
         } else {
-            space().width(16).into()
+            space().width(20).into()
         };
         let title = match warning_badge(tab) {
             Some(badge) => row![badge, title]
@@ -125,15 +117,21 @@ impl<'a> TabBar<'a> {
                 .into(),
             None => title,
         };
-        let underline = tab.color.map_or(Color::TRANSPARENT, to_iced);
+        let underline = match tab.color {
+            Some(color) => to_iced(color),
+            None if active => self.look.accent,
+            None => Color::TRANSPARENT,
+        };
         let header_bg = match (active, hovered) {
             (true, _) => bg,
-            (false, true) => mix(self.bar_bg(), fg, 0.08),
-            (false, false) => self.bar_bg(),
+            (false, true) => mix(self.look.raised, fg, 0.08),
+            (false, false) => self.look.raised,
         };
         let content = column![
             container(row![title, close].spacing(6).align_y(Alignment::Center))
-                .padding([5, 10])
+                .padding([0, 12])
+                .height(BAR_H - UNDERLINE_H)
+                .align_y(Alignment::Center)
                 .width(Length::Fill),
             solid(underline, Length::Fill, UNDERLINE_H),
         ];
@@ -150,70 +148,182 @@ impl<'a> TabBar<'a> {
             .into()
     }
 
-    /// The bar: scrollable headers, then `+`.
+    /// The bar: scrollable headers with `+` / `▾` after them (their empty rest moves the
+    /// window), the panel toggles, then the window buttons.
     pub fn view(self) -> Element<'a, Message> {
-        let headers = Row::with_children(self.tabs.iter().map(|tab| self.header(tab))).spacing(1);
+        let look = self.look;
+        let plus = icon_button(Icon::Plus, 36.0, look, Message::Action(Action::NewTab));
+        // Right-click on `+` or the chevron next to it: the profile picker.
+        let plus = mouse_area(plus).on_right_press(Message::Action(Action::OpenProfilePicker));
+        let picker = icon_button(
+            Icon::ChevronDown,
+            28.0,
+            look,
+            Message::Action(Action::OpenProfilePicker),
+        );
+        let headers = Row::with_children(self.tabs.iter().map(|tab| self.header(tab)))
+            .spacing(1)
+            .push(plus)
+            .push(picker);
         let scroller = Scrollbar::new().width(2).scroller_width(2);
         let tabs = scrollable(headers)
             .direction(Direction::Horizontal(scroller))
             .width(Length::Fill);
-        // A right-click on the empty part of the bar (tab headers take their own first).
-        let tabs = mouse_area(tabs).on_right_press(Message::TabBarMenu);
-        let fg = palette::to_iced(self.colors.foreground());
-        let plus = button(text("+").size(16).color(fg))
-            .padding([2, 12])
-            .style(button::text)
-            .on_press(Message::Action(Action::NewTab));
-        // Right-click on `+` or the `▾` next to it: the profile picker.
-        let plus = mouse_area(plus).on_right_press(Message::Action(Action::OpenProfilePicker));
-        let profiles = button(text("▾").size(13).color(fg))
-            .padding([2, 8])
-            .style(button::text)
-            .on_press(Message::Action(Action::OpenProfilePicker));
-        let bar_bg = self.bar_bg();
-        let sidebar = button(
-            text("☰")
-                .size(14)
-                .color(if self.profiles { ACTIVE } else { fg }),
-        )
-        .padding([2, 10])
-        .style(button::text)
-        .on_press(Message::Action(Action::ToggleProfiles));
-        let tip = container(text("Profiles (toggle-profiles)").size(12))
-            .padding(4)
-            .style(container::rounded_box);
-        let sidebar = tooltip(sidebar, tip, tooltip::Position::Bottom);
-        let mut bar_row = row![sidebar, tabs, plus, profiles].align_y(Alignment::Center);
-        if let Some(open) = self.sftp {
-            let color = if open { ACTIVE } else { fg };
-            let sftp = button(text("SFTP").size(12).color(color))
-                .padding([2, 8])
-                .style(button::text)
-                .on_press(Message::Action(Action::ToggleSftp));
-            let tip = container(text("SFTP panel (toggle-sftp)").size(12))
+        // The bar's empty part (tab headers and buttons take their own presses first).
+        let tabs = mouse_area(tabs)
+            .on_press(Message::Window(WindowCmd::Press))
+            .on_release(Message::Window(WindowCmd::Release))
+            .on_double_click(Message::Window(WindowCmd::ToggleMaximize))
+            .on_right_press(Message::TabBarMenu);
+        let toggle = |glyph: Icon, on: bool, tip: String, message| {
+            let color = if on { look.accent } else { look.fg };
+            let button = button(icon(glyph, 16.0, color))
+                .width(36)
+                .height(BAR_H)
+                .padding(0)
+                .style(move |_theme: &iced::Theme, status| hover_style(look, status, false))
+                .on_press(message);
+            let tip = container(text(tip).size(12))
                 .padding(4)
                 .style(container::rounded_box);
-            bar_row = bar_row.push(tooltip(sftp, tip, tooltip::Position::Bottom));
-        }
+            tooltip(button, tip, tooltip::Position::Bottom)
+        };
+        let mut bar_row = row![tabs].align_y(Alignment::Center);
         if let Some(count) = self.forwards {
-            let (label, color) = match count {
-                0 => ("Ports".to_owned(), fg),
-                n => (format!("Ports {n}"), ACTIVE),
-            };
-            let ports = button(text(label).size(12).color(color))
-                .padding([2, 8])
-                .style(button::text)
-                .on_press(Message::Forwards(crate::forwards_dialog::ForwardsMsg::Open));
-            let tip = container(text("Port forwarding (listening forwards)").size(12))
-                .padding(4)
-                .style(container::rounded_box);
-            bar_row = bar_row.push(tooltip(ports, tip, tooltip::Position::Bottom));
+            bar_row = bar_row.push(toggle(
+                Icon::Ports,
+                count > 0,
+                format!("Port forwarding ({count} listening)"),
+                Message::Forwards(crate::forwards_dialog::ForwardsMsg::Open),
+            ));
         }
+        if let Some(open) = self.sftp {
+            bar_row = bar_row.push(toggle(
+                Icon::Folder,
+                open,
+                "SFTP panel (toggle-sftp)".to_owned(),
+                Message::Action(Action::ToggleSftp),
+            ));
+        }
+        bar_row = bar_row
+            .push(toggle(
+                Icon::Sidebar,
+                self.profiles,
+                "Profiles (toggle-profiles)".to_owned(),
+                Message::Action(Action::ToggleProfiles),
+            ))
+            .push(space().width(8))
+            .push(solid(look.border, Length::Fixed(1.0), 18.0))
+            .push(space().width(8))
+            .push(window_button(
+                Icon::Minimize,
+                look,
+                false,
+                Message::Window(WindowCmd::Minimize),
+            ))
+            .push(window_button(
+                Icon::Maximize,
+                look,
+                false,
+                Message::Window(WindowCmd::ToggleMaximize),
+            ))
+            .push(window_button(
+                Icon::Close,
+                look,
+                true,
+                Message::CloseRequested,
+            ));
         let bar = container(bar_row)
             .width(Length::Fill)
-            .style(move |_theme: &iced::Theme| container::background(bar_bg));
+            .height(BAR_H)
+            .style(move |_theme: &iced::Theme| container::background(look.raised));
         mouse_area(bar).on_move(Message::TabBarCursor).into()
     }
+}
+
+/// Flat chrome button colours: `hover` on hover, `danger` (white text) for the close button.
+fn hover_style(look: Look, status: button::Status, danger: bool) -> button::Style {
+    let (background, text_color) = match status {
+        button::Status::Hovered | button::Status::Pressed if danger => {
+            (Some(look.danger), Color::WHITE)
+        }
+        button::Status::Hovered => (Some(look.hover), look.fg),
+        button::Status::Pressed => (Some(Color { a: 0.18, ..look.fg }), look.fg),
+        _ => (None, look.fg),
+    };
+    button::Style {
+        background: background.map(Into::into),
+        text_color,
+        ..button::Style::default()
+    }
+}
+
+/// A flat bar button `width` px wide with a 16 px icon.
+fn icon_button<'a>(glyph: Icon, width: f32, look: Look, message: Message) -> Element<'a, Message> {
+    button(icon(glyph, 16.0, look.fg))
+        .width(width)
+        .height(BAR_H)
+        .padding(0)
+        .style(move |_theme: &iced::Theme, status| hover_style(look, status, false))
+        .on_press(message)
+        .into()
+}
+
+/// Minimize / maximize / close at the bar's right end (close turns white on red).
+fn window_button<'a>(
+    glyph: Icon,
+    look: Look,
+    danger: bool,
+    message: Message,
+) -> Element<'a, Message> {
+    button(icon(glyph, 16.0, look.fg))
+        .width(46)
+        .height(BAR_H)
+        .padding(0)
+        .style(move |_theme: &iced::Theme, status| hover_style(look, status, danger))
+        .on_press(message)
+        .into()
+}
+
+/// Invisible strips along the window's edges and corners that start a resize (there are no OS
+/// decorations to do it); layered over everything else.
+pub fn resize_edges<'a>() -> Element<'a, Message> {
+    use iced::mouse::Interaction;
+    use iced::window::Direction as D;
+    let edge = |w: Length, h: Length, dir: D, cursor: Interaction| -> Element<'a, Message> {
+        mouse_area(space().width(w).height(h))
+            .interaction(cursor)
+            .on_press(Message::Window(WindowCmd::Resize(dir)))
+            .into()
+    };
+    let (e, fill) = (Length::Fixed(EDGE), Length::Fill);
+    let (h, v) = (
+        Interaction::ResizingHorizontally,
+        Interaction::ResizingVertically,
+    );
+    let (up, down) = (
+        Interaction::ResizingDiagonallyUp,
+        Interaction::ResizingDiagonallyDown,
+    );
+    column![
+        row![
+            edge(e, e, D::NorthWest, down),
+            edge(fill, e, D::North, v),
+            edge(e, e, D::NorthEast, up)
+        ],
+        row![
+            edge(e, fill, D::West, h),
+            space().width(fill),
+            edge(e, fill, D::East, h)
+        ]
+        .height(fill),
+        row![
+            edge(e, e, D::SouthWest, up),
+            edge(fill, e, D::South, v),
+            edge(e, e, D::SouthEast, down)
+        ],
+    ]
+    .into()
 }
 
 /// A persistent `!` badge when a pane of `tab` reported a warning (e.g. host key not

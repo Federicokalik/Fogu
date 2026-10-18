@@ -19,6 +19,9 @@ use crate::panes::{CloseTarget, CwdFor, CwdQuery, SPLIT_CWD_WAIT};
 use crate::tab::{Pane, PaneId, Tab, TabId};
 use crate::tab_bar::{RENAME_INPUT, Rename};
 
+/// Logical px the pointer must move with the title bar pressed before the window moves.
+const DRAG_THRESHOLD: f32 = 4.0;
+
 /// Grid of the first tab, before the first layout resizes it.
 pub(crate) const INITIAL_SIZE: Size = Size {
     cols: 80,
@@ -498,9 +501,15 @@ impl App {
             Message::CloseTab(id) => return self.request_close(CloseTarget::Tab(id)),
             Message::HoverTab(id) => self.hovered_tab = id,
             Message::TabBarCursor(at) => {
-                // The bar starts right of the profile sidebar.
-                let left = self.profiles.left_of_main();
-                self.tab_bar_cursor = iced::Point::new(at.x + left, at.y);
+                // The bar spans the whole window (the profile sidebar sits below it).
+                self.tab_bar_cursor = at;
+                if self
+                    .bar_press
+                    .is_some_and(|from| from.distance(at) >= DRAG_THRESHOLD)
+                {
+                    self.bar_press = None;
+                    return iced::window::latest().and_then(iced::window::drag);
+                }
             }
             Message::StartRename(id) => return self.start_rename(id),
             Message::RenameInput(value) => {

@@ -16,6 +16,7 @@ mod context_menu;
 mod forms;
 mod forwards_dialog;
 mod fuzzy_list;
+mod icons;
 mod keys;
 mod lifecycle;
 mod message;
@@ -70,6 +71,17 @@ pub struct RunOptions {
     pub no_recovery: bool,
 }
 
+/// The interface font, bundled (OFL, `assets/fonts/Inter-LICENSE.txt`) so the chrome looks the
+/// same whatever sans-serif the system has; the terminal keeps its own monospace font.
+const INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+const INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
+pub(crate) const UI_FONT: iced::Font = iced::Font::with_name("Inter");
+/// Titles (toasts, dialogs).
+pub(crate) const UI_MEDIUM: iced::Font = iced::Font {
+    weight: iced::font::Weight::Medium,
+    ..UI_FONT
+};
+
 /// `WM_CLASS` / Wayland app id; matches the `.desktop` file's `StartupWMClass`.
 const APP_ID: &str = "fogu";
 /// Window icon: `assets/fogu.png` at 64×64 as raw RGBA (`convert -resize 64x64 -depth 8
@@ -95,6 +107,8 @@ pub fn run(config: Arc<Config>, options: RunOptions) -> Result {
         },
         // `Message::CloseRequested` saves the session (tab recovery), then exits.
         exit_on_close_request: false,
+        // The tab bar is the title bar (move, maximize and window buttons, resize edges).
+        decorations: false,
         ..Default::default()
     };
     iced::application(
@@ -103,6 +117,10 @@ pub fn run(config: Arc<Config>, options: RunOptions) -> Result {
         app::App::view,
     )
     .title(app::App::title)
+    .theme(app::App::theme)
+    .font(INTER_REGULAR)
+    .font(INTER_MEDIUM)
+    .default_font(UI_FONT)
     .subscription(app::App::subscription)
     .window(window)
     .run()

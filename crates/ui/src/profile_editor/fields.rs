@@ -20,6 +20,8 @@ pub enum FieldId {
     // Common.
     Name,
     Group,
+    /// The name typed after picking "New group…" in Group (Enter = `FieldValue::Add`).
+    NewGroup,
     Icon,
     Color,
     DisableDynamicTitle,

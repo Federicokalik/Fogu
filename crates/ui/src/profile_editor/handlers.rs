@@ -117,6 +117,22 @@ impl App {
     }
 
     pub(crate) fn on_editor(&mut self, tab: TabId, message: EditorMsg) -> Task<Message> {
+        // A `~/.ssh/config` host can't be changed in place: the first change copies it to the
+        // user's profiles (as "Copy to my profiles" does) and applies to the copy.
+        if matches!(message, EditorMsg::Field(..))
+            && self.editor_mut(tab).is_some_and(|e| e.read_only())
+        {
+            let copied = self.copy_editor(tab);
+            if self.editor_mut(tab).is_some_and(|e| e.read_only()) {
+                return copied; // not copied; the toast says why
+            }
+            return Task::batch([copied, self.on_editor(tab, message)]);
+        }
+        if let EditorMsg::Field(FieldId::Group | FieldId::NewGroup, value) = &message
+            && let Some(task) = self.editor_new_group(tab, value)
+        {
+            return task;
+        }
         match message {
             EditorMsg::Field(field @ (FieldId::Password | FieldId::KeyPassphrase(_)), value) => {
                 return self.secret_field(tab, field, &value);
@@ -192,6 +208,21 @@ impl App {
     /// Writes the draft (stripped of inherited values) and closes the editor; open tabs of the
     /// profile keep running and use the new settings when they reconnect or restart.
     fn save_editor(&mut self, tab: TabId) -> Task<Message> {
+        // A group name typed without Enter is still meant: create it and pick it first.
+        let pending = self
+            .editor_mut(tab)
+            .and_then(|e| e.new_group.as_deref().map(str::trim).map(str::is_empty))
+            == Some(false);
+        let added = if pending {
+            self.editor_new_group(tab, &FieldValue::Add)
+                .unwrap_or_else(Task::none)
+        } else {
+            Task::none()
+        };
+        Task::batch([added, self.save_draft(tab)])
+    }
+
+    fn save_draft(&mut self, tab: TabId) -> Task<Message> {
         let Some(editor) = self.editor_mut(tab).map(|e| e.clone()) else {
             return Task::none();
         };
@@ -272,6 +303,58 @@ impl App {
 
     /// "Copy to my profiles" in a read-only editor: the copy is saved and the editor switches
     /// to it.
+    /// "New group…" in Group, typing its name, and Enter (adds the group to the config file
+    /// and picks it). `None`: an ordinary Group choice, for `apply`.
+    fn editor_new_group(&mut self, tab: TabId, value: &FieldValue) -> Option<Task<Message>> {
+        let editor = self.editor_mut(tab)?;
+        match value {
+            FieldValue::Choice(i) if *i == editor.groups.len() => {
+                editor.new_group = Some(String::new());
+                Some(iced::widget::operation::focus(iced::widget::Id::new(
+                    super::view::NEW_GROUP_INPUT,
+                )))
+            }
+            FieldValue::Text(name) => {
+                editor.new_group = Some(name.clone());
+                Some(Task::none())
+            }
+            FieldValue::Add => {
+                let name = editor.new_group.take().unwrap_or_default();
+                let name = name.trim();
+                if name.is_empty() {
+                    return Some(Task::none());
+                }
+                let group = fogu_core::Group {
+                    id: fogu_core::config::unique_group_id(&self.config, name),
+                    name: name.to_owned(),
+                };
+                let id = group.id.clone();
+                if let Err(task) = self.write_edits(&[ProfileEdit::AddGroup(group)]) {
+                    return Some(task);
+                }
+                let (config, hosts) = (
+                    self.config.clone(),
+                    self.profiles.ssh_hosts.profiles.clone(),
+                );
+                let editor = self.editor_mut(tab)?;
+                editor.refresh(&config, &hosts);
+                let index = editor
+                    .groups
+                    .iter()
+                    .position(|(g, _)| g.as_ref() == Some(&id))?;
+                Some(self.on_editor(
+                    tab,
+                    EditorMsg::Field(FieldId::Group, FieldValue::Choice(index)),
+                ))
+            }
+            FieldValue::Choice(_) => {
+                editor.new_group = None;
+                None
+            }
+            _ => None,
+        }
+    }
+
     fn copy_editor(&mut self, tab: TabId) -> Task<Message> {
         let Some(draft) = self.editor_mut(tab).map(|e| e.draft.clone()) else {
             return Task::none();

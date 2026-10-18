@@ -54,8 +54,10 @@ pub struct ProfileEditor {
     pub texts: BTreeMap<FieldId, String>,
     /// The env rows as typed (a map can't hold an empty or duplicate name while typing).
     pub env_rows: Vec<(String, String)>,
-    /// Group choices: `None` = Ungrouped, then every group.
+    /// Group choices: `None` = Ungrouped, then every group ("New group…" follows them).
     pub groups: Vec<(Option<GroupId>, String)>,
+    /// "New group…" picked: the name being typed.
+    pub new_group: Option<String>,
     /// Jump host choices: `None` = direct, then every other SSH profile.
     pub jumps: Vec<(Option<ProfileId>, String)>,
     /// The tab header ([`Self::tab_title`], kept current by [`Self::refresh`]).
@@ -87,6 +89,7 @@ impl ProfileEditor {
             texts: BTreeMap::new(),
             env_rows,
             groups: Vec::new(),
+            new_group: None,
             jumps: Vec::new(),
             picker: Ok(()),
             stored: Vec::new(),

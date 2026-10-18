@@ -10,9 +10,10 @@ use iced::widget::{
 use iced::{Alignment, Border, Color, Element, Length, Padding, Point, Size};
 
 use crate::message::Message;
+use crate::palette::Look;
 
 /// Menu width in logical px.
-const MENU_W: f32 = 200.0;
+const MENU_W: f32 = 220.0;
 /// Estimated row height, used only to keep the menu inside the window.
 const ROW_H: f32 = 28.0;
 /// Id of the menu's text field.
@@ -314,7 +315,7 @@ pub fn to_iced(c: RgbColor) -> Color {
     Color::from_rgb8(c.r, c.g, c.b)
 }
 
-fn swatch<'a>(color: Option<RgbColor>) -> Element<'a, Message> {
+fn swatch<'a>(color: Option<RgbColor>, look: Look) -> Element<'a, Message> {
     let fill = color.map(to_iced);
     container(space())
         .width(12)
@@ -322,39 +323,61 @@ fn swatch<'a>(color: Option<RgbColor>) -> Element<'a, Message> {
         .style(move |_theme: &iced::Theme| container::Style {
             background: fill.map(Into::into),
             border: Border {
-                color: Color::from_rgba(0.5, 0.5, 0.5, 0.6),
+                color: look.border,
                 width: 1.0,
-                radius: 2.0.into(),
+                radius: 3.0.into(),
             },
             ..container::Style::default()
         })
         .into()
 }
 
-fn item_view(item: &MenuItem, selected: bool) -> Element<'_, Message> {
+fn item_view(item: &MenuItem, selected: bool, look: Look) -> Element<'_, Message> {
     let mut label = row![].spacing(8).align_y(Alignment::Center);
     if let Some(on) = item.checked {
-        label = label.push(text(if on { "✓" } else { " " }).size(13).width(12));
+        label = label.push(
+            text(if on { "✓" } else { " " })
+                .size(13)
+                .width(14)
+                .color(look.accent),
+        );
     }
     if item.swatch.is_some() {
-        label = label.push(swatch(item.swatch));
+        label = label.push(swatch(item.swatch, look));
     }
-    label = label.push(text(item.label.as_str()).size(13));
+    // "Split ▸": the arrow goes to the right edge as a chevron.
+    let (name, submenu) = match item.label.strip_suffix(" ▸") {
+        Some(name) => (name, true),
+        None => (item.label.as_str(), false),
+    };
+    label = label.push(text(name).size(13).width(Length::Fill));
+    if submenu {
+        label = label.push(text("›").size(15).color(look.dim));
+    }
+    let enabled = item.enabled;
     let button = button(label)
         .width(Length::Fill)
-        .padding([4, 10])
-        .style(if selected {
-            button::secondary
-        } else {
-            button::text
+        .padding([5, 12])
+        .style(move |_theme: &iced::Theme, status| {
+            let hot = enabled && (selected || matches!(status, button::Status::Hovered));
+            button::Style {
+                background: hot.then_some(look.hover.into()),
+                text_color: if enabled {
+                    look.fg
+                } else {
+                    Color { a: 0.4, ..look.fg }
+                },
+                border: Border::default().rounded(4),
+                ..button::Style::default()
+            }
         })
-        .on_press_maybe(item.enabled.then(|| item.action.message()));
+        .on_press_maybe(enabled.then(|| item.action.message()));
     match item.tooltip {
         Some(hint) => tooltip(
             button,
             container(text(hint).size(12))
                 .padding(6)
-                .style(container::bordered_box),
+                .style(container::rounded_box),
             tooltip::Position::Bottom,
         )
         .into(),
@@ -362,26 +385,38 @@ fn item_view(item: &MenuItem, selected: bool) -> Element<'_, Message> {
     }
 }
 
-fn menu_box(menu: &ContextMenu) -> Element<'_, Message> {
+fn separator<'a>(look: Look) -> Element<'a, Message> {
+    let line = Color { a: 0.12, ..look.fg };
+    container(
+        rule::horizontal(1).style(move |theme: &iced::Theme| rule::Style {
+            color: line,
+            ..rule::default(theme)
+        }),
+    )
+    .padding([3, 0])
+    .into()
+}
+
+fn menu_box(menu: &ContextMenu, look: Look) -> Element<'_, Message> {
     let mut col = column![].spacing(2);
     for (i, item) in menu.items.iter().enumerate() {
         if item.separator {
-            col = col.push(rule::horizontal(1));
+            col = col.push(separator(look));
         }
-        col = col.push(item_view(item, menu.selected == Some(i)));
+        col = col.push(item_view(item, menu.selected == Some(i), look));
     }
     if let Some(s) = &menu.slider {
-        col = col.push(rule::horizontal(1)).push(
+        col = col.push(separator(look)).push(
             column![
                 text(s.label.as_str()).size(13),
                 slider(s.range.clone(), s.value, s.on_change).step(5.0_f32),
             ]
             .spacing(4)
-            .padding([4, 10]),
+            .padding([4, 12]),
         );
     }
     if let Some(input) = &menu.input {
-        col = col.push(rule::horizontal(1)).push(
+        col = col.push(separator(look)).push(
             text_input(input.placeholder, &input.value)
                 .id(Id::new(MENU_INPUT))
                 .on_input(Message::MenuInput)
@@ -390,18 +425,36 @@ fn menu_box(menu: &ContextMenu) -> Element<'_, Message> {
                 .padding(6),
         );
         if input.invalid && matches!(input.submit, MenuSubmit::Color(_)) {
-            col = col.push(
-                text("Not a #RRGGBB colour")
-                    .size(11)
-                    .color(Color::from_rgb8(0xE5, 0x48, 0x4D)),
-            );
+            col = col.push(text("Not a #RRGGBB colour").size(11).color(look.danger));
         }
     }
     container(col)
         .padding(4)
         .width(MENU_W)
-        .style(container::bordered_box)
+        .style(move |_theme: &iced::Theme| panel_style(look))
         .into()
+}
+
+/// Floating panels (menus, the profile picker): raised surface, thin border, soft shadow.
+pub(crate) fn panel_style(look: Look) -> container::Style {
+    container::Style {
+        background: Some(look.bg.into()),
+        text_color: Some(look.fg),
+        border: Border {
+            color: look.border,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: Color {
+                a: 0.35,
+                ..Color::BLACK
+            },
+            offset: iced::Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
+        },
+        ..container::Style::default()
+    }
 }
 
 /// Stacks `menu` over `base` at its anchor; clicks outside it (any button) close it and never
@@ -410,6 +463,7 @@ pub fn overlay<'a>(
     base: Element<'a, Message>,
     menu: Option<&'a ContextMenu>,
     window: Size,
+    look: Look,
 ) -> Element<'a, Message> {
     let Some(menu) = menu else { return base };
     let at = menu.position(window);
@@ -417,7 +471,7 @@ pub fn overlay<'a>(
         .on_press(Message::CloseMenu)
         .on_right_press(Message::CloseMenu)
         .on_middle_press(Message::CloseMenu);
-    let placed = container(menu_box(menu))
+    let placed = container(menu_box(menu, look))
         .padding(Padding {
             top: at.y,
             left: at.x,

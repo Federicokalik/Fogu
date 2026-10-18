@@ -420,3 +420,20 @@ fn grid_resize_targets_its_pane_and_never_goes_below_two_by_one() {
     assert_eq!((size(&app, p0).cols, size(&app, p0).rows), (2, 1));
     assert_eq!(size(&app, p1).cols, 80, "the sibling is untouched");
 }
+
+#[test]
+fn the_title_bar_moves_the_window_only_once_the_pointer_moves() {
+    use crate::message::WindowCmd;
+    use iced::Point;
+    let mut app = headless();
+    send(&mut app, Message::TabBarCursor(Point::new(500.0, 10.0)));
+    send(&mut app, Message::Window(WindowCmd::Press));
+    send(&mut app, Message::TabBarCursor(Point::new(502.0, 11.0)));
+    assert!(app.bar_press.is_some(), "a jitter is still a click");
+    // A double-click maximizes without a pending move.
+    send(&mut app, Message::Window(WindowCmd::ToggleMaximize));
+    assert!(app.bar_press.is_none());
+    send(&mut app, Message::Window(WindowCmd::Press));
+    send(&mut app, Message::TabBarCursor(Point::new(520.0, 10.0)));
+    assert!(app.bar_press.is_none(), "the move started");
+}

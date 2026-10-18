@@ -3,6 +3,7 @@
 
 use fogu_core::config::ProfileClick;
 use fogu_core::{Action, Config};
+use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
     Id, button, column, container, mouse_area, row, scrollable, space, text, text_input,
 };
@@ -12,38 +13,36 @@ use super::handlers::{Launch, ProfilesMsg};
 use super::{Line, ProfilesView, QUICK_INPUT, SEARCH_INPUT, entries, lines, now_secs, rows};
 use crate::fuzzy_list::{self, RowEvents, RowLook};
 use crate::message::Message;
-use crate::palette::Colors;
-use crate::sftp::panel::Look;
+use crate::palette::Look;
 
-/// Width of the drag handle on the sidebar's right edge.
+/// Width of the drag handle on the sidebar's left edge.
 pub(crate) const HANDLE_W: f32 = 4.0;
 
 fn msg(m: ProfilesMsg) -> Message {
     Message::Profiles(m)
 }
 
-/// `body` with the sidebar on its left when open; while its edge is dragged, pointer moves
+/// `body` with the sidebar on its right when open; while its edge is dragged, pointer moves
 /// anywhere in the window resize it.
 pub(crate) fn with_sidebar<'a>(
     body: Element<'a, Message>,
     view: &'a ProfilesView,
     config: &Config,
-    colors: &Colors,
+    look: Look,
 ) -> Element<'a, Message> {
     if !view.open {
         return body;
     }
-    let look = Look::new(colors);
-    let edge = look.dim;
+    let edge = look.border;
     let handle = mouse_area(
         container(space())
             .width(HANDLE_W)
             .height(Length::Fill)
-            .style(move |_theme: &iced::Theme| container::background(Color { a: 0.4, ..edge })),
+            .style(move |_theme: &iced::Theme| container::background(edge)),
     )
     .interaction(mouse::Interaction::ResizingHorizontally)
     .on_press(msg(ProfilesMsg::ResizeStart));
-    let all = row![sidebar(view, config, look), handle, body];
+    let all = row![body, handle, sidebar(view, config, look)];
     if !view.resizing {
         return all.into();
     }
@@ -149,15 +148,13 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
         .padding(5);
     let mut top = column![title, search, quick].spacing(6);
     if let Some(err) = &view.quick_error {
-        top = top.push(
-            text(err.clone())
-                .size(11)
-                .color(Color::from_rgb8(0xE5, 0x48, 0x4D)),
-        );
+        top = top.push(text(err.clone()).size(11).color(look.danger));
     }
-    let body = column![top, scrollable(list).height(Length::Fill)]
-        .spacing(8)
-        .padding(8);
+    let scroller = Scrollbar::new().width(6).scroller_width(6);
+    let list = scrollable(list)
+        .direction(Direction::Vertical(scroller))
+        .height(Length::Fill);
+    let body = column![top, list].spacing(8).padding(8);
     let bg = look.bg;
     let panel = container(body)
         .width(view.width)
