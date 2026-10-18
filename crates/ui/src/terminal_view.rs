@@ -5,7 +5,7 @@
 //! `x = col * cell_w`, never at the shaped advance.
 
 use fogu_core::Hotkeys;
-use fogu_term::{CellFlags, CursorShape, RenderSnapshot, Rgb};
+use fogu_term::{CellFlags, CursorShape, RenderSnapshot, Rgb, links};
 use iced::advanced::input_method::{self, InputMethod};
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Quad};
@@ -19,7 +19,7 @@ use iced::{
 
 use crate::keys;
 use crate::message::Message;
-use crate::metrics::{CellMetrics, cells_f32 as cells, grid_size};
+use crate::metrics::{CellMetrics, cells_f32 as cells, grid_size, pixel_to_cell};
 use crate::mouse::{Grid, MouseConfig, MouseState};
 use crate::palette::{Colors, to_iced};
 use crate::runs::{Style, Underline, cell_style, explicit_bg, row_runs};
@@ -96,6 +96,55 @@ impl<'a> TerminalView<'a> {
     pub fn hotkeys(mut self, hotkeys: &'a Hotkeys) -> Self {
         self.hotkeys = Some(hotkeys);
         self
+    }
+
+    /// Links: Ctrl+hover underlines the link under the pointer (found only then, one row at a
+    /// time), Ctrl+click opens it, a right-press records it for the pane menu. `true` when the
+    /// event was the link's (a Ctrl+click on a link).
+    fn on_link_event(
+        &self,
+        state: &mut MouseState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+        shell: &mut Shell<'_, Message>,
+    ) -> bool {
+        let ctrl = match event {
+            Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => m.control(),
+            _ => state.modifiers.control(),
+        };
+        let link_under = || {
+            let at = cursor.position_over(bounds)? - bounds.position();
+            let cell = pixel_to_cell(at, &self.metrics, self.snapshot.cols, self.snapshot.rows);
+            links::link_at(self.snapshot, cell.col, cell.row)
+        };
+        match event {
+            Event::Mouse(mouse::Event::CursorMoved { .. })
+            | Event::Keyboard(keyboard::Event::ModifiersChanged(_)) => {
+                let link = if ctrl { link_under() } else { None };
+                if link != state.link {
+                    state.link.clone_from(&link);
+                    shell.publish(Message::LinkHover(self.pane, link));
+                }
+                false
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if ctrl => {
+                match state.link.clone().filter(|_| cursor.is_over(bounds)) {
+                    Some(link) => {
+                        shell.publish(Message::OpenLink(self.pane, link));
+                        true
+                    }
+                    None => false,
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+                if cursor.is_over(bounds) =>
+            {
+                shell.publish(Message::LinkHover(self.pane, link_under()));
+                false
+            }
+            _ => false,
+        }
     }
 
     fn cell_rect(&self, origin: Point, col: usize, row: usize, cols: usize) -> Rectangle {
@@ -313,6 +362,54 @@ impl<'a> TerminalView<'a> {
     }
 }
 
+impl TerminalView<'_> {
+    /// The hovered link: underlined, with its real target on the row below (above on the last
+    /// row) so an OSC 8 text can't pass for another address.
+    fn draw_link(&self, renderer: &mut iced::Renderer, bounds: Rectangle, link: &links::Link) {
+        let origin = bounds.position();
+        let cells_rect = self.cell_rect(origin, link.start, link.row, link.end - link.start);
+        let underline = Rectangle {
+            y: cells_rect.y + cells_rect.height - 1.0,
+            height: 1.0,
+            ..cells_rect
+        };
+        fill(renderer, underline, self.colors.foreground());
+        let shown: String = link
+            .uri
+            .chars()
+            .map(|c| if c.is_control() { '?' } else { c })
+            .take(self.snapshot.cols)
+            .collect();
+        let width = shown.chars().count();
+        let row = if link.row + 1 < self.snapshot.rows {
+            link.row + 1
+        } else {
+            link.row.saturating_sub(1)
+        };
+        let col = link.start.min(self.snapshot.cols.saturating_sub(width));
+        let rect = self.cell_rect(origin, col, row, width);
+        fill(renderer, rect, self.colors.foreground());
+        let style = Style {
+            fg: self.colors.background(),
+            bg: self.colors.foreground(),
+            underline_color: self.colors.background(),
+            bold: false,
+            italic: false,
+            underline: None,
+            strike: false,
+            hidden: false,
+        };
+        self.draw_text(
+            renderer,
+            shown,
+            rect,
+            &style,
+            self.colors.background(),
+            bounds,
+        );
+    }
+}
+
 fn fill(renderer: &mut iced::Renderer, bounds: Rectangle, color: Rgb) {
     let quad = Quad {
         bounds,
@@ -370,6 +467,16 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
             && !self.focused
         {
             shell.publish(Message::FocusPane(self.pane));
+        }
+        if self.on_link_event(
+            tree.state.downcast_mut::<MouseState>(),
+            event,
+            bounds,
+            cursor,
+            shell,
+        ) {
+            shell.capture_event();
+            return;
         }
         // Order: hotkeys → mouse → encoder (one dispatch path for keys).
         if self.focused
@@ -445,6 +552,8 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
     ) -> mouse::Interaction {
         if !cursor.is_over(layout.bounds()) {
             mouse::Interaction::None
+        } else if tree.state.downcast_ref::<MouseState>().link.is_some() {
+            mouse::Interaction::Pointer
         } else if tree
             .state
             .downcast_ref::<MouseState>()
@@ -458,7 +567,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
 
     fn draw(
         &self,
-        _tree: &Tree,
+        tree: &Tree,
         renderer: &mut iced::Renderer,
         _theme: &iced::Theme,
         _style: &renderer::Style,
@@ -482,6 +591,9 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
         self.draw_cursor(renderer, origin, bounds);
         self.draw_scroll_indicator(renderer, bounds);
         self.draw_overlay(renderer, bounds);
+        if let Some(link) = &tree.state.downcast_ref::<MouseState>().link {
+            self.draw_link(renderer, bounds, link);
+        }
     }
 }
 

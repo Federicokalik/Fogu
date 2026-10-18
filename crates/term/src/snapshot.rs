@@ -6,7 +6,7 @@ use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::TermMode;
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Flags, Hyperlink};
 use alacritty_terminal::vte::ansi::{Color, CursorShape};
 
 /// Cell attribute flags (bold/dim/italic/inverse/hidden/strikeout, underline kinds, wide-char and
@@ -29,6 +29,8 @@ pub struct Cell {
     pub underline_color: Option<Color>,
     /// Attribute flags.
     pub flags: CellFlags,
+    /// OSC 8 hyperlink (its target is shown on hover, never trusted from the text).
+    pub hyperlink: Option<Hyperlink>,
 }
 
 /// Cursor position (viewport coordinates) and look.
@@ -84,6 +86,7 @@ impl RenderSnapshot {
                     bg: cell.bg,
                     underline_color: cell.underline_color(),
                     flags: cell.flags,
+                    hyperlink: cell.hyperlink(),
                 }
             })
             .collect();

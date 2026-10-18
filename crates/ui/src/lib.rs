@@ -25,6 +25,7 @@ mod metrics;
 mod modal;
 mod mouse;
 mod notifications;
+mod open_link;
 mod palette;
 mod pane_menu;
 mod panes;

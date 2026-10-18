@@ -316,6 +316,9 @@ impl App {
             | Message::ConfirmDiscard(_) => self.on_menu_message(message),
             Message::Window(cmd) => self.on_window(cmd),
             Message::Drag(message) => self.on_drag(message),
+            Message::LinkHover(..) | Message::OpenLink(..) | Message::CopyLink(_) => {
+                self.on_link_message(message)
+            }
             Message::CloseRequested => {
                 self.save_on_exit();
                 iced::exit()

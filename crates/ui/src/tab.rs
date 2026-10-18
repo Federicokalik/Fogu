@@ -178,6 +178,8 @@ pub struct Pane {
     pub remote_cwd: Option<String>,
     /// Local panes: the last known working directory (OSC 7 or a cwd query), for tab recovery.
     pub local_cwd: Option<std::path::PathBuf>,
+    /// The link under the pointer (Ctrl held) or under the last right-click.
+    pub link: Option<fogu_term::links::Link>,
     /// Local panes: the program in front of the shell at the last cwd query (`None`: the shell).
     pub foreground: Option<String>,
     /// The pane menu's "Notify when done" / "Notify on activity" toggles.
@@ -223,6 +225,7 @@ impl Pane {
             warnings: Vec::new(),
             remote_cwd: None,
             local_cwd: None,
+            link: None,
             foreground: None,
             notify: PaneNotify::default(),
             forwards: Vec::new(),

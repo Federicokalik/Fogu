@@ -144,6 +144,7 @@ mod tests {
             bg: Color::Named(NamedColor::Background),
             underline_color: None,
             flags: CellFlags::empty(),
+            hyperlink: None,
         }
     }
 

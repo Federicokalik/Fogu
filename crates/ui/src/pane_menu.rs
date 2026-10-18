@@ -105,6 +105,22 @@ pub(crate) fn pane_items(pane: &Pane, links: Vec<MenuItem>) -> Vec<MenuItem> {
     items
 }
 
+/// "Open link" / "Copy link" when the right-click was on a link.
+fn link_items(pane: &Pane) -> Vec<MenuItem> {
+    let Some(link) = &pane.link else {
+        return Vec::new();
+    };
+    let openable =
+        crate::open_link::resolve(link, !pane.is_ssh(), pane.local_cwd.as_deref()).is_ok();
+    vec![
+        ui("Open link", Message::OpenLink(pane.id, link.clone())).enabled_if(
+            openable,
+            "Not opened from here: a remote path or a blocked scheme",
+        ),
+        ui("Copy link", Message::CopyLink(link.uri.clone())),
+    ]
+}
+
 /// The plain text of a pane's scrollback and screen (wrapped rows joined, one `\n` per line).
 fn export_text(pane: &Pane, max_lines: usize) -> String {
     let saved = pane.term.capture_history(max_lines, 0);
@@ -162,7 +178,7 @@ impl App {
         if !pane.is_ssh() && pane.state.is_running() {
             let _sent = pane.control(SessionInput::QueryCwd);
         }
-        let (items, id) = (pane_items(pane, Vec::new()), pane.id);
+        let (items, id) = (pane_items(pane, link_items(pane)), pane.id);
         self.menu = Some(ContextMenu::new(at, items));
         self.pane_menu = Some(id);
         Task::none()
@@ -176,7 +192,7 @@ impl App {
         let (Some(menu), Some(pane)) = (&self.menu, self.pane(pane_id)) else {
             return;
         };
-        let mut fresh = ContextMenu::new(menu.anchor, pane_items(pane, Vec::new()));
+        let mut fresh = ContextMenu::new(menu.anchor, pane_items(pane, link_items(pane)));
         fresh.selected = menu.selected;
         self.menu = Some(fresh);
     }

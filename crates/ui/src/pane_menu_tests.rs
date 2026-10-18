@@ -118,3 +118,45 @@ fn close_others_and_to_the_right() {
     assert!(app.tabs[0].panes.values().all(|p| p.closing));
     assert!(app.tabs[1].panes.values().all(|p| !p.closing));
 }
+
+#[test]
+fn a_right_click_on_a_link_puts_open_and_copy_first() {
+    use fogu_term::links::{Link, LinkKind};
+    let mut app = app_with(None);
+    let id = app.active_pane().unwrap().id;
+    let link = |uri: &str, kind| Link {
+        uri: uri.to_owned(),
+        kind,
+        row: 0,
+        start: 0,
+        end: 4,
+    };
+    let _ = app.update(Message::LinkHover(
+        id,
+        Some(link("https://a.io", LinkKind::Url)),
+    ));
+    let items = pane_items(
+        app.active_pane().unwrap(),
+        link_items(app.active_pane().unwrap()),
+    );
+    assert_eq!(items[0].label, "Open link");
+    assert_eq!(items[1].label, "Copy link");
+    assert!(enabled(&items, "Open link"));
+    // A blocked scheme can still be copied, not opened.
+    let _ = app.update(Message::LinkHover(
+        id,
+        Some(link("javascript:x", LinkKind::Hyperlink)),
+    ));
+    let items = pane_items(
+        app.active_pane().unwrap(),
+        link_items(app.active_pane().unwrap()),
+    );
+    assert!(!enabled(&items, "Open link") && enabled(&items, "Copy link"));
+    // No link: the usual menu.
+    let _ = app.update(Message::LinkHover(id, None));
+    let items = pane_items(
+        app.active_pane().unwrap(),
+        link_items(app.active_pane().unwrap()),
+    );
+    assert_eq!(items[0].label, "Copy");
+}

@@ -89,7 +89,9 @@ struct Drag {
 /// Per-widget mouse state, kept in the widget tree across `view`s.
 #[derive(Debug, Default)]
 pub struct MouseState {
-    modifiers: Modifiers,
+    pub(crate) modifiers: Modifiers,
+    /// The link drawn underlined (Ctrl held over it).
+    pub(crate) link: Option<fogu_term::links::Link>,
     last_click: Option<Click>,
     drag: Option<Drag>,
     /// Fractional wheel lines not yet scrolled (trackpads send pixels).

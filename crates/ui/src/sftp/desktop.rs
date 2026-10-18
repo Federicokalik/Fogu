@@ -111,10 +111,19 @@ impl App {
         if let Err(why) = refuse_open(&path) {
             return Task::done(Message::Desktop(DesktopMsg::OpenFailed(why)));
         }
+        self.xdg_open(path.into_os_string())
+    }
+
+    /// Opens a web or mail link (already checked by `open_link::resolve`) with `xdg-open`.
+    pub(crate) fn open_url(&self, url: String) -> Task<Message> {
+        self.xdg_open(url.into())
+    }
+
+    fn xdg_open(&self, target: std::ffi::OsString) -> Task<Message> {
         let run = self
             .runtime
             .handle()
-            .spawn(async move { xdg_open(&path).await });
+            .spawn(async move { xdg_open(&target).await });
         Task::future(run).then(|result| {
             let why = match result {
                 Ok(Ok(())) => return Task::none(),
@@ -146,10 +155,10 @@ fn refuse_open(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Runs `xdg-open <path>` and waits for it (it returns once the application started).
-async fn xdg_open(path: &Path) -> Result<(), String> {
+/// Runs `xdg-open <target>` and waits for it (it returns once the application started).
+async fn xdg_open(target: &std::ffi::OsStr) -> Result<(), String> {
     let status = tokio::process::Command::new("xdg-open")
-        .arg(path)
+        .arg(target)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -161,7 +170,7 @@ async fn xdg_open(path: &Path) -> Result<(), String> {
     }
     Err(format!(
         "xdg-open could not open {} ({status})",
-        display_name(&path.to_string_lossy())
+        display_name(&target.to_string_lossy())
     ))
 }
 
