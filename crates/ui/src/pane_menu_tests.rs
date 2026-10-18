@@ -106,17 +106,14 @@ fn close_others_and_to_the_right() {
     let profile = app.default_profile();
     app.open_tab(&profile, None);
     app.open_tab(&profile, None);
-    let second = app.tabs[1].id;
+    let (first, second) = (app.tabs[0].id, app.tabs[1].id);
     app.activate(second);
     let _ = app.update(Message::Action(Action::CloseTabsRight));
-    assert!(
-        app.tabs[2].panes.values().all(|p| p.closing),
-        "only the third tab closes"
-    );
-    assert!(app.tabs[0].panes.values().all(|p| !p.closing));
+    let ids: Vec<_> = app.tabs.iter().map(|t| t.id).collect();
+    assert_eq!(ids, [first, second], "only the third tab closes");
     let _ = app.update(Message::Action(Action::CloseOtherTabs));
-    assert!(app.tabs[0].panes.values().all(|p| p.closing));
-    assert!(app.tabs[1].panes.values().all(|p| !p.closing));
+    let ids: Vec<_> = app.tabs.iter().map(|t| t.id).collect();
+    assert_eq!(ids, [second]);
 }
 
 #[test]

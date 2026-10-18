@@ -29,8 +29,6 @@ pub(crate) const INITIAL_SIZE: Size = Size {
     px_w: 0,
     px_h: 0,
 };
-/// How long closing a pane waits for `Exited` before dropping it anyway.
-pub(crate) const CLOSE_GRACE: Duration = Duration::from_secs(2);
 /// How long a cwd query stays valid.
 pub(crate) const CWD_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -517,6 +515,11 @@ impl App {
             Message::ActivateTab(id) => self.activate(id),
             Message::CloseTab(id) => return self.request_close(CloseTarget::Tab(id)),
             Message::HoverTab(id) => self.hovered_tab = id,
+            Message::LeaveTab(id) => {
+                if self.hovered_tab == Some(id) {
+                    self.hovered_tab = None;
+                }
+            }
             Message::TabBarCursor(at) => {
                 // The bar spans the whole window (the profile sidebar sits below it).
                 self.tab_bar_cursor = at;

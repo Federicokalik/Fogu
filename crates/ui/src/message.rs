@@ -100,10 +100,11 @@ pub enum Message {
     ActivateTab(TabId),
     /// Middle-click or `×` on a tab header.
     CloseTab(TabId),
-    /// The 2 s grace period for closing pane `.0` expired.
-    CloseTimeout(PaneId),
     /// The pointer entered (`Some`) or left (`None`) a tab header.
     HoverTab(Option<TabId>),
+    /// The pointer left tab header `.0` (clears the hover only if it is still that tab's:
+    /// moving left, the next header's enter arrives before this one's leave).
+    LeaveTab(TabId),
     /// The pointer moved over the tab bar (window coordinates); anchors the tab menu.
     TabBarCursor(Point),
     /// Double-click on a tab title: start inline rename.

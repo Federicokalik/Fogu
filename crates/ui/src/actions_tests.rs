@@ -118,7 +118,7 @@ fn next_prev_and_go_to_tab() {
 }
 
 #[test]
-fn close_tab_waits_for_exited_then_activates_a_neighbour() {
+fn close_tab_hangs_up_and_goes_at_once_then_activates_a_neighbour() {
     let mut app = headless();
     act(&mut app, Action::NewTab);
     act(&mut app, Action::NewTab);
@@ -129,9 +129,7 @@ fn close_tab_waits_for_exited_then_activates_a_neighbour() {
         sent(&mut app, 1).as_slice(),
         [SessionInput::Close]
     ));
-    assert_eq!(ids(&app), tabs, "still there until the session exits");
-    let pane = pane_of(&app, 1);
-    send(&mut app, Message::Session(pane, EXITED));
+    // Gone at once: the session hangs up and reaps the shell in the background.
     assert_eq!(ids(&app), [tabs[0], tabs[2]]);
     assert_eq!(app.active, tabs[2]);
 }
@@ -142,8 +140,6 @@ fn close_tab_times_out_and_closed_sessions_go_at_once() {
     act(&mut app, Action::NewTab);
     let tabs = ids(&app);
     send(&mut app, Message::CloseTab(tabs[0]));
-    let pane = pane_of(&app, 0);
-    send(&mut app, Message::CloseTimeout(pane));
     assert_eq!(ids(&app), [tabs[1]]);
 
     // Session already gone (input channel closed): removed without waiting. Last tab → empty
@@ -320,8 +316,6 @@ fn split_twice_navigate_and_close_the_middle_pane() {
         sent(&mut app, 1).as_slice(),
         [SessionInput::QueryCwd, SessionInput::Close]
     ));
-    assert_eq!(leaves(&app), [p0, p1, p2], "waits for the session to exit");
-    send(&mut app, Message::Session(p1, EXITED));
     assert_eq!(leaves(&app), [p0, p2]);
     assert_eq!(pane_of(&app, 0), p0, "focus moves to a remaining pane");
     act(&mut app, Action::PaneNav(Dir::Right));
@@ -329,9 +323,7 @@ fn split_twice_navigate_and_close_the_middle_pane() {
 
     // Closing the last panes closes the tab (and, here, the app).
     act(&mut app, Action::ClosePane);
-    send(&mut app, Message::CloseTimeout(p2));
     act(&mut app, Action::ClosePane);
-    send(&mut app, Message::Session(p0, EXITED));
     assert!(app.tabs.is_empty());
 }
 
@@ -436,4 +428,21 @@ fn the_title_bar_moves_the_window_only_once_the_pointer_moves() {
     send(&mut app, Message::Window(WindowCmd::Press));
     send(&mut app, Message::TabBarCursor(Point::new(520.0, 10.0)));
     assert!(app.bar_press.is_none(), "the move started");
+}
+
+#[test]
+fn moving_left_onto_a_tab_keeps_its_hover_and_close_button() {
+    let mut app = headless();
+    let profile = app.default_profile();
+    app.open_tab(&profile, None);
+    app.open_tab(&profile, None);
+    let ids = ids(&app);
+    // Pointer moves from the third header to the second in one event: the second's enter is
+    // published before the third's leave.
+    send(&mut app, Message::HoverTab(Some(ids[2])));
+    send(&mut app, Message::HoverTab(Some(ids[1])));
+    send(&mut app, Message::LeaveTab(ids[2]));
+    assert_eq!(app.hovered_tab, Some(ids[1]));
+    send(&mut app, Message::LeaveTab(ids[1]));
+    assert_eq!(app.hovered_tab, None);
 }

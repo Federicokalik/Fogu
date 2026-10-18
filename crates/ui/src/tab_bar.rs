@@ -147,7 +147,7 @@ impl<'a> TabBar<'a> {
             .on_double_click(Message::StartRename(tab.id))
             .on_right_press(Message::OpenTabMenu(tab.id))
             .on_enter(Message::HoverTab(Some(tab.id)))
-            .on_exit(Message::HoverTab(None))
+            .on_exit(Message::LeaveTab(tab.id))
             .into()
     }
 

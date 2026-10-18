@@ -9,7 +9,6 @@ use fogu_core::{Dir, EffectiveProfile, Profile, ProfileKind, Side, Size, resolve
 use fogu_session::SessionInput;
 use iced::Task;
 
-use crate::actions::CLOSE_GRACE;
 use crate::app::App;
 use crate::message::Message;
 use crate::modal::{Modal, ModalButton};
@@ -63,7 +62,7 @@ impl App {
         };
         let target = tab.focused;
         let local_running = tab.focused_pane().is_some_and(|p| {
-            matches!(p.profile.kind, ProfileKind::Local(_)) && p.state.is_running() && !p.closing
+            matches!(p.profile.kind, ProfileKind::Local(_)) && p.state.is_running()
         });
         if local_running && self.ask_cwd(target, CwdFor::Split(side)) {
             return self.after(SPLIT_CWD_WAIT, Message::CwdTimeout(target));
@@ -138,7 +137,7 @@ impl App {
     /// `true` when closing `pane` must be confirmed: a live SSH session whose profile keeps
     /// `warn_on_close` (default on).
     fn warns_on_close(&self, pane: &Pane) -> bool {
-        if !pane.is_ssh() || !pane.state.is_running() || pane.closing {
+        if !pane.is_ssh() || !pane.state.is_running() {
             return false;
         }
         matches!(
@@ -263,27 +262,17 @@ impl App {
         })
     }
 
-    /// Asks pane `id`'s session to close; the pane goes on `Exited` or after [`CLOSE_GRACE`].
-    /// A pane whose session is already gone is removed at once.
+    /// Asks pane `id`'s session to close and removes the pane at once: the session task hangs
+    /// up and reaps the process in the background (waiting for it here left a closed tab on
+    /// screen for up to 2 s, so a second click hit the next tab).
     pub(crate) fn close_pane(&mut self, id: PaneId) -> Task<Message> {
         let Some(pane) = self.pane_mut(id) else {
             return Task::none();
         };
-        if pane.closing {
-            return Task::none();
-        }
-        if pane.state.is_running() && pane.control(SessionInput::Close) {
-            pane.closing = true;
-            return self.after(CLOSE_GRACE, Message::CloseTimeout(id));
+        if pane.state.is_running() {
+            let _sent = pane.control(SessionInput::Close);
         }
         self.remove_pane(id)
-    }
-
-    pub(crate) fn on_close_timeout(&mut self, id: PaneId) -> Task<Message> {
-        if self.pane(id).is_some_and(|p| p.closing) {
-            return self.remove_pane(id);
-        }
-        Task::none()
     }
 
     /// Drops pane `id` (closing its session); the tab goes with its last pane.

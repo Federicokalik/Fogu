@@ -13,12 +13,21 @@ pub const WINDOW: usize = 4 * 1024;
 /// Compiled size limit per `expect` regex.
 const REGEX_SIZE_LIMIT: usize = 256 * 1024;
 
-/// One compiled rule.
-#[derive(Debug)]
+/// One compiled rule. `Debug` leaves `send` out: it may be a password.
 struct Rule {
     expect: Option<Regex>,
     send: Vec<u8>,
     optional: bool,
+}
+
+impl std::fmt::Debug for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Rule")
+            .field("expect", &self.expect)
+            .field("send", &"<redacted>")
+            .field("optional", &self.optional)
+            .finish()
+    }
 }
 
 /// Escape-sequence stripper state, kept across calls (a sequence may span chunks).

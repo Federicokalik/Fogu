@@ -136,7 +136,6 @@ impl App {
         // Only a pane that got connected reconnects by itself: a failing login must not loop.
         let reconnect = pane.is_ssh()
             && pane.connection.is_some()
-            && !pane.closing
             && pane
                 .profile
                 .behavior_on_session_end
@@ -162,7 +161,7 @@ impl App {
             pane.refresh();
             return self.after(Duration::from_secs(1), Message::ReconnectTick(pane_id));
         }
-        if pane.closing || by_policy {
+        if by_policy {
             return self.remove_pane(pane_id);
         }
         Task::none()

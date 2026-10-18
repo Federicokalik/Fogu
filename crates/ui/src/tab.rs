@@ -168,8 +168,6 @@ pub struct Pane {
     pub title_from_osc: Option<String>,
     /// Status line drawn over an ended pane ("[process exited with code 0] …").
     pub status: Option<String>,
-    /// `Close` was sent; the pane goes on `Exited` or after the grace period.
-    pub closing: bool,
     /// The session's open question (password, host key…), drawn as a modal over the pane.
     pub prompt: Option<PromptState>,
     /// Warnings the session reported (tab badge), without duplicates.
@@ -220,7 +218,6 @@ impl Pane {
             pending_resize: None,
             title_from_osc: None,
             status: None,
-            closing: false,
             prompt: None,
             warnings: Vec::new(),
             remote_cwd: None,

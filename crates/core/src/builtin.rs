@@ -11,6 +11,16 @@ use crate::profile::{LocalOpts, Profile, ProfileId, ProfileKind};
 pub const ETC_SHELLS: &str = "/etc/shells";
 /// Id prefix of every built-in profile (they can't be edited, moved or deleted).
 pub const BUILTIN_PREFIX: &str = "builtin:";
+/// `/etc/shells` entries that are not shells to open a terminal with: login blockers and the
+/// restricted shells packages add (git's `git-shell`, systemd-homed's fallback, a `homectl`
+/// symlink target).
+const NOT_INTERACTIVE: [&str; 5] = [
+    "git-shell",
+    "systemd-home-fallback-shell",
+    "homectl",
+    "nologin",
+    "false",
+];
 
 /// "Default shell", then one login-shell profile per existing entry of the `/etc/shells`-style
 /// file at `shells` (`#` comments and blank lines skipped). Entries are de-duplicated by
@@ -26,9 +36,20 @@ pub fn builtin_profiles(shells: &Path) -> Vec<Profile> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        let listed = Path::new(line).file_name().and_then(|n| n.to_str());
+        if listed.is_some_and(|n| NOT_INTERACTIVE.contains(&n)) {
+            continue;
+        }
         let Ok(real) = std::fs::canonicalize(line) else {
             continue;
         };
+        if real
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| NOT_INTERACTIVE.contains(&n))
+        {
+            continue;
+        }
         if !real.is_file() || !seen.insert(real.clone()) {
             continue;
         }
@@ -79,8 +100,16 @@ mod tests {
         let sh = dir.join("bin/sh");
         let _ = std::fs::remove_file(&sh);
         symlink(&bash, &sh).unwrap();
+        // Arch: git adds git-shell, systemd-homed a fallback shell linked to homectl.
+        let git_shell = real("git-shell");
+        let homectl = real("homectl");
+        let fallback = dir.join("bin/systemd-home-fallback-shell");
+        let _ = std::fs::remove_file(&fallback);
+        symlink(&homectl, &fallback).unwrap();
         let list = format!(
-            "# comment\n\n{sh}\n{bash}\n  {zsh}  \n{gone}\n{dir}\n{bash}\n",
+            "# comment\n\n{sh}\n{bash}\n  {zsh}  \n{gone}\n{dir}\n{bash}\n{git}\n{fallback}\n",
+            git = git_shell.display(),
+            fallback = fallback.display(),
             sh = sh.display(),
             bash = bash.display(),
             zsh = zsh.display(),

@@ -35,6 +35,8 @@ static LINKS: LazyLock<Option<Regex>> = LazyLock::new(|| {
     let ip = r"(?P<ip>\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?::\d{1,5})?\b)";
     let path = r"(?P<path>(?:~|\.{1,2})?/[\w.~+@%-]+(?:/[\w.~+@%-]*)*|[\w.-]+(?:/[\w.~+@%-]+)+)";
     regex::RegexBuilder::new(&format!("{url}|{ip}|{path}"))
+        // `HTTPS://…` too; the allow-list compares schemes case-insensitively.
+        .case_insensitive(true)
         .size_limit(1 << 20)
         .build()
         .ok()

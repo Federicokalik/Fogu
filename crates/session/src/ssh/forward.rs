@@ -221,7 +221,14 @@ async fn local(ctx: &Ctx, stop: &CancellationToken) -> Result<(), String> {
     let (host, port) = (ctx.forward.bind_host(), ctx.forward.port);
     let listener = TcpListener::bind((host, port))
         .await
-        .map_err(|err| format!("cannot listen on {host}:{port}: {err}"))?;
+        .map_err(|err| match err.kind() {
+            // Kept under the dialog's 120 shown characters.
+            std::io::ErrorKind::AddrInUse => format!(
+                "port {port} on {host} is in use (another program, ssh or tab); only this forward \
+                 is off"
+            ),
+            _ => format!("cannot listen on {host}:{port}: {err}"),
+        })?;
     ctx.started().await;
     let mut conns = JoinSet::new();
     loop {

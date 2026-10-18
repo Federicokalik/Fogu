@@ -152,6 +152,8 @@ pub(crate) fn capture<T: EventListener>(
     // screen's content back (swapping into it clears it). The primary's DECSC cursor becomes
     // its current cursor, which is where 1049 left it anyway.
     let alt_grid = alt.then(|| term.grid().clone());
+    // `swap_alt` also drops the selection: keep the user's across the round trip.
+    let selection = term.selection.take();
     if alt {
         term.swap_alt();
     }
@@ -160,6 +162,7 @@ pub(crate) fn capture<T: EventListener>(
         term.swap_alt();
         *term.grid_mut() = grid;
     }
+    term.selection = selection;
     SavedHistory {
         version: VERSION,
         cols: u16::try_from(term.columns()).unwrap_or(u16::MAX),

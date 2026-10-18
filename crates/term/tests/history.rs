@@ -148,7 +148,15 @@ fn validate_bounds_and_style_bits() {
 fn the_primary_screen_is_captured_while_the_alternate_one_shows() {
     let mut t = term(20, 4);
     t.feed(b"shell line\r\n$ vim\r\n\x1b[?1049h\x1b[Hvim screen");
+    t.select_all();
+    let selected = t.selection_text();
+    assert!(selected.is_some());
     let saved = t.capture_history(10, 0);
+    assert_eq!(
+        t.selection_text(),
+        selected,
+        "the periodic capture keeps the selection"
+    );
     let texts: Vec<&str> = saved.rows.iter().map(|r| r.runs[0].text.as_str()).collect();
     assert_eq!(texts, ["shell line", "$ vim"]);
     // The alternate screen is untouched and still shown.

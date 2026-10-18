@@ -87,6 +87,10 @@ fn detect_links_table() {
             ],
         ),
         ("javascript:alert(1)", &[]),
+        (
+            "HTTPS://Example.COM/A",
+            &[("HTTPS://Example.COM/A", "HTTPS://Example.COM/A", Url)],
+        ),
     ];
     for (text, want) in cases {
         let got: Vec<(String, String, LinkKind)> = detect_links(text)

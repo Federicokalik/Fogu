@@ -356,7 +356,6 @@ impl App {
             Message::Action(action) => self.on_action(action),
             Message::GridResized { pane, cols, rows } => self.on_grid_resized(pane, cols, rows),
             Message::ResizeTimer(pane, generation) => self.on_resize_timer(pane, generation),
-            Message::CloseTimeout(pane) => self.on_close_timeout(pane),
             Message::ScaleFactor(scale) => {
                 self.scale = scale;
                 self.apply_metrics();
@@ -406,7 +405,7 @@ impl App {
                     pane.reconnect_in = None;
                     pane.status = pane.state.status_line(pane.is_ssh());
                     pane.refresh();
-                } else if !pane.closing && restart::restarts(&message, alt_is_meta) {
+                } else if restart::restarts(&message, alt_is_meta) {
                     return self.restart_pane(id);
                 }
             }
