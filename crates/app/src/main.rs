@@ -125,7 +125,9 @@ fn init_logging(state_dir: &Result<PathBuf, String>) -> Option<WorkerGuard> {
     guard
 }
 
-/// `$XDG_STATE_HOME/fogu` (default `~/.local/state/fogu`), created with mode 0700.
+/// `$XDG_STATE_HOME/fogu` (default `~/.local/state/fogu`), made 0700 even if it already existed:
+/// the daily log files rotated in later are created with the umask, so the directory keeps them
+/// private.
 fn state_dir() -> Result<PathBuf, String> {
     let state = std::env::var_os("XDG_STATE_HOME")
         .filter(|v| !v.is_empty())
@@ -133,6 +135,6 @@ fn state_dir() -> Result<PathBuf, String> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
         .ok_or("neither XDG_STATE_HOME nor HOME is set")?;
     let dir = state.join("fogu");
-    fsutil::create_private_dir(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    fsutil::ensure_private_dir(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     Ok(dir)
 }

@@ -22,6 +22,14 @@ pub fn create_private_dir(dir: &Path) -> io::Result<()> {
     DirBuilder::new().recursive(true).mode(DIR_MODE).create(dir)
 }
 
+/// Like [`create_private_dir`], but an existing `dir` is also set to `0700`: for directories
+/// only Fogu owns (state, logs), where files created later with the default umask (the daily
+/// log) must still be private.
+pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
+    create_private_dir(dir)?;
+    std::fs::set_permissions(dir, Permissions::from_mode(DIR_MODE))
+}
+
 /// Opens `path` for appending, creating it with mode `0600`.
 pub fn open_private_append(path: &Path) -> io::Result<File> {
     OpenOptions::new()
@@ -113,6 +121,23 @@ mod tests {
         assert_eq!(mode(&dir.join("app.log.1")), FILE_MODE);
         assert_ne!(mode(&dir.join("other")), FILE_MODE);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn ensure_private_dir_tightens_an_existing_open_dir() {
+        let dir = std::env::temp_dir().join(format!("fogu-fsutil-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, Permissions::from_mode(0o755)).unwrap();
+        create_private_dir(&dir).unwrap();
+        let mode = || std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode(),
+            0o755,
+            "create_private_dir leaves existing dirs alone"
+        );
+        ensure_private_dir(&dir).unwrap();
+        assert_eq!(mode(), DIR_MODE);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

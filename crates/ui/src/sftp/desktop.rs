@@ -135,19 +135,57 @@ impl App {
     }
 }
 
-/// Why `path` must not be handed to `xdg-open`: not absolute, missing, or a regular file with
-/// an executable bit. Downloads are `0644` unless `keep_executable_bit` is on; with it, a
-/// script, `.desktop` file or `AppImage` the server marked executable would be *run* by some
-/// openers (KDE asks, others don't), so such files are only shown in the file manager.
+/// Extensions whose default "opener" may run them as code (`java -jar`, desktop launchers,
+/// interpreters, Wine, package installers): never opened from here, even without an
+/// executable bit. Web pages are left out: the browser sandboxes them.
+const LAUNCHABLE: &[&str] = &[
+    "jar",
+    "desktop",
+    "appimage",
+    "run",
+    "bin",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "csh",
+    "py",
+    "pl",
+    "rb",
+    "php",
+    "exe",
+    "msi",
+    "bat",
+    "cmd",
+    "com",
+    "ps1",
+    "vbs",
+    "deb",
+    "rpm",
+    "flatpakref",
+    "flatpakrepo",
+    "kwinscript",
+    "plasmoid",
+];
+
+/// Why `path` must not be handed to `xdg-open`: not absolute, missing, a regular file with an
+/// executable bit, or one of the [`LAUNCHABLE`] types. Downloads are `0644` unless
+/// `keep_executable_bit` is on, but the opener picks by type: a downloaded `.jar` would be run
+/// by `java -jar`, a `.desktop` file by the launcher. Such files are only shown in the file
+/// manager.
 fn refuse_open(path: &Path) -> Result<(), String> {
     let shown = || display_name(&path.to_string_lossy());
     let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) if path.is_absolute() => meta,
         _ => return Err(format!("{} does not exist", shown())),
     };
-    if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
+    let launchable = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| LAUNCHABLE.contains(&e.to_ascii_lowercase().as_str()));
+    if meta.is_file() && (meta.permissions().mode() & 0o111 != 0 || launchable) {
         return Err(format!(
-            "{} is executable and is not opened from here; use \u{201c}Show in file \
+            "{} could run code and is not opened from here; use \u{201c}Show in file \
              manager\u{201d}",
             shown()
         ));
@@ -232,13 +270,45 @@ mod tests {
         std::fs::set_permissions(&script, perms).unwrap();
         assert_eq!(refuse_open(&plain), Ok(()));
         assert_eq!(refuse_open(&dir), Ok(()), "directories open (file manager)");
-        assert!(refuse_open(&script).unwrap_err().contains("executable"));
+        assert!(refuse_open(&script).unwrap_err().contains("could run code"));
         assert!(
             refuse_open(&dir.join("missing"))
                 .unwrap_err()
                 .contains("does not exist")
         );
         assert!(refuse_open(std::path::Path::new("report.txt")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn launchable_types_are_not_opened_even_without_exec_bit() {
+        let dir = std::env::temp_dir().join(format!("fogu-open-types-{}", std::process::id()));
+        let _stale = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "report.jar",
+            "x.desktop",
+            "a.AppImage",
+            "tool.EXE",
+            "s.sh",
+            "x.py",
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, "x").unwrap();
+            let why = refuse_open(&path).unwrap_err();
+            assert!(why.contains("file manager"), "{name}: {why}");
+        }
+        for name in [
+            "photo.png",
+            "notes.txt",
+            "data.tar.gz",
+            "doc.pdf",
+            "page.html",
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, "x").unwrap();
+            assert_eq!(refuse_open(&path), Ok(()), "{name}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
