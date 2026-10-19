@@ -14,6 +14,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Color, Element, Length};
 
+use crate::color_picker::color_picker;
 use crate::context_menu::{PRESET_COLORS, to_iced};
 use crate::sftp::panel::Look;
 
@@ -192,13 +193,18 @@ pub fn color<'a, Id: Copy + 'a>(
     }
     let none = small_button("None", Some(Field(id, FieldValue::Color(None))));
     let field = input(id, hex, "#rrggbb").width(100);
+    let picker = color_picker(value, 260.0, move |c| Field(id, FieldValue::Color(Some(c))));
     labeled(
         look,
         label,
-        row![swatches, none, field]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into(),
+        column![
+            row![swatches, none, field]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            Element::from(picker),
+        ]
+        .spacing(6)
+        .into(),
     )
 }
 

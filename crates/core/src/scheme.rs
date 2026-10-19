@@ -134,7 +134,7 @@ impl Default for ColorScheme {
     fn default() -> Self {
         const ANSI: [u32; 16] = [
             0x00_0000, 0xff_615a, 0xb1_e969, 0xeb_d99c, 0x5d_a9f6, 0xe8_6aff, 0x82_fff7, 0xde_dacf,
-            0x31_3131, 0xf5_8c80, 0xdd_f88f, 0xee_e5b2, 0xa5_c7ff, 0xdd_aaff, 0xb7_fff9, 0xff_ffff,
+            0x76_7676, 0xf5_8c80, 0xdd_f88f, 0xee_e5b2, 0xa5_c7ff, 0xdd_aaff, 0xb7_fff9, 0xff_ffff,
         ];
         Self {
             name: "Fogu Dark".to_owned(),

@@ -54,6 +54,8 @@ pub struct App {
     pub(crate) tab_bar_cursor: Point,
     /// Where the bar's empty area was pressed, until the pointer moves (then the window moves).
     pub(crate) bar_press: Option<Point>,
+    /// The tab strip's last reported viewport (`None` until it first overflows).
+    pub(crate) tab_strip: Option<iced::widget::scrollable::Viewport>,
     /// A press on a tab, pane grip or sidebar profile that may become a drag.
     pub(crate) drag: Option<crate::drag::Drag>,
     pub(crate) window_size: iced::Size,
@@ -156,6 +158,7 @@ impl App {
             hovered_tab: None,
             tab_bar_cursor: Point::ORIGIN,
             bar_press: None,
+            tab_strip: None,
             drag: None,
             window_size: WINDOW_SIZE,
             fullscreen: false,
@@ -282,7 +285,11 @@ impl App {
         ) {
             self.blink.activity(now);
         }
-        let task = Task::batch([self.dispatch(message), self.sync_backgrounds()]);
+        let (active, tab_count) = (self.active, self.tabs.len());
+        let mut task = Task::batch([self.dispatch(message), self.sync_backgrounds()]);
+        if self.active != active || self.tabs.len() != tab_count {
+            task = Task::batch([task, self.reveal_active_tab()]);
+        }
         let blink = &self.config.appearance;
         if self.blink.arm(now, blink.cursor_blink, self.focused) {
             return Task::batch([task, self.after(blink::PERIOD, Message::BlinkTick)]);

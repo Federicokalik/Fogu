@@ -133,7 +133,8 @@ fn encode_legacy(k: &KeyInput, mode: TermMode, alt_is_meta: bool) -> Option<Vec<
         KeyCode::Enter | KeyCode::NumpadEnter => meta(newline(mode)),
         KeyCode::Tab if m.shift => csi_letter(b'Z', strip_shift(m)),
         KeyCode::Tab => meta(b"\t"),
-        KeyCode::Backspace if m.ctrl => meta(&[0x08]),
+        // ^W, not xterm's ^H: shells and vim read it as "delete the word before the cursor".
+        KeyCode::Backspace if m.ctrl => meta(&[0x17]),
         KeyCode::Backspace => meta(&[0x7f]),
         KeyCode::Escape => meta(&[ESC]),
         KeyCode::Up

@@ -378,11 +378,18 @@ impl Tab {
         let Some(pane) = self.focused_pane() else {
             return self.title_override.as_deref().unwrap_or_default();
         };
+        let profile = &pane.profile;
+        // An SSH pane's default title is `user@host`; "keep the profile name" means the name.
+        let fallback = if profile.disable_dynamic_title {
+            &profile.name
+        } else {
+            &pane.default_title
+        };
         resolve_title(
             self.title_override.as_deref(),
             pane.title_from_osc.as_deref(),
-            pane.profile.disable_dynamic_title,
-            &pane.default_title,
+            profile.disable_dynamic_title,
+            fallback,
         )
     }
 

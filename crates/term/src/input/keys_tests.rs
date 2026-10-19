@@ -114,7 +114,7 @@ const TABLE: &[Row] = &[
     row("tab", Tab, Some("\t"), N, NORMAL, true, Some(b"\t")),
     row("shift tab", Tab, None, S, NORMAL, true, Some(b"\x1b[Z")),
     row("backspace", Backspace, None, N, NORMAL, true, Some(b"\x7f")),
-    row("ctrl backspace", Backspace, None, C, NORMAL, true, Some(b"\x08")),
+    row("ctrl backspace", Backspace, None, C, NORMAL, true, Some(b"\x17")),
     row("alt backspace", Backspace, None, A, NORMAL, true, Some(b"\x1b\x7f")),
     row("escape", Escape, None, N, NORMAL, true, Some(b"\x1b")),
     row("alt escape", Escape, None, A, NORMAL, true, Some(b"\x1b\x1b")),

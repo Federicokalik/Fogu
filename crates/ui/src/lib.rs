@@ -12,6 +12,7 @@ mod appearance;
 mod background;
 mod background_menu;
 mod blink;
+mod color_picker;
 mod context_menu;
 mod drag;
 mod forms;

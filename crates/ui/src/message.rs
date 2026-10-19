@@ -107,6 +107,10 @@ pub enum Message {
     LeaveTab(TabId),
     /// The pointer moved over the tab bar (window coordinates); anchors the tab menu.
     TabBarCursor(Point),
+    /// The tab strip scrolled or resized (only reported while it overflows).
+    TabStripViewport(iced::widget::scrollable::Viewport),
+    /// A wheel turn over the tab bar the strip itself ignored (vertical): scroll it sideways.
+    TabBarWheel(iced::mouse::ScrollDelta),
     /// Double-click on a tab title: start inline rename.
     StartRename(TabId),
     /// The inline rename field changed.

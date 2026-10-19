@@ -277,7 +277,13 @@ impl ContextMenu {
     /// Top-left corner: at the anchor, flipped to the anchor's left / above it when the menu
     /// would cross the window's right / bottom edge, and kept inside the window.
     fn position(&self, window: Size) -> Point {
-        let extra = usize::from(self.input.is_some()) + usize::from(self.slider.is_some());
+        let picker = self
+            .input
+            .as_ref()
+            .is_some_and(|i| matches!(i.submit, MenuSubmit::Color(_)));
+        let extra = usize::from(self.input.is_some())
+            + usize::from(self.slider.is_some())
+            + 6 * usize::from(picker);
         let rows = self.items.len() + extra * 2;
         let height = crate::metrics::cells_f32(rows) * ROW_H + 8.0;
         Point::new(
@@ -424,8 +430,22 @@ fn menu_box(menu: &ContextMenu, look: Look) -> Element<'_, Message> {
                 .size(13)
                 .padding(6),
         );
-        if input.invalid && matches!(input.submit, MenuSubmit::Color(_)) {
-            col = col.push(text("Not a #RRGGBB colour").size(11).color(look.danger));
+        if matches!(input.submit, MenuSubmit::Color(_)) {
+            if input.invalid {
+                col = col.push(text("Not a #RRGGBB colour").size(11).color(look.danger));
+            }
+            let typed = parse_color(&input.value);
+            let sliders = crate::color_picker::color_picker(typed, MENU_W - 32.0, |c| {
+                Message::MenuInput(c.to_string())
+            });
+            let apply = button(text("Apply").size(13))
+                .padding([4, 10])
+                .on_press_maybe(typed.map(|_| Message::MenuSubmit));
+            col = col.push(
+                column![iced::Element::from(sliders), apply]
+                    .spacing(6)
+                    .padding([4, 12]),
+            );
         }
     }
     container(col)
@@ -433,6 +453,58 @@ fn menu_box(menu: &ContextMenu, look: Look) -> Element<'_, Message> {
         .width(MENU_W)
         .style(move |_theme: &iced::Theme| panel_style(look))
         .into()
+}
+
+/// `c` as hue (0–360), saturation and value (0–100).
+#[expect(
+    clippy::float_cmp,
+    reason = "`max` is one of r/g/b exactly: which one picks the sector"
+)]
+pub(crate) fn to_hsv(c: RgbColor) -> (f32, f32, f32) {
+    let [r, g, b] = [c.r, c.g, c.b].map(|v| f32::from(v) / 255.0);
+    let max = r.max(g).max(b);
+    let delta = max - r.min(g).min(b);
+    let hue = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * ((g - b) / delta).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / delta + 2.0)
+    } else {
+        60.0 * ((r - g) / delta + 4.0)
+    };
+    let sat = if max == 0.0 { 0.0 } else { delta / max };
+    (hue, sat * 100.0, max * 100.0)
+}
+
+/// The colour of hue `h` (0–360), saturation `s` and value `v` (0–100).
+#[expect(
+    clippy::many_single_char_names,
+    reason = "the textbook HSV formula's names"
+)]
+#[expect(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    reason = "rem_euclid and clamp keep both casts in 0..=255"
+)]
+pub(crate) fn from_hsv(h: f32, s: f32, v: f32) -> RgbColor {
+    let (s, v) = (s / 100.0, v / 100.0);
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match (h.rem_euclid(360.0) / 60.0) as u8 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let byte = |f: f32| ((f + v - c) * 255.0).round().clamp(0.0, 255.0) as u8;
+    RgbColor {
+        r: byte(r),
+        g: byte(g),
+        b: byte(b),
+    }
 }
 
 /// Floating panels (menus, the profile picker): raised surface, thin border, soft shadow.

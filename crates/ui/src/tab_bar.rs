@@ -1,5 +1,6 @@
 //! The tab bar (stock iced widgets): one header per tab with title, close `×` (hover/active),
-//! colour underline; `+` at the end; horizontal scroll on overflow.
+//! colour underline; `+` right after them, pinned at the right edge once they overflow and
+//! scroll horizontally (vertical wheel included).
 
 use fogu_core::Action;
 use iced::widget::scrollable::{Direction, Scrollbar};
@@ -18,7 +19,7 @@ use crate::palette::{Look, mix};
 use crate::tab::{Tab, TabId};
 
 /// Header width in logical px.
-const TAB_W: f32 = 200.0;
+pub const TAB_W: f32 = 200.0;
 /// A header plus the 1 px between headers (drag targets in the bar).
 pub const TAB_STRIDE: f32 = TAB_W + 1.0;
 /// Height of the bar (it is the window's title bar).
@@ -34,6 +35,8 @@ const EDGE: f32 = 5.0;
 const WARN: Color = Color::from_rgb(0.96, 0.65, 0.14);
 /// Id of the inline rename field.
 pub const RENAME_INPUT: &str = "fogu-rename-input";
+/// Id of the scrollable tab strip.
+pub const TAB_STRIP: &str = "fogu-tab-strip";
 
 /// An inline rename in progress.
 #[derive(Clone, Debug)]
@@ -164,20 +167,28 @@ impl<'a> TabBar<'a> {
             look,
             Message::Action(Action::OpenProfilePicker),
         );
-        let headers = Row::with_children(self.tabs.iter().map(|tab| self.header(tab)))
-            .spacing(1)
-            .push(plus)
-            .push(picker);
+        let headers = Row::with_children(self.tabs.iter().map(|tab| self.header(tab))).spacing(1);
         let scroller = Scrollbar::new().width(2).scroller_width(2);
-        let tabs = scrollable(headers)
+        let strip = scrollable(headers)
+            .id(Id::new(TAB_STRIP))
             .direction(Direction::Horizontal(scroller))
+            .on_scroll(Message::TabStripViewport)
+            .width(Length::Fill);
+        // As wide as the headers when they fit (so `+` follows the last one), else whatever the
+        // bar leaves after `+` and the buttons; the tiny spacer portion takes the rest.
+        let strip = container(strip)
+            .width(Length::FillPortion(1000))
+            .max_width(crate::metrics::cells_f32(self.tabs.len()) * TAB_STRIDE);
+        let tabs = row![strip, plus, picker, space().width(Length::FillPortion(1))]
+            .align_y(Alignment::Center)
             .width(Length::Fill);
         // The bar's empty part (tab headers and buttons take their own presses first).
         let tabs = mouse_area(tabs)
             .on_press(Message::Window(WindowCmd::Press))
             .on_release(Message::Window(WindowCmd::Release))
             .on_double_click(Message::Window(WindowCmd::ToggleMaximize))
-            .on_right_press(Message::TabBarMenu);
+            .on_right_press(Message::TabBarMenu)
+            .on_scroll(Message::TabBarWheel);
         let toggle = |glyph: Icon, on: bool, tip: String, message| {
             let color = if on { look.accent } else { look.fg };
             let button = button(icon(glyph, 16.0, color))

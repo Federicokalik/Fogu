@@ -113,6 +113,21 @@ impl App {
                 _ => Task::none(),
             };
         }
+        // Tab / Shift+Tab in a pane's login prompt: next/previous field, or back into the only one.
+        if let Key::Named(Named::Tab) = key
+            && let Some(pane) = self.active_pane().filter(|p| p.prompt.is_some())
+        {
+            let fields = pane
+                .prompt
+                .as_ref()
+                .map_or(0, crate::prompt::PromptState::fields);
+            return match fields {
+                0 => Task::none(),
+                1 => iced::widget::operation::focus(crate::prompt::field_id(pane.id, 0)),
+                _ if mods.shift() => iced::widget::operation::focus_previous(),
+                _ => iced::widget::operation::focus_next(),
+            };
+        }
         match key {
             Key::Named(Named::Enter) => self.on_enter(),
             Key::Named(Named::ArrowUp) => {

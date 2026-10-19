@@ -17,7 +17,7 @@ use crate::message::{Message, PasteSource};
 use crate::notifications::{Level, Notification};
 use crate::panes::{CloseTarget, CwdFor, CwdQuery, SPLIT_CWD_WAIT};
 use crate::tab::{Pane, PaneId, Tab, TabId};
-use crate::tab_bar::{RENAME_INPUT, Rename};
+use crate::tab_bar::{RENAME_INPUT, Rename, TAB_STRIDE, TAB_STRIP, TAB_W};
 
 /// Logical px the pointer must move with the title bar pressed before the window moves.
 const DRAG_THRESHOLD: f32 = 4.0;
@@ -484,6 +484,37 @@ impl App {
         Task::none()
     }
 
+    /// Scrolls the tab strip just enough to show the active tab's header.
+    pub(crate) fn reveal_active_tab(&self) -> Task<Message> {
+        let Some(index) = self.tabs.iter().position(|t| t.id == self.active) else {
+            return Task::none();
+        };
+        let left = crate::metrics::cells_f32(index) * TAB_STRIDE;
+        let Some(viewport) = self.tab_strip else {
+            // Not overflowing yet as far as we know: a new last tab may be the first that does.
+            return if index + 1 == self.tabs.len() {
+                operation::snap_to_end(TAB_STRIP)
+            } else {
+                Task::none()
+            };
+        };
+        let (x, width) = (viewport.absolute_offset().x, viewport.bounds().width);
+        let to = if left < x {
+            left
+        } else if left + TAB_W > x + width {
+            left + TAB_W - width
+        } else {
+            return Task::none();
+        };
+        operation::scroll_to(
+            TAB_STRIP,
+            operation::AbsoluteOffset {
+                x: Some(to),
+                y: None,
+            },
+        )
+    }
+
     fn start_rename(&mut self, id: TabId) -> Task<Message> {
         let Some(tab) = self.tabs.iter().find(|t| t.id == id) else {
             return Task::none();
@@ -530,6 +561,17 @@ impl App {
                     self.bar_press = None;
                     return iced::window::latest().and_then(iced::window::drag);
                 }
+            }
+            Message::TabStripViewport(viewport) => self.tab_strip = Some(viewport),
+            Message::TabBarWheel(delta) => {
+                let dx = match delta {
+                    iced::mouse::ScrollDelta::Lines { y, .. } => -y * 60.0,
+                    iced::mouse::ScrollDelta::Pixels { y, .. } => -y,
+                };
+                return operation::scroll_by(
+                    TAB_STRIP,
+                    operation::AbsoluteOffset { x: dx, y: 0.0 },
+                );
             }
             Message::StartRename(id) => return self.start_rename(id),
             Message::RenameInput(value) => {

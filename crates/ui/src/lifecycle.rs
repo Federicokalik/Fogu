@@ -293,14 +293,16 @@ impl App {
                 crate::forwards_dialog::apply_status(&mut pane.forwards, status);
             }
             SessionOutput::Connection(id) => pane.connection = Some(id),
-            SessionOutput::Warning(warning) => {
+            SessionOutput::Warning(warning) if warning != SessionWarning::AgentForwarded => {
                 if !pane.warnings.contains(&warning) {
                     pane.warnings.push(warning.clone());
                 }
                 return self.on_session_warning(&warning);
             }
-            // No UI for these yet; Progress/Notify/PromptMark are logged by the session.
-            SessionOutput::Wakeup
+            // No UI for these yet; Progress/Notify/PromptMark are logged by the session. Agent
+            // forwarding is what the profile asked for, not a problem: no badge, no toast.
+            SessionOutput::Warning(_)
+            | SessionOutput::Wakeup
             | SessionOutput::Bell
             | SessionOutput::Progress(_)
             | SessionOutput::Notify { .. }
