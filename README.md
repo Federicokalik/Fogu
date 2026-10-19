@@ -22,6 +22,28 @@
 > **Fogu is in beta.** It is used daily, but expect rough edges and breaking changes to the
 > configuration format before 1.0. Bug reports and feedback are very welcome.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/ssh-manager.png" alt="SSH manager: hosts from ~/.ssh/config in the sidebar, two SSH tabs" width="860">
+</p>
+<p align="center"><em>SSH manager: every host from <code>~/.ssh/config</code>, one click to connect.</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/picker.png" alt="Quick profile picker with fuzzy search" width="860">
+</p>
+<p align="center"><em>Quick picker (<code>Ctrl+Shift+E</code>): type a few letters, press Enter.</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/sftp.png" alt="SFTP panel next to the shell on the same connection" width="860">
+</p>
+<p align="center"><em>SFTP panel on the same connection as the shell.</em></p>
+
+<p align="center">
+  <img src="docs/screenshots/splits.png" alt="Split panes on different hosts" width="860">
+</p>
+<p align="center"><em>Split panes, each on its own host.</em></p>
+
 ## Why Fogu
 
 Most terminals that ship a decent SSH manager are web apps in disguise: a few hundred megabytes of
