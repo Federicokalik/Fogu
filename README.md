@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-yellow">
   <img alt="Linux" src="https://img.shields.io/badge/platform-Linux-orange">
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.99-orange">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-red">
@@ -17,6 +18,9 @@
 </p>
 
 ---
+
+> **Fogu is in beta.** It is used daily, but expect rough edges and breaking changes to the
+> configuration format before 1.0. Bug reports and feedback are very welcome.
 
 ## Why Fogu
 
@@ -157,6 +161,18 @@ cargo run             # debug build
 
 The SSH integration tests need `sshd`, `ssh-keygen`, `ssh-agent` and `ssh-add`; without them they
 are skipped.
+
+## Contributing
+
+Fogu is open to contributions: bug reports, ideas, documentation and code are all welcome.
+
+- **Bugs and ideas:** open an [issue](https://github.com/Revdep/Fogu/issues) with steps to
+  reproduce, your distribution and desktop (X11 or Wayland).
+- **Code:** fork, branch, and open a pull request. Keep changes focused, add a test for new
+  logic, and make sure `./scripts/check.sh` passes.
+- **Security issues:** please report them privately through
+  [GitHub security advisories](https://github.com/Revdep/Fogu/security/advisories/new) rather
+  than a public issue.
 
 ## Acknowledgements
 
