@@ -1,4 +1,4 @@
-//! `run_local`: a local shell in a ConPTY, one task per tab.
+//! `run_local`: a local shell in a `ConPTY`, one task per tab.
 //!
 //! `portable-pty` exposes blocking readers and writers even on Windows. Two small blocking
 //! tasks bridge them to the async session loop: one reads PTY output, one writes queued input.
@@ -12,9 +12,7 @@ use std::time::Duration;
 
 use fogu_core::{LocalProfile, Size};
 use fogu_term::TermHandle;
-use portable_pty::{
-    Child, ChildKiller, CommandBuilder, MasterPty, PtyPair, PtySize, PtySystem as _, native_pty_system,
-};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtyPair, PtySize, native_pty_system};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::{Instant, sleep_until, timeout};
 
@@ -27,12 +25,11 @@ const READ_CHUNK: usize = 64 * 1024;
 /// Time between closing the master and killing the child.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
 /// Upper bound for draining output after the child exited.
-const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 /// How often a watched foreground program is checked (kept for API parity; Windows has no
 /// portable foreground-process query).
 const WATCH_EVERY: Duration = Duration::from_secs(1);
 
-/// A spawned shell and our ends of its ConPTY.
+/// A spawned shell and our ends of its `ConPTY`.
 struct Local {
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
@@ -74,12 +71,9 @@ pub(crate) async fn run_local(
             return;
         }
     };
-    let status = match run_loop(&mut local, &mut pump, &mut in_rx).await {
-        Ok(end) => end,
-        Err(Gone) => {
-            let _status = close(&mut local).await;
-            return;
-        }
+    let Ok(status) = run_loop(&mut local, &mut pump, &mut in_rx).await else {
+        let _status = close(&mut local).await;
+        return;
     };
     let out = match status {
         Ok(code) => SessionOutput::Exited(ExitInfo {
@@ -241,9 +235,7 @@ fn spawn(profile: &LocalProfile, size: Size) -> Result<Local, SessionError> {
     tokio::task::spawn_blocking(move || write_loop(writer, &mut write_queue, write_done_tx));
     let wait_handle = tokio::task::spawn_blocking(move || {
         let mut child = child;
-        child
-            .wait()
-            .map(|status| status.exit_code().cast_signed())
+        child.wait().map(|status| status.exit_code().cast_signed())
     });
 
     Ok(Local {
@@ -257,6 +249,10 @@ fn spawn(profile: &LocalProfile, size: Size) -> Result<Local, SessionError> {
     })
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the sender is moved into a blocking task"
+)]
 fn read_loop(mut reader: Box<dyn io::Read + Send>, tx: Sender<io::Result<Vec<u8>>>) {
     let mut buf = vec![0_u8; READ_CHUNK];
     loop {
@@ -279,6 +275,10 @@ fn read_loop(mut reader: Box<dyn io::Read + Send>, tx: Sender<io::Result<Vec<u8>
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the sender is moved into a blocking task"
+)]
 fn write_loop(
     mut writer: Box<dyn io::Write + Send>,
     queue: &mut Receiver<Vec<u8>>,
@@ -304,8 +304,8 @@ fn default_shell() -> String {
 }
 
 fn find_in_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH")?
-        .split_paths()
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
         .map(|dir| dir.join(name))
         .find(|path| path.is_file())
 }
@@ -328,6 +328,6 @@ mod tests {
 
     #[test]
     fn default_shell_is_never_empty() {
-        assert!(!default_shell().is_empty());
+        assert_ne!(default_shell(), "");
     }
 }

@@ -162,12 +162,7 @@ fn regular_only(fd: OwnedFd) -> io::Result<File> {
 /// Moves the finished `part` to `name` in `dir`. Without `replace` the rename fails if `name`
 /// exists (`RENAME_NOREPLACE`, or `link` + `unlink` where the filesystem lacks it); with
 /// `replace` an existing `name` is replaced (a symlink there is replaced itself, not followed).
-pub(crate) fn finish(
-    dir: &DirHandle,
-    part: &str,
-    name: &str,
-    replace: bool,
-) -> io::Result<()> {
+pub(crate) fn finish(dir: &DirHandle, part: &str, name: &str, replace: bool) -> io::Result<()> {
     if replace {
         rfs::renameat(&dir.fd, part, &dir.fd, name)?;
     } else {
@@ -188,6 +183,14 @@ pub(crate) fn finish(
 /// Removes the file `name` in `dir` (a symlink would be removed itself).
 pub(crate) fn remove(dir: &DirHandle, name: &str) -> io::Result<()> {
     Ok(rfs::unlinkat(&dir.fd, name, AtFlags::empty())?)
+}
+
+/// Free bytes for the unprivileged user on the filesystem holding `dir`.
+pub(crate) fn available_space(dir: &DirHandle) -> io::Result<u64> {
+    let stat = rfs::fstatvfs(&dir.fd)?;
+    Ok(u64::try_from(stat.f_bavail)
+        .unwrap_or(0)
+        .saturating_mul(u64::try_from(stat.f_frsize).unwrap_or(0)))
 }
 
 #[cfg(test)]

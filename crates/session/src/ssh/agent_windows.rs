@@ -81,7 +81,7 @@ async fn timeout_open(path: &Path) -> Result<Result<NamedPipeClient, std::io::Er
     .await
     {
         Ok(Ok(result)) => Ok(result),
-        Ok(Err(err)) => Err(()),
+        Ok(Err(_join)) => Err(()),
         Err(_elapsed) => Err(()),
     }
 }
@@ -99,4 +99,3 @@ async fn try_connect(path: &Path) -> Option<Agent> {
         Err(_elapsed) => None,
     }
 }
-

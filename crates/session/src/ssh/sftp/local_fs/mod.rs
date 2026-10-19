@@ -14,9 +14,15 @@ mod unix;
 mod windows;
 
 #[cfg(unix)]
-pub(crate) use unix::{DirHandle, LocalDir, create_file, existing, file_info, finish, open_for_resume, remove};
+pub(crate) use unix::{
+    DirHandle, LocalDir, available_space, create_file, existing, file_info, finish,
+    open_for_resume, remove,
+};
 #[cfg(windows)]
-pub(crate) use windows::{DirHandle, LocalDir, create_file, existing, file_info, finish, open_for_resume, remove};
+pub(crate) use windows::{
+    DirHandle, LocalDir, available_space, create_file, existing, file_info, finish,
+    open_for_resume, remove,
+};
 
 pub(crate) use crate::sftp::NAME_MAX;
 use crate::sftp::NameError;
@@ -34,8 +40,8 @@ pub(crate) fn validate_name(name: &str) -> Result<&str, NameError> {
 #[cfg(windows)]
 fn windows_name(name: &str) -> Result<(), NameError> {
     const RESERVED: [&str; 22] = [
-        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7",
-        "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+        "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
     ];
     if name.ends_with(['.', ' ']) {
         return Err(NameError::Invalid);
@@ -50,7 +56,10 @@ fn windows_name(name: &str) -> Result<(), NameError> {
         .split_once('.')
         .map_or(name, |(stem, _rest)| stem)
         .trim_end_matches(['.', ' ']);
-    if RESERVED.iter().any(|reserved| stem.eq_ignore_ascii_case(reserved)) {
+    if RESERVED
+        .iter()
+        .any(|reserved| stem.eq_ignore_ascii_case(reserved))
+    {
         return Err(NameError::Invalid);
     }
     Ok(())
@@ -71,11 +80,13 @@ pub(crate) struct Mode(u32);
 
 impl Mode {
     /// Wraps raw permission bits.
+    #[cfg_attr(windows, allow(dead_code, reason = "used by Windows tests only"))]
     pub(crate) const fn from_raw_mode(mode: u32) -> Self {
         Self(mode)
     }
 
     /// The raw permission bits.
+    #[cfg_attr(windows, allow(dead_code, reason = "used by Windows tests only"))]
     pub(crate) const fn as_raw_mode(self) -> u32 {
         self.0
     }

@@ -3,6 +3,9 @@
 
 use std::sync::Arc;
 
+/// The `x11-req` cookie name; kept for source compatibility with the Unix module.
+pub(crate) const MIT_COOKIE: &str = "MIT-MAGIC-COOKIE-1";
+
 /// The subset of the Unix display identity used by the shell channel.
 #[derive(Clone, Debug)]
 pub(crate) struct Display {
@@ -35,4 +38,5 @@ impl X11Fwd {
 }
 
 /// Rejects an `x11` channel (the server should never see one because `x11-req` is not sent).
+#[allow(clippy::unused_async, reason = "mirrors the Unix serve function")]
 pub(crate) async fn serve<C>(_channel: C, _x11: &Arc<X11Fwd>) {}

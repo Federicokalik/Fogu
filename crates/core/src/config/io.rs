@@ -9,7 +9,9 @@ use crate::background::{Background, Fit};
 /// The config file's name inside [`config_dir`].
 pub(super) const FILE_NAME: &str = "config.toml";
 /// Permissions for the config file and its backup (may contain nothing secret today, but
-/// `profiles` will later carry hostnames/usernames some users consider sensitive).
+/// `profiles` will later carry hostnames/usernames some users consider sensitive). Unix only:
+/// Windows protects the profile directory with its ACL.
+#[cfg(unix)]
 const FILE_MODE: u32 = 0o600;
 
 /// Something went wrong loading or saving the config file.

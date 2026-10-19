@@ -2,7 +2,7 @@
 //!
 //! Everything Linux-specific that used to be spread across the config, recovery and session
 //! code lives here, so the rest of the workspace can use one vocabulary for "the user's
-//! config directory", "the state directory", "home" and "known_hosts".
+//! config directory", "the state directory", "home" and "`known_hosts`".
 //!
 //! On Linux these are the XDG directories (and still `$XDG_*`-aware); on Windows they are the
 //! roaming (`%APPDATA%`) and local (`%LOCALAPPDATA%`) app-data directories.
@@ -80,8 +80,11 @@ pub fn system_known_hosts() -> Option<PathBuf> {
     }
     #[cfg(windows)]
     {
-        std::env::var_os("ProgramData")
-            .map(|program_data| PathBuf::from(program_data).join("ssh").join("ssh_known_hosts"))
+        std::env::var_os("ProgramData").map(|program_data| {
+            PathBuf::from(program_data)
+                .join("ssh")
+                .join("ssh_known_hosts")
+        })
     }
 }
 
