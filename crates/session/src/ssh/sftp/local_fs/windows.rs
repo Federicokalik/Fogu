@@ -79,13 +79,15 @@ impl LocalDir {
         let path = safe_child(&parent.path, name)?;
         match std::fs::create_dir(&path) {
             Ok(()) => Ok(true),
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => match existing(&parent, name)? {
-                Existing::Dir => Ok(false),
-                _ => Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "exists and is not a directory (symlinks and junctions are never followed)",
-                )),
-            },
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                match existing(&parent, name)? {
+                    Existing::Dir => Ok(false),
+                    _ => Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "exists and is not a directory (symlinks and junctions are never followed)",
+                    )),
+                }
+            }
             Err(err) => Err(err),
         }
     }
@@ -170,12 +172,7 @@ pub(crate) fn open_for_resume(dir: &DirHandle, name: &str) -> io::Result<(File, 
 }
 
 /// Publishes `part` as `name`; without `replace`, an existing target is a conflict.
-pub(crate) fn finish(
-    dir: &DirHandle,
-    part: &str,
-    name: &str,
-    replace: bool,
-) -> io::Result<()> {
+pub(crate) fn finish(dir: &DirHandle, part: &str, name: &str, replace: bool) -> io::Result<()> {
     let part = safe_child(&dir.path, part)?;
     let name_path = safe_child(&dir.path, name)?;
     if !replace {
@@ -195,6 +192,11 @@ pub(crate) fn finish(
 /// Removes the file `name` in `dir`.
 pub(crate) fn remove(dir: &DirHandle, name: &str) -> io::Result<()> {
     std::fs::remove_file(safe_child(&dir.path, name)?)
+}
+
+/// Free bytes available to the current user on the filesystem holding `dir`.
+pub(crate) fn available_space(dir: &DirHandle) -> io::Result<u64> {
+    fs4::available_space(&dir.path)
 }
 
 #[cfg(test)]

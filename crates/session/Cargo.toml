@@ -34,6 +34,7 @@ serde_json = { workspace = true, optional = true }
 [target.'cfg(windows)'.dependencies]
 portable-pty.workspace = true
 keyring = { workspace = true, optional = true }
+fs4 = { version = "1.1.0", default-features = false }
 
 [features]
 default = ["ssh"]

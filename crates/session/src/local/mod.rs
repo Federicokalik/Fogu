@@ -1,4 +1,4 @@
-//! Local shell sessions: a real PTY on Unix (`pty-process`) or ConPTY on Windows
+//! Local shell sessions: a real PTY on Unix (`pty-process`) or `ConPTY` on Windows
 //! (`portable-pty`). The public session API is identical on both platforms.
 
 #[cfg(unix)]

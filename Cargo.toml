@@ -44,7 +44,7 @@ tracing-appender = "0.2.5"
 # why: async runtime for session tasks; multi-thread rt, mpsc, child
 # process wait, timers, `select!`.
 # `net`: TCP for russh's `client::connect`.
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "sync", "process", "io-util", "time", "macros", "net"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "sync", "process", "io-util", "time", "macros", "net", "fs"] }
 # why: tokio-native PTY open/spawn/resize without unsafe in our code (Unix).
 pty-process = { version = "0.5.3", features = ["async"] }
 # why: safe `dup`, `tcsetwinsize`, `getuid`, process-group SIGKILL and `uname`; already in the
@@ -117,6 +117,9 @@ keyring = { version = "3.6.3", default-features = false, features = ["windows-na
 # Only the `xdg-portal` backend (D-Bus portal, zenity fallback): no GTK, no `wayland` feature (the
 # portal needs no Wayland handle since we open the dialog without a parent window).
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+# why: opening a path or URL with the desktop's default application (`xdg-open` on Linux,
+# `ShellExecute` on Windows) through one safe API.
+open = "5.4.4"
 # why: decoding tab background images with size/dimension limits and downscaling; the same
 # 0.25 crate iced's image feature already depends on (one version in the tree), only the three
 # formats we accept (PNG, JPEG, WebP; all pure-Rust decoders).

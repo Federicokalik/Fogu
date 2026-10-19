@@ -6,6 +6,7 @@
 //! `Err(SecretError)` whose text the caller shows, and the caller asks the user instead. There
 //! is no fallback storage. Secrets exist only as [`SecretString`].
 
+#[cfg(any(test, feature = "test-store"))]
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,6 +50,11 @@ pub enum SecretStore {
 
 impl SecretStore {
     /// The Credential Manager is always present on Windows; failures surface on first use.
+    #[allow(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "mirrors the Linux detect API, which is async"
+    )]
     pub async fn detect() -> Self {
         Self::Windows
     }
@@ -63,14 +69,11 @@ impl SecretStore {
     /// The stored secret, if any.
     pub async fn get(&self, key: &SecretKey) -> Result<Option<SecretString>, SecretError> {
         match self {
-            Self::Windows => {
-                let id = id(key);
-                match call(id, |entry| entry.get_password()).await {
-                    Ok(text) => Ok(Some(SecretString::from(text))),
-                    Err(err) if err.to_string().contains("No matching entry") => Ok(None),
-                    Err(err) => Err(SecretError::new(err)),
-                }
-            }
+            Self::Windows => match get_secret(id(key)).await {
+                Ok(text) => Ok(Some(SecretString::from(text))),
+                Err(err) if err.contains("No matching entry") => Ok(None),
+                Err(err) => Err(SecretError::new(err)),
+            },
             Self::Disabled(reason) => Err(SecretError::new(reason)),
             #[cfg(any(test, feature = "test-store"))]
             Self::InMemory(map) => Ok(map.lock().ok().and_then(|m| m.get(&id(key)).cloned())),
@@ -117,9 +120,9 @@ impl SecretStore {
         match self {
             Self::Windows => {
                 let id = id(key);
-                match call(id, |entry| entry.delete_credential()).await {
+                match call(id, Entry::delete_credential).await {
                     Ok(()) => Ok(()),
-                    Err(err) if err.to_string().contains("No matching entry") => Ok(()),
+                    Err(err) if err.contains("No matching entry") => Ok(()),
                     Err(err) => Err(SecretError::new(err)),
                 }
             }
@@ -304,12 +307,7 @@ mod tests {
         assert!(store.exists(&key("a")).await.unwrap());
         assert!(!store.exists(&key("b")).await.unwrap());
         assert_eq!(
-            store
-                .get(&key("a"))
-                .await
-                .unwrap()
-                .unwrap()
-                .expose_secret(),
+            store.get(&key("a")).await.unwrap().unwrap().expose_secret(),
             "two"
         );
         store.delete(&key("a")).await.unwrap();
