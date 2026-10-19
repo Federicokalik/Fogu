@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fogu_core::{EffectiveSsh, Jump, MAX_JUMP_HOPS};
+#[cfg(unix)]
 use rustix::process::{Pid, Signal};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
 use tokio::net::TcpStream;
@@ -86,14 +87,24 @@ struct ProxyChild {
 impl Drop for ProxyChild {
     fn drop(&mut self) {
         // Only while it still runs: after it was reaped its pid (= process group) may be reused.
-        if let Ok(None) = self.child.try_wait()
-            && let Some(pid) = self
-                .child
-                .id()
-                .and_then(|id| Pid::from_raw(id.cast_signed()))
-            && let Err(err) = rustix::process::kill_process_group(pid, Signal::KILL)
-        {
-            tracing::debug!(error = %err, "could not kill the proxy command");
+        if let Ok(None) = self.child.try_wait() {
+            #[cfg(unix)]
+            {
+                if let Some(pid) = self
+                    .child
+                    .id()
+                    .and_then(|id| Pid::from_raw(id.cast_signed()))
+                    && let Err(err) = rustix::process::kill_process_group(pid, Signal::KILL)
+                {
+                    tracing::debug!(error = %err, "could not kill the proxy command");
+                }
+            }
+            #[cfg(windows)]
+            {
+                if let Err(err) = self.child.start_kill() {
+                    tracing::debug!(error = %err, "could not kill the proxy command");
+                }
+            }
         }
     }
 }
@@ -297,16 +308,34 @@ fn spawn_proxy(
 ) -> Result<(Box<dyn Stream>, ProxyChild), SessionError> {
     let command = expand_proxy_command(template, &ssh.host, ssh.port, &ssh.user)
         .map_err(|why| SessionError::Proxy(crate::sanitize_remote(&why, 300, false)))?;
-    let shell = std::env::var_os("SHELL")
-        .filter(|s| std::path::Path::new(s).is_absolute())
-        .unwrap_or_else(|| "/bin/sh".into());
-    let mut child = Command::new(shell)
-        .arg("-c")
-        .arg(format!("exec {command}"))
+    let mut process = {
+        #[cfg(unix)]
+        {
+            let shell = std::env::var_os("SHELL")
+                .filter(|s| std::path::Path::new(s).is_absolute())
+                .unwrap_or_else(|| "/bin/sh".into());
+            let mut process = Command::new(shell);
+            process
+                .arg("-c")
+                .arg(format!("exec {command}"))
+                .process_group(0);
+            process
+        }
+        #[cfg(windows)]
+        {
+            // Windows has no user shell variable with POSIX `-c` semantics. `cmd /S /C`
+            // understands the same redirections and pipes; host/user substitution is already
+            // restricted to characters with no special meaning.
+            let shell = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+            let mut process = Command::new(shell);
+            process.args(["/S", "/C", &command]);
+            process
+        }
+    };
+    let mut child = process
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
         .kill_on_drop(true)
         .spawn()
         .map_err(|err| SessionError::Proxy(format!("could not start the proxy command: {err}")))?;
