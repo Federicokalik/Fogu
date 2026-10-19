@@ -90,7 +90,7 @@ pub(super) fn label<'a>(value: impl text::IntoFragment<'a>, color: Color) -> tex
 
 /// The whole panel of tab `tab`.
 pub fn view<'a>(tab: TabId, panel: &'a SftpPanelState, colors: &Colors) -> Element<'a, Message> {
-    let look = Look::new(colors);
+    let look = Look::new(colors, crate::design::UiTheme::Fogu, None);
     let has_path = panel.path.is_some();
     let nav = |label: &str, tip: &'a str, m: PanelMsg, enabled: bool| {
         tooltip(

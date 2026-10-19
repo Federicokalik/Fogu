@@ -14,6 +14,7 @@ mod background_menu;
 mod blink;
 mod color_picker;
 mod context_menu;
+mod design;
 mod drag;
 mod forms;
 mod forwards_dialog;

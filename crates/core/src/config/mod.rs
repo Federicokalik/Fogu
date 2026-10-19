@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::action::Hotkeys;
 use crate::profile::{Group, Osc52Policy, Profile, ProfileDefaults, ProfileId};
+use crate::scheme::RgbColor;
 
 /// The config schema version this binary writes; `migrate` (in `io.rs`) upgrades older files.
 pub const CURRENT_VERSION: u32 = 1;
@@ -89,6 +90,11 @@ pub struct Appearance {
     pub cursor_blink: bool,
     /// Active colour scheme name (`ColorScheme::by_name`).
     pub color_scheme: String,
+    /// UI shape preset: `fogu`, `fluent`, `minimal` or `retro`. Unknown values fall back to
+    /// `fogu` with a visible notice; the terminal colour scheme stays independent.
+    pub ui_theme: String,
+    /// Optional accent override for the window chrome (not the terminal palette).
+    pub accent: Option<RgbColor>,
     /// Tab bar placement.
     pub tabs_location: TabsLocation,
     /// Alpha (0..=1) of the terminal's default background over a tab background; unset = 0.75
@@ -114,6 +120,8 @@ impl Default for Appearance {
             cursor_shape: CursorShapeCfg::default(),
             cursor_blink: true,
             color_scheme: "Fogu Dark".to_owned(),
+            ui_theme: "fogu".to_owned(),
+            accent: None,
             tabs_location: TabsLocation::default(),
             terminal_bg_alpha: None,
             show_builtin_profiles: true,

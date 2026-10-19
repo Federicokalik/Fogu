@@ -17,6 +17,7 @@ use crate::appearance::resolve_scheme;
 use crate::background;
 use crate::blink::{self, Blink};
 use crate::context_menu::ContextMenu;
+use crate::design::UiTheme;
 use crate::lifecycle::PendingClipboard;
 use crate::message::{Message, PasteSource, SelectEvent, WindowCmd};
 use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
@@ -146,8 +147,13 @@ impl App {
         let metrics = CellMetrics::new(resolved.units, font.size_px(), 1.0);
         let (scheme, scheme_note) = resolve_scheme(&config.appearance.color_scheme);
         let colors = Colors::new(&scheme);
+        let (preset, preset_note) = UiTheme::resolve(&config.appearance.ui_theme);
+        let look = Look::new(&colors, preset, config.appearance.accent);
         let mut toasts = Toasts::default();
         if let Some(note) = scheme_note {
+            toasts.push(note);
+        }
+        if let Some(note) = preset_note {
             toasts.push(note);
         }
         Self {
@@ -170,8 +176,8 @@ impl App {
             resolved,
             metrics,
             scale: 1.0,
-            look: Look::new(&colors),
-            theme: Look::new(&colors).theme(&colors),
+            look,
+            theme: look.theme(&colors),
             colors,
             focused: true,
             pending_paste: None,

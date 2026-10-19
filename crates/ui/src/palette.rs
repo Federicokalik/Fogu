@@ -7,6 +7,8 @@
 use fogu_core::{ColorScheme, RgbColor};
 use fogu_term::{Color, NamedColor, Palette, Rgb, default_palette, dim};
 
+use crate::design::UiTheme;
+
 /// The resolved colour table of one scheme.
 #[derive(Clone, Debug)]
 pub struct Colors {
@@ -110,35 +112,91 @@ pub(crate) struct Look {
     pub(crate) fg: iced::Color,
     /// Muted text.
     pub(crate) dim: iced::Color,
-    /// The scheme's bright blue: links, selection, active toggles.
+    /// Links, selection, active toggles. Preset default, overridable in config.
     pub(crate) accent: iced::Color,
+    /// Tinted accent for selected rows and focus rings.
+    pub(crate) accent_soft: iced::Color,
     /// The terminal background (the active tab).
     pub(crate) base: iced::Color,
     /// The title / tab bar.
     pub(crate) raised: iced::Color,
+    /// Layered panel surface (Fluent), otherwise the same as `bg`.
+    pub(crate) panel: iced::Color,
     /// 1 px borders and the sidebar handle.
     pub(crate) border: iced::Color,
     /// Hovered rows and buttons.
     pub(crate) hover: iced::Color,
     /// Close-button hover, errors.
     pub(crate) danger: iced::Color,
+    /// Active UI shape preset.
+    pub(crate) preset: UiTheme,
+    /// Card/dialog radius.
+    pub(crate) radius: f32,
+    /// Row/input radius.
+    pub(crate) radius_small: f32,
+    /// Panel header and row gutters.
+    pub(crate) gutter: f32,
+    /// Whether elevated panels should look raised.
+    pub(crate) elevated: bool,
 }
 
 impl Look {
-    pub(crate) fn new(colors: &Colors) -> Self {
+    pub(crate) fn new(
+        colors: &Colors,
+        preset: UiTheme,
+        accent: Option<RgbColor>,
+    ) -> Self {
         let base = to_iced(colors.background());
         let fg = to_iced(colors.foreground());
         let dark = base.r * 0.299 + base.g * 0.587 + base.b * 0.114 < 0.5;
+        let accent = accent.map_or_else(
+            || {
+                let (r, g, b) = preset.accent_rgb();
+                iced::Color::from_rgb8(r, g, b)
+            },
+            to_iced,
+        );
+        let bg = match preset {
+            UiTheme::Minimal => mix(base, fg, if dark { 0.02 } else { 0.03 }),
+            UiTheme::Retro => mix(base, iced::Color::BLACK, if dark { 0.15 } else { 0.02 }),
+            UiTheme::Fogu | UiTheme::Fluent => mix(base, fg, if dark { 0.06 } else { 0.04 }),
+        };
+        let raised = match preset {
+            UiTheme::Fluent => mix(bg, fg, if dark { 0.07 } else { 0.05 }),
+            UiTheme::Minimal => bg,
+            UiTheme::Retro => mix(base, iced::Color::BLACK, if dark { 0.45 } else { 0.08 }),
+            UiTheme::Fogu => mix(base, iced::Color::BLACK, if dark { 0.3 } else { 0.06 }),
+        };
+        let panel = if preset == UiTheme::Fluent {
+            mix(bg, fg, if dark { 0.03 } else { 0.02 })
+        } else {
+            bg
+        };
+        let border = match preset {
+            UiTheme::Retro => mix(base, accent, 0.28),
+            UiTheme::Minimal => mix(base, fg, 0.12),
+            _ => mix(base, fg, 0.18),
+        };
         Self {
-            bg: mix(base, fg, 0.06),
+            bg,
             fg,
-            dim: mix(fg, base, 0.45),
-            accent: to_iced(colors.resolve(Color::Named(NamedColor::BrightBlue), false)),
+            dim: mix(fg, base, if preset == UiTheme::Minimal { 0.38 } else { 0.45 }),
+            accent,
+            accent_soft: iced::Color {
+                a: if dark { 0.16 } else { 0.12 },
+                ..accent
+            },
             base,
-            raised: mix(base, iced::Color::BLACK, if dark { 0.3 } else { 0.06 }),
-            border: mix(base, fg, 0.18),
+            raised,
+            panel,
+            border,
             hover: iced::Color { a: 0.10, ..fg },
             danger: iced::Color::from_rgb8(0xE5, 0x48, 0x4D),
+            preset,
+            radius: preset.radius(),
+            radius_small: preset.radius_small(),
+            gutter: preset.gutter(),
+            elevated: preset.elevated(),
         }
     }
 
