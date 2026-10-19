@@ -11,7 +11,7 @@ workspace = true
 serde.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
-xdg.workspace = true
+dirs.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
