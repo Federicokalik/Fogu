@@ -14,7 +14,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Color, Element, Length};
 
-use crate::color_picker::color_picker;
+use crate::color_picker::{color_picker, preview};
 use crate::context_menu::{PRESET_COLORS, to_iced};
 use crate::sftp::panel::Look;
 
@@ -61,6 +61,8 @@ pub enum FieldValue {
     SetSecret,
     /// "Clear" on a secret.
     ClearSecret,
+    /// Right-click on a text field at `.0` (window coordinates); `.1` is the text it shows.
+    Menu(iced::Point, String),
 }
 
 /// One widget event: which field, what happened.
@@ -96,6 +98,19 @@ pub(crate) fn input<'a, Id: Copy + 'a>(
         .padding(4)
 }
 
+/// `field` (showing `value`) with a right-click menu: reports [`FieldValue::Menu`].
+fn with_menu<'a, Id: Copy + 'a>(
+    id: Id,
+    value: &str,
+    field: impl Into<Element<'a, Field<Id>>>,
+) -> Element<'a, Field<Id>> {
+    let value = value.to_owned();
+    crate::right_click::right_click(field, move |at| {
+        Field(id, FieldValue::Menu(at, value.clone()))
+    })
+    .into()
+}
+
 fn small_button<'a, M: Clone + 'a>(label: &str, on_press: Option<M>) -> Element<'a, M> {
     button(text(label.to_owned()).size(LABEL_SIZE))
         .padding([2, 8])
@@ -112,7 +127,11 @@ pub fn text_field<'a, Id: Copy + 'a>(
     value: &str,
     placeholder: &str,
 ) -> Element<'a, Field<Id>> {
-    labeled(look, label, input(id, value, placeholder).into())
+    labeled(
+        look,
+        label,
+        with_menu(id, value, input(id, value, placeholder)),
+    )
 }
 
 /// A number field (the reducer parses it and checks the range).
@@ -126,7 +145,7 @@ pub fn number<'a, Id: Copy + 'a>(
     labeled(
         look,
         label,
-        input(id, value, placeholder).width(NUMBER_W).into(),
+        with_menu(id, value, input(id, value, placeholder).width(NUMBER_W)),
     )
 }
 
@@ -192,13 +211,13 @@ pub fn color<'a, Id: Copy + 'a>(
         ));
     }
     let none = small_button("None", Some(Field(id, FieldValue::Color(None))));
-    let field = input(id, hex, "#rrggbb").width(100);
+    let field = with_menu(id, hex, input(id, hex, "#rrggbb").width(100));
     let picker = color_picker(value, 260.0, move |c| Field(id, FieldValue::Color(Some(c))));
     labeled(
         look,
         label,
         column![
-            row![swatches, none, field]
+            row![swatches, none, field, preview(value, 24.0, look.border)]
                 .spacing(8)
                 .align_y(Alignment::Center),
             Element::from(picker),
@@ -217,7 +236,7 @@ pub fn path<'a, Id: Copy + 'a>(
     placeholder: &str,
     picker: Result<(), &'static str>,
 ) -> Element<'a, Field<Id>> {
-    let field = input(id, value, placeholder).width(Length::Fill);
+    let field = with_menu(id, value, input(id, value, placeholder).width(Length::Fill));
     let browse = browse_button(id, picker);
     labeled(
         look,

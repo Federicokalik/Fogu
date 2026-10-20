@@ -442,9 +442,17 @@ fn menu_box(menu: &ContextMenu, look: Look) -> Element<'_, Message> {
                 .padding([4, 10])
                 .on_press_maybe(typed.map(|_| Message::MenuSubmit));
             col = col.push(
-                column![iced::Element::from(sliders), apply]
-                    .spacing(6)
-                    .padding([4, 12]),
+                column![
+                    iced::Element::from(sliders),
+                    iced::widget::row![
+                        crate::color_picker::preview(typed, 24.0, look.border),
+                        apply
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center),
+                ]
+                .spacing(6)
+                .padding([4, 12]),
             );
         }
     }

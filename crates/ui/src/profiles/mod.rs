@@ -150,8 +150,8 @@ impl ProfilesView {
     }
 }
 
-/// Built-ins (when shown), stored profiles, `~/.ssh/config` hosts, then quick-connect profiles
-/// from `recent`.
+/// Built-ins (when shown), stored profiles, `~/.ssh/config` hosts not copied to them, then
+/// quick-connect profiles from `recent`.
 pub fn entries(
     config: &Config,
     builtins: &[Profile],
@@ -180,8 +180,18 @@ pub fn entries(
     let stored = by_weight
         .into_iter()
         .map(|p| entry(p.clone(), Origin::Stored));
+    // A host already copied to the stored profiles (same name) is listed once, as the copy: the
+    // one the user edits.
+    let key = |name: &str| name.trim().to_lowercase();
+    let copied = |host: &Profile| {
+        config
+            .profiles
+            .iter()
+            .any(|p| key(&p.name) == key(&host.name))
+    };
     let from_ssh_config = ssh_hosts
         .iter()
+        .filter(|host| !copied(host))
         .map(|p| entry(p.clone(), Origin::SshConfig));
     let quick = recent
         .into_iter()

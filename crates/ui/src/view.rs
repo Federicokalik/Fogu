@@ -36,7 +36,9 @@ impl App {
             let page = crate::profile_editor::page(tab.id, editor, &self.config, look);
             return self.chrome(page, None, None);
         }
+        let search = self.search_in(tab);
         let typing_elsewhere = self.renaming.is_some()
+            || search.is_some()
             || self.menu.is_some()
             || self.picker.is_some()
             || self.pending_close.is_some()
@@ -121,7 +123,11 @@ impl App {
             .any(|p| p.sftp.is_some())
             .then_some(sftp_panel.is_some());
         let dialog = sftp_panel.and_then(|p| sftp::dialog(tab.id, p));
-        self.chrome(split.into(), sftp, dialog)
+        self.chrome(
+            crate::search::over(split.into(), search, self.look),
+            sftp,
+            dialog,
+        )
     }
 
     /// Room before the tab headers: the native window buttons on macOS (hidden in full screen).

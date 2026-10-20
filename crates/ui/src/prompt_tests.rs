@@ -297,6 +297,9 @@ fn typed_secrets_never_show_in_message_debug() {
 #[test]
 fn ssh_tab_is_titled_user_at_host_and_reconnects_fresh() {
     let mut app = ssh_app(None);
+    // With "keep the profile name" off (it is on by default).
+    let id = pane(&app);
+    app.pane_mut(id).unwrap().profile.disable_dynamic_title = false;
     assert_eq!(app.title(), "alice@box.lan");
     let old = pane(&app);
     let exit = SessionOutput::Exited(ExitInfo {

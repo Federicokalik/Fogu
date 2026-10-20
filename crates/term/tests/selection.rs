@@ -84,3 +84,29 @@ fn clear_and_out_of_range_points() {
     assert_eq!(t.selection_text(), None);
     assert_eq!(t.snapshot().selection_spans(), []);
 }
+
+#[test]
+fn search_walks_matches_up_and_wraps() {
+    let mut t = fed(20, 3, b"");
+    for line in ["foo 1", "bar", "Foo 2", "x.y", "foo 3"] {
+        t.feed(format!("{line}\r\n").as_bytes());
+    }
+    // From the cursor (below everything), upward: the newest match first, then older ones.
+    assert!(t.search("foo", true));
+    assert_eq!(t.selection_text().as_deref(), Some("foo"));
+    assert_eq!(t.snapshot().display_offset, 0);
+    assert!(t.search("foo", true));
+    assert_eq!(t.selection_text().as_deref(), Some("Foo"));
+    assert!(t.search("foo", true));
+    assert!(
+        t.snapshot().display_offset > 0,
+        "scrolled to the oldest match"
+    );
+    assert!(t.search("foo", true), "wraps around");
+    // An uppercase letter makes it case-sensitive; regex characters are plain text.
+    assert!(t.search("Foo", false));
+    assert_eq!(t.selection_text().as_deref(), Some("Foo"));
+    assert!(t.search("x.y", false));
+    assert!(!t.search("x*y", false));
+    assert_eq!(t.selection_text(), None);
+}

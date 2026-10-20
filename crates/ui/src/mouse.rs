@@ -1,6 +1,7 @@
 //! Local mouse gestures of the terminal widget: selection (simple / word / line / block), wheel
 //! scrollback and auto-scroll while drag-selecting past an edge — plus mouse reporting to the
-//! application: every mouse event first goes through `mouse_disposition` (Shift → local).
+//! application: every mouse event first goes through `mouse_disposition` (Shift → local; the
+//! right button is always local).
 
 use std::time::{Duration, Instant};
 
@@ -262,10 +263,10 @@ fn report_button(button: Button) -> Option<input::Button> {
     Some(match button {
         Button::Left => input::Button::Left,
         Button::Middle => input::Button::Middle,
-        Button::Right => input::Button::Right,
         Button::Back => input::Button::Back,
         Button::Forward => input::Button::Forward,
-        Button::Other(_) => return None,
+        // Right is never reported: it is always the pane menu, also in TUIs with mouse mode.
+        Button::Right | Button::Other(_) => return None,
     })
 }
 

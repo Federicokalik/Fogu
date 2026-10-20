@@ -208,6 +208,8 @@ pub enum Message {
     Forwards(crate::forwards_dialog::ForwardsMsg),
     /// The editor's "Set stored password / passphrase" dialog.
     SecretDialog(crate::secret_dialog::SecretMsg),
+    /// The search bar.
+    Search(crate::search::SearchMsg),
     /// A key press no widget took (unmodified key, key with modifiers applied, modifiers).
     KeyIgnored(
         iced::keyboard::Key,

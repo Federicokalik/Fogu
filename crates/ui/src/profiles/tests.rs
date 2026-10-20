@@ -278,7 +278,11 @@ fn enter_connects_the_top_hit_and_records_recent_0600() {
     send(&mut app, ProfilesMsg::Move(1));
     send(&mut app, ProfilesMsg::Submit);
     assert_eq!(app.tabs.len(), 3);
-    assert_eq!(app.title(), "pi@10.0.0.7");
+    assert_eq!(
+        app.title(),
+        "Pi",
+        "profiles keep their name as tab title by default"
+    );
 }
 
 #[test]
@@ -495,4 +499,36 @@ fn stored_profiles_follow_their_weight() {
         .map(|e| e.profile.name.clone())
         .collect();
     assert_eq!(names, ["Light", "Plain", "Heavy"]);
+}
+
+#[test]
+fn an_ssh_config_host_copied_to_the_profiles_is_listed_once_as_the_copy() {
+    let host = Profile {
+        id: fogu_core::ProfileId("ssh-config:box".into()),
+        name: "box".into(),
+        ..Profile::default_shell()
+    };
+    let other = Profile {
+        id: fogu_core::ProfileId("ssh-config:other".into()),
+        name: "other".into(),
+        ..Profile::default_shell()
+    };
+    let mut config = Config::default();
+    config.profiles.push(Profile {
+        id: fogu_core::ProfileId("box".into()),
+        name: "Box".into(),
+        ..Profile::default_shell()
+    });
+    let listed = super::entries(&config, &[], &[host, other], None);
+    let names: Vec<_> = listed
+        .iter()
+        .map(|e| (e.profile.name.as_str(), e.origin))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("Box", super::Origin::Stored),
+            ("other", super::Origin::SshConfig)
+        ]
+    );
 }

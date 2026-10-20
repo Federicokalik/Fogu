@@ -296,6 +296,7 @@ impl App {
                     pane.refresh();
                 }
             }
+            Action::Find => return self.start_search(),
             Action::DuplicateTab => return self.duplicate_tab(),
             Action::CloseOtherTabs => {
                 return self.request_close(CloseTarget::OthersOf(self.active));

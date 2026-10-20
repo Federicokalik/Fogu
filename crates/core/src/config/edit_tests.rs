@@ -247,7 +247,7 @@ fn update_rewrites_only_the_changed_keys_in_place() {
     ssh_mut(&mut new).port = Some(2200);
     ssh_mut(&mut new).user = None;
     ssh_mut(&mut new).private_keys = Some(vec![PathBuf::from("~/.ssh/id_ed25519")]);
-    new.disable_dynamic_title = true;
+    new.disable_dynamic_title = false;
     let edit = ProfileEdit::Update {
         old: Box::new(old),
         new: Box::new(new.clone()),
@@ -268,7 +268,7 @@ type = \"ssh\"
 host = \"work.lan\"
 port = 2200   # odd port
 future_option = \"kept\"   # not a Fogu key
-disable_dynamic_title = true
+disable_dynamic_title = false
 private_keys = [\"~/.ssh/id_ed25519\"]
 
 # trailing comment
@@ -339,4 +339,19 @@ fn update_of_a_missing_profile_or_a_broken_file_writes_nothing() {
     assert!(edit_profiles(&t.0, &[edit]).is_err());
     assert_eq!(read(&t), "id = [");
     assert!(!t.0.join("config.toml.bak").exists());
+}
+
+#[test]
+fn unique_profile_name_skips_taken_names_ignoring_case() {
+    let mut config = Config::default();
+    config.profiles.push(Profile {
+        id: crate::ProfileId("a".into()),
+        name: "Prod".into(),
+        ..Profile::default_shell()
+    });
+    assert_eq!(crate::config::unique_profile_name(&config, "dev"), "dev");
+    assert_eq!(
+        crate::config::unique_profile_name(&config, " prod "),
+        "prod-2"
+    );
 }

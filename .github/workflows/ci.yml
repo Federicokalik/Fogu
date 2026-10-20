@@ -67,4 +67,4 @@ jobs:
       - if: steps.has-fuzz.outputs.present == 'true'
         run: cargo install cargo-fuzz --locked
       - if: steps.has-fuzz.outputs.present == 'true'
-        run: for t in $(cargo fuzz list); do cargo fuzz run "$t" -- -max_total_time=60; done
+        run: for t in $(cargo +nightly fuzz list); do cargo +nightly fuzz run "$t" -- -max_total_time=60; done

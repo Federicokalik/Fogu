@@ -320,6 +320,7 @@ impl App {
     /// inline rename and takes keyboard focus back from the tab bar and the profile sidebar.
     pub(crate) fn focus_pane(&mut self, id: PaneId) {
         self.commit_rename();
+        self.search = None;
         self.profiles.focused = false;
         let active = self.active;
         let Some(tab) = self.tabs.iter().find(|t| t.id == active) else {

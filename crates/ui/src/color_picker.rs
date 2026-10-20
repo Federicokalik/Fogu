@@ -52,6 +52,23 @@ impl<M> std::fmt::Debug for ColorPicker<'_, M> {
     }
 }
 
+/// A `size` px square filled with the picked `color` (an outline only while there is none).
+pub fn preview<'a, M: 'a>(color: Option<RgbColor>, size: f32, outline: Color) -> Element<'a, M> {
+    iced::widget::container(iced::widget::space())
+        .width(size)
+        .height(size)
+        .style(move |_theme: &iced::Theme| iced::widget::container::Style {
+            background: color.map(|c| to_iced(c).into()),
+            border: Border {
+                color: outline,
+                width: 1.0,
+                radius: RADIUS.into(),
+            },
+            ..iced::widget::container::Style::default()
+        })
+        .into()
+}
+
 /// A picker `width` px wide showing `color` (`None` starts from a default blue).
 pub fn color_picker<'a, M>(
     color: Option<RgbColor>,

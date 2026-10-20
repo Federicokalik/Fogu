@@ -76,6 +76,8 @@ pub enum Action {
     PastePrimary,
     /// Selects the whole buffer.
     SelectAll,
+    /// Opens the search bar of the focused pane.
+    Find,
     /// Clears the screen and scrollback.
     Clear,
     /// Increases the font size.
@@ -151,6 +153,7 @@ impl fmt::Display for Action {
             Self::Paste => write!(f, "paste"),
             Self::PastePrimary => write!(f, "paste-primary"),
             Self::SelectAll => write!(f, "select-all"),
+            Self::Find => write!(f, "find"),
             Self::Clear => write!(f, "clear"),
             Self::ZoomIn => write!(f, "zoom-in"),
             Self::ZoomOut => write!(f, "zoom-out"),
@@ -210,6 +213,7 @@ impl FromStr for Action {
             "paste" => Self::Paste,
             "paste-primary" => Self::PastePrimary,
             "select-all" => Self::SelectAll,
+            "find" => Self::Find,
             "clear" => Self::Clear,
             "zoom-in" => Self::ZoomIn,
             "zoom-out" => Self::ZoomOut,
@@ -325,6 +329,7 @@ impl Hotkeys {
         bindings.insert(Action::Paste, chords(&["Ctrl-Shift-V", "Shift-Insert"]));
         bindings.insert(Action::PastePrimary, chords(&[]));
         bindings.insert(Action::SelectAll, chords(&["Ctrl-Shift-A"]));
+        bindings.insert(Action::Find, chords(&["Ctrl-Shift-F"]));
         bindings.insert(Action::Clear, chords(&[]));
         bindings.insert(Action::ZoomIn, chords(&["Ctrl-=", "Ctrl-Shift-="]));
         bindings.insert(Action::ZoomOut, chords(&["Ctrl--", "Ctrl-Shift--"]));
@@ -420,6 +425,7 @@ fn macos_overrides(bindings: &mut BTreeMap<Action, Vec<KeyChord>>) {
         (Action::Copy, &["Cmd-C"]),
         (Action::Paste, &["Cmd-V"]),
         (Action::SelectAll, &["Cmd-A"]),
+        (Action::Find, &["Cmd-F"]),
         (Action::Clear, &["Cmd-K"]),
         (Action::ZoomIn, &["Cmd-=", "Cmd-Shift-="]),
         (Action::ZoomOut, &["Cmd--", "Cmd-Shift--"]),
@@ -497,6 +503,7 @@ mod tests {
             Some(Action::SplitRight)
         );
         assert_eq!(keymap.lookup(chord("Cmd-9")), Some(Action::GoToTab(9)));
+        assert_eq!(keymap.lookup(chord("Cmd-F")), Some(Action::Find));
         assert_eq!(
             keymap.lookup(chord("Cmd-Option-Left")),
             Some(Action::PaneNav(Dir::Left))
@@ -546,6 +553,7 @@ mod tests {
             Action::EqualizePanes,
             Action::MaximizePane,
             Action::ResizePane(Dir::Up),
+            Action::Find,
         ];
         for action in actions {
             let s = action.to_string();

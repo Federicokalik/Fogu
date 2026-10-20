@@ -153,6 +153,8 @@ fn close_tab_times_out_and_closed_sessions_go_at_once() {
 fn rename_overrides_osc_title_and_empty_clears() {
     let mut app = headless();
     let pane = pane_of(&app, 0);
+    // Dynamic titles on (profiles keep their name by default).
+    app.pane_mut(pane).unwrap().profile.disable_dynamic_title = false;
     send(
         &mut app,
         Message::Session(pane, SessionOutput::Title("vim".into())),
@@ -445,4 +447,25 @@ fn moving_left_onto_a_tab_keeps_its_hover_and_close_button() {
     assert_eq!(app.hovered_tab, Some(ids[1]));
     send(&mut app, Message::LeaveTab(ids[1]));
     assert_eq!(app.hovered_tab, None);
+}
+
+#[test]
+fn find_opens_the_search_bar_and_escape_closes_it() {
+    let mut app = headless();
+    act(&mut app, Action::Find);
+    let pane = pane_of(&app, 0);
+    assert_eq!(app.search.as_ref().map(|s| s.pane), Some(pane));
+    send(
+        &mut app,
+        Message::Search(crate::search::SearchMsg::Input("x".into())),
+    );
+    assert_eq!(app.search.as_ref().unwrap().query, "x");
+    // Find again while open keeps the query.
+    act(&mut app, Action::Find);
+    assert_eq!(app.search.as_ref().unwrap().query, "x");
+    send(&mut app, Message::Escape);
+    assert!(app.search.is_none());
+    act(&mut app, Action::Find);
+    send(&mut app, Message::Search(crate::search::SearchMsg::Close));
+    assert!(app.search.is_none());
 }

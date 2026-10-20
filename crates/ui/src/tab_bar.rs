@@ -269,7 +269,7 @@ impl<'a> TabBar<'a> {
 }
 
 /// Flat chrome button colours: `hover` on hover, `danger` (white text) for the close button.
-fn hover_style(look: Look, status: button::Status, danger: bool) -> button::Style {
+pub(crate) fn hover_style(look: Look, status: button::Status, danger: bool) -> button::Style {
     let (background, text_color) = match status {
         button::Status::Hovered | button::Status::Pressed if danger => {
             (Some(look.danger), Color::WHITE)

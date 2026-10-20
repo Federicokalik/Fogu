@@ -265,6 +265,15 @@ pub fn unique_profile_id(config: &Config, base: &str) -> ProfileId {
     ProfileId(unique(base, taken))
 }
 
+/// `base`, or `base-2`, `base-3`, … — the first name no stored profile has (ignoring case and
+/// surrounding spaces, like the duplicate-name check of `validate`).
+#[must_use]
+pub fn unique_profile_name(config: &Config, base: &str) -> String {
+    let key = |name: &str| name.trim().to_lowercase();
+    let taken = |name: &str| config.profiles.iter().any(|p| key(&p.name) == key(name));
+    unique(base.trim(), taken)
+}
+
 /// A group id made from `name` (see [`slug`]), unique among the groups.
 #[must_use]
 pub fn unique_group_id(config: &Config, name: &str) -> GroupId {

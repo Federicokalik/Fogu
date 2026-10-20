@@ -9,10 +9,11 @@ use std::time::Instant;
 use alacritty_terminal::Term;
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::grid::{Cursor as GridCursor, Dimensions, Grid, Scroll};
-use alacritty_terminal::index::{Boundary, Point, Side};
+use alacritty_terminal::index::{Boundary, Direction, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::color::COUNT;
+use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::vte::ansi::{ClearMode, CursorShape, Handler as _, Processor};
 
@@ -280,6 +281,41 @@ impl TermHandle {
         let mut selection = Selection::new(SelectionType::Simple, top, Side::Left);
         selection.update(bottom, Side::Right);
         term.selection = Some(selection);
+    }
+
+    /// Selects the next match of the plain text `query` (smart case: case-insensitive unless it
+    /// has an uppercase letter) above the current selection (`up`) or below it, starting from the
+    /// cursor without one and wrapping around the buffer, and scrolls it into view. `false` when
+    /// nothing matches (the selection is then dropped).
+    pub fn search(&mut self, query: &str, up: bool) -> bool {
+        let Ok(mut regex) = RegexSearch::new(&regex::escape(query)) else {
+            return false;
+        };
+        let mut term = self.term.lock();
+        let range = term.selection.as_ref().and_then(|s| s.to_range(&*term));
+        let (origin, direction, side) = match (range, up) {
+            (Some(r), true) => (
+                r.start.sub(&*term, Boundary::None, 1),
+                Direction::Left,
+                Side::Right,
+            ),
+            (Some(r), false) => (
+                r.end.add(&*term, Boundary::None, 1),
+                Direction::Right,
+                Side::Left,
+            ),
+            (None, true) => (term.grid().cursor.point, Direction::Left, Side::Right),
+            (None, false) => (term.grid().cursor.point, Direction::Right, Side::Left),
+        };
+        let Some(found) = term.search_next(&mut regex, origin, direction, side, None) else {
+            term.selection = None;
+            return false;
+        };
+        let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
+        selection.update(*found.end(), Side::Right);
+        term.selection = Some(selection);
+        term.scroll_to_point(*found.start());
+        true
     }
 
     /// Drops the current selection.

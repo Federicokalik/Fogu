@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use fogu_core::config::{ProfileEdit, slug, unique_profile_id};
+use fogu_core::config::{ProfileEdit, slug, unique_profile_id, unique_profile_name};
 use fogu_core::{LocalOpts, Profile, ProfileId, ProfileKind, SshOpts, strip_defaults};
 use iced::Task;
 
@@ -31,6 +31,8 @@ pub enum EditorMsg {
     Delete,
     /// Read-only `~/.ssh/config` host: save it as a stored profile and edit that.
     CopyToMine,
+    /// "Paste" in a text field's right-click menu: the clipboard replaces its text.
+    Paste(FieldId),
     /// What the Secret Service holds for this profile's secrets (existence only).
     Stored(Vec<StoredEntry>),
     /// Set / Clear of a stored secret finished (`Err` = why not).
@@ -88,7 +90,12 @@ impl App {
     }
 
     /// A new editor tab on `draft` (or the one already open for that stored profile).
-    fn open_editor(&mut self, draft: Profile, source: Source) -> Task<Message> {
+    fn open_editor(&mut self, mut draft: Profile, source: Source) -> Task<Message> {
+        // A copy of a built-in / quick-connect profile must not clash with an earlier copy: two
+        // stored profiles with one name cannot be saved.
+        if source == Source::New && !draft.name.trim().is_empty() {
+            draft.name = unique_profile_name(&self.config, &draft.name);
+        }
         self.menu = None;
         self.profiles.focused = false;
         // Opened from a menu over the sidebar: the sidebar never saw the pointer leave (the menu
@@ -117,6 +124,9 @@ impl App {
     }
 
     pub(crate) fn on_editor(&mut self, tab: TabId, message: EditorMsg) -> Task<Message> {
+        if let EditorMsg::Field(id, FieldValue::Menu(at, text)) = message {
+            return self.field_menu(tab, id, at, text);
+        }
         // A `~/.ssh/config` host can't be changed in place: the first change copies it to the
         // user's profiles (as "Copy to my profiles" does) and applies to the copy.
         if matches!(message, EditorMsg::Field(..))
@@ -167,6 +177,16 @@ impl App {
                 }
             }
             EditorMsg::CopyToMine => return self.copy_editor(tab),
+            EditorMsg::Paste(id) => {
+                self.menu = None;
+                return iced::clipboard::read().and_then(move |text| {
+                    let text = text.trim_end_matches(['\r', '\n']).to_owned();
+                    Task::done(Message::Editor(
+                        tab,
+                        EditorMsg::Field(id, FieldValue::Text(text)),
+                    ))
+                });
+            }
         }
         Task::none()
     }
@@ -353,6 +373,26 @@ impl App {
             }
             _ => None,
         }
+    }
+
+    /// Copy / Paste for text field `id` (showing `text`), at `at`.
+    fn field_menu(
+        &mut self,
+        tab: TabId,
+        id: FieldId,
+        at: iced::Point,
+        text: String,
+    ) -> Task<Message> {
+        use crate::context_menu::{ContextMenu, MenuAction, MenuItem};
+        let empty = text.is_empty();
+        let copy = MenuItem::new("Copy", MenuAction::Ui(Message::CopyLink(text)))
+            .enabled_if(!empty, "The field is empty");
+        let paste = MenuItem::new(
+            "Paste",
+            MenuAction::Ui(Message::Editor(tab, EditorMsg::Paste(id))),
+        );
+        self.menu = Some(ContextMenu::new(at, vec![copy, paste]));
+        Task::none()
     }
 
     fn copy_editor(&mut self, tab: TabId) -> Task<Message> {

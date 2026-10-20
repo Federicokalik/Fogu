@@ -665,3 +665,31 @@ fn a_new_group_name_typed_without_enter_is_created_by_save() {
     editor_msg(&mut app, EditorMsg::Save);
     assert_eq!(group_on_disk(&t, "pi").as_deref(), Some("databases"));
 }
+
+#[test]
+fn right_click_on_a_text_field_opens_copy_and_paste() {
+    let t = tmp();
+    let mut app = app_in(&t.0);
+    profiles(&mut app, ProfilesMsg::Edit(id("pi")));
+    let before = editor(&app).draft.clone();
+    let at = iced::Point::new(10.0, 20.0);
+    field(&mut app, FieldId::Color, V::Menu(at, "#30a46c".into()));
+    let menu = app.menu.as_ref().unwrap();
+    assert_eq!(menu.anchor, at);
+    let labels: Vec<_> = menu
+        .items
+        .iter()
+        .map(|i| (i.label.as_str(), i.enabled))
+        .collect();
+    assert_eq!(labels, [("Copy", true), ("Paste", true)]);
+    assert_eq!(
+        editor(&app).draft,
+        before,
+        "opening the menu changes nothing"
+    );
+    field(&mut app, FieldId::Host, V::Menu(at, String::new()));
+    assert!(
+        !app.menu.as_ref().unwrap().items[0].enabled,
+        "nothing to copy"
+    );
+}

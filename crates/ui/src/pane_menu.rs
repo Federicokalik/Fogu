@@ -63,6 +63,7 @@ pub(crate) fn pane_items(pane: &Pane, links: Vec<MenuItem>) -> Vec<MenuItem> {
         run("Paste", Action::Paste),
         run("Paste selection", Action::PastePrimary),
         run("Select all", Action::SelectAll),
+        run("Find…", Action::Find),
         ui("Split ▸", Message::MenuSplit).after_separator(),
         run("Close pane", Action::ClosePane),
         run("Copy current path", Action::CopyPath).after_separator(),

@@ -332,6 +332,7 @@ impl App {
     /// rename.
     pub(crate) fn on_escape(&mut self) {
         if self.secret_dialog.take().is_some()
+            || self.search.take().is_some()
             || self.picker.take().is_some()
             || self.forwards.take().is_some()
             || self.pending_close.take().is_some()

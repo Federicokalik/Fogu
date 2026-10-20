@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use fogu_core::config::{self, ProfileEdit, slug, unique_profile_id};
+use fogu_core::config::{self, ProfileEdit, slug, unique_profile_id, unique_profile_name};
 use fogu_core::{Group, GroupId, Profile, ProfileId, ProfileKind, Side};
 use iced::advanced::widget::operate;
 use iced::advanced::widget::operation::focusable;
@@ -300,7 +300,7 @@ impl App {
         if entry.origin == Origin::SshConfig {
             return self.copy_from_ssh_config(p);
         }
-        let name = format!("{} copy", p.name);
+        let name = unique_profile_name(&self.config, &format!("{} copy", p.name));
         let edit = match entry.origin {
             Origin::Stored => ProfileEdit::Duplicate {
                 from: p.id.clone(),
@@ -321,6 +321,7 @@ impl App {
     pub(crate) fn copy_from_ssh_config(&mut self, p: &Profile) -> Task<Message> {
         let mut copy = Profile {
             id: unique_profile_id(&self.config, &slug(&p.name, "profile")),
+            name: unique_profile_name(&self.config, &p.name),
             ..p.clone()
         };
         let mut left_out = Vec::new();

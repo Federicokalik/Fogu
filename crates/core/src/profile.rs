@@ -33,9 +33,9 @@ pub struct LocalProfile {
 #[serde(rename_all = "lowercase")]
 pub enum Osc52Policy {
     /// Prompt the user each time.
-    #[default]
     Ask,
-    /// Always write to the clipboard.
+    /// Always write to the clipboard (the default: TUIs such as Claude Code or tmux copy this way).
+    #[default]
     Allow,
     /// Always ignore the request.
     Deny,
@@ -159,8 +159,8 @@ pub struct Profile {
     /// Tab colour; `"#RRGGBB"` in TOML.
     #[serde(default)]
     pub color: Option<RgbColor>,
-    /// Suppress OSC-2/0/title-driven tab titles for this profile.
-    #[serde(default, skip_serializing_if = "is_false")]
+    /// Suppress OSC-2/0/title-driven tab titles for this profile (on unless set to `false`).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub disable_dynamic_title: bool,
     /// See [`SessionEndBehavior`].
     #[serde(default, skip_serializing_if = "is_default")]
@@ -187,7 +187,7 @@ impl Profile {
             group: None,
             icon: None,
             color: None,
-            disable_dynamic_title: false,
+            disable_dynamic_title: true,
             behavior_on_session_end: SessionEndBehavior::default(),
             background: None,
             restore_scrollback: None,
@@ -198,8 +198,12 @@ impl Profile {
 
 // Serde's `skip_serializing_if` passes a reference.
 #[expect(clippy::trivially_copy_pass_by_ref, reason = "serde's signature")]
-fn is_false(value: &bool) -> bool {
-    !value
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+const fn yes() -> bool {
+    true
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {

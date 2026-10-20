@@ -134,9 +134,16 @@ fn spawn_failure_crashes_the_pane_with_an_error_toast_and_restarts() {
     assert!(app.pane(fresh).unwrap().status.is_none());
 }
 
+/// A config whose OSC 52 policy is "ask" (the default is "allow").
+fn asking() -> Config {
+    let mut config = Config::default();
+    config.terminal.osc52_write = Osc52Policy::Ask;
+    config
+}
+
 #[test]
 fn osc52_ask_shows_a_sticky_toast_and_copy_or_deny_resolves_it() {
-    let mut app = app_with(Config::default());
+    let mut app = app_with(asking());
     let pane = focused(&app);
     send(&mut app, Message::Session(pane, clip(42)));
     let toast = app.toasts.iter().next().unwrap().clone();
@@ -156,6 +163,15 @@ fn osc52_ask_shows_a_sticky_toast_and_copy_or_deny_resolves_it() {
         app.toasts.is_empty() && app.pending_clipboard.is_empty(),
         "copy consumed it"
     );
+}
+
+#[test]
+fn enter_copies_a_pending_osc52_write_instead_of_typing() {
+    let mut app = app_with(asking());
+    let pane = focused(&app);
+    send(&mut app, Message::Session(pane, clip(5)));
+    send(&mut app, enter());
+    assert!(app.toasts.is_empty() && app.pending_clipboard.is_empty());
 }
 
 #[test]
