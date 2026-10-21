@@ -91,6 +91,33 @@ fn nested_and_root_keys_are_created_and_removed() {
 
     set_keys(&t.0, &[], &[KeyEdit::remove("default_profile")]).unwrap();
     assert!(!read(&t).contains("default_profile"));
+    set_keys(
+        &t.0,
+        &["profile_defaults", "ssh"],
+        &[KeyEdit::remove("user")],
+    )
+    .unwrap();
+    assert!(!read(&t).contains("[profile_defaults.ssh]"), "{}", read(&t));
+}
+
+#[test]
+fn hotkeys_keep_unchanged_entries_and_drop_reset_ones() {
+    use std::collections::BTreeMap;
+
+    use crate::{Action, KeyChord};
+    let t = tmp(Some(
+        "[hotkeys]\ncopy = [\"ctrl-shift-x\"]   # mine\npaste = []\nnot-an-action = 1\n",
+    ));
+    let chord = |s| KeyChord::parse(s).unwrap();
+    let overrides = BTreeMap::from([
+        (Action::Copy, vec![chord("Ctrl-Shift-X")]),
+        (Action::Find, vec![chord("Ctrl-Alt-F")]),
+    ]);
+    set_hotkeys(&t.0, &overrides).unwrap();
+    assert_eq!(
+        read(&t),
+        "[hotkeys]\ncopy = [\"ctrl-shift-x\"]   # mine\nnot-an-action = 1\nfind = [\"Ctrl-Alt-F\"]\n"
+    );
 }
 
 #[test]

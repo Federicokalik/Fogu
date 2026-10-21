@@ -92,6 +92,41 @@ impl KeyEdit {
     }
 }
 
+/// Writes `overrides` (see `Hotkeys::overrides`) as the `[hotkeys]` table: an action key not in
+/// it is removed (it is back to its default), an entry whose chords did not change is left as
+/// written, and keys that are not actions are never touched.
+pub fn set_hotkeys(
+    dir: &Path,
+    overrides: &std::collections::BTreeMap<crate::Action, Vec<crate::KeyChord>>,
+) -> Result<(), ConfigError> {
+    edit_section(dir, &["hotkeys"], |table| {
+        let stale: Vec<String> = table
+            .iter()
+            .filter_map(|(key, _)| {
+                let action = key.parse::<crate::Action>().ok()?;
+                (!overrides.contains_key(&action)).then(|| key.to_owned())
+            })
+            .collect();
+        for key in stale {
+            table.remove(&key);
+        }
+        for (action, chords) in overrides {
+            let key = action.to_string();
+            let written = table.get(&key).and_then(Item::as_array).map(|array| {
+                array
+                    .iter()
+                    .map(|v| v.as_str().and_then(|s| crate::KeyChord::parse(s).ok()))
+                    .collect::<Option<Vec<_>>>()
+            });
+            if written == Some(Some(chords.clone())) {
+                continue;
+            }
+            let value = toml_edit::Value::Array(chords.iter().map(ToString::to_string).collect());
+            put(table, &key, Some(value));
+        }
+    })
+}
+
 /// Applies `edits` to the table at `path` (`[]` = the document root, `["terminal"]`,
 /// `["profile_defaults", "ssh"]`, …) of `dir/config.toml` in one atomic write. Creates the
 /// file and missing tables; a file that does not parse is an error and is never written. Nothing
@@ -121,6 +156,7 @@ pub(super) fn edit_section<R>(
         message,
     })?;
     let result = edit(table);
+    hide_if_empty(&mut doc, path);
     let new = doc.to_string();
     if new != text {
         write_atomic(dir, new.as_bytes())?;
@@ -167,6 +203,26 @@ fn table_at<'d>(doc: &'d mut DocumentMut, path: &[&str]) -> Result<&'d mut dyn T
             .ok_or_else(|| format!("{} is not a table", name()))?;
     }
     Ok(table)
+}
+
+/// A table at `path` left without keys keeps no header behind (`[hotkeys]` after every
+/// shortcut went back to its default).
+fn hide_if_empty(doc: &mut DocumentMut, path: &[&str]) {
+    let Some((last, parents)) = path.split_last() else {
+        return;
+    };
+    let mut table = doc.as_table_mut();
+    for key in parents {
+        match table.get_mut(key).and_then(Item::as_table_mut) {
+            Some(next) => table = next,
+            None => return,
+        }
+    }
+    if let Some(leaf) = table.get_mut(last).and_then(Item::as_table_mut)
+        && leaf.is_empty()
+    {
+        leaf.set_implicit(true);
+    }
 }
 
 /// Sets or removes `key`. A replaced value keeps the old line's decor (its trailing comment);

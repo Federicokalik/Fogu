@@ -86,7 +86,7 @@ impl App {
         }
         // The settings page is over everything else: nothing behind it reacts to the keyboard.
         if self.settings.is_some() {
-            return self.settings_key(key, mods);
+            return self.settings_key(key, modified, mods);
         }
         if self.panel_has_keys() {
             if let Some(action) = crate::keys::hotkey(&self.config.hotkeys, key, modified, mods) {

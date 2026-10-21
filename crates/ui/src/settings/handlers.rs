@@ -37,6 +37,14 @@ impl App {
         task
     }
 
+    /// The Open Settings shortcut: opens the page, or closes it when open.
+    pub(crate) fn toggle_settings(&mut self) -> Task<Message> {
+        if self.settings.is_some() {
+            return self.close_settings();
+        }
+        self.open_settings()
+    }
+
     /// Applies and persists one settings choice.
     #[expect(
         clippy::too_many_lines,
@@ -87,14 +95,21 @@ impl App {
                 }
             }
             SettingsMsg::Set(id, edit) => return self.edit_setting(id, edit),
+            SettingsMsg::Shortcut(message) => return self.on_shortcut(message),
             SettingsMsg::Outside => return self.settings_outside(),
             SettingsMsg::Confirm(yes) => {
                 let confirm = self.settings.as_mut().and_then(|p| p.confirm.take());
-                if yes && confirm == Some(Confirm::DiscardCode) {
-                    if let Some(page) = &mut self.settings {
-                        page.editor = None;
+                match confirm {
+                    Some(Confirm::DiscardCode) if yes => {
+                        if let Some(page) = &mut self.settings {
+                            page.editor = None;
+                        }
+                        return self.close_settings();
                     }
-                    return self.close_settings();
+                    Some(Confirm::ResetShortcuts) if yes => {
+                        return self.save_hotkeys(fogu_core::Hotkeys::default_keymap());
+                    }
+                    _ => {}
                 }
             }
             SettingsMsg::Style(key) => {
@@ -171,6 +186,9 @@ impl App {
         };
         page.section = target.section();
         page.query.clear();
+        if let Target::Action(action) = target {
+            page.shortcuts.query = super::shortcuts::label(action);
+        }
         page.highlight = Some(target);
         page.highlight_gen += 1;
         let generation = page.highlight_gen;
@@ -374,13 +392,17 @@ impl App {
         Task::batch(notes.into_iter().map(|n| self.notify(n)))
     }
 
-    /// A press on the dimmed window around the page: closes it, unless the code editor holds
-    /// unsaved changes (then it asks).
+    /// A press on the dimmed window around the page: closes it, unless a shortcut is being
+    /// recorded (that is cancelled instead) or the code editor holds unsaved changes (then it
+    /// asks).
     fn settings_outside(&mut self) -> Task<Message> {
         let Some(page) = &mut self.settings else {
             return Task::none();
         };
         if page.confirm.is_some() {
+            return Task::none();
+        }
+        if page.shortcuts.capture.take().is_some() {
             return Task::none();
         }
         if page.editor_dirty() {
@@ -394,6 +416,22 @@ impl App {
     pub(crate) fn settings_modal(&self) -> Option<Modal> {
         let answer = |yes| Message::Settings(SettingsMsg::Confirm(yes));
         match self.settings.as_ref()?.confirm? {
+            Confirm::ResetShortcuts => Some(Modal {
+                title: "Reset all shortcuts?",
+                body: "Every action gets its default keys back; your changes in [hotkeys] are \
+                       removed."
+                    .to_owned(),
+                buttons: vec![
+                    ModalButton {
+                        label: "Reset",
+                        on_press: answer(true),
+                    },
+                    ModalButton {
+                        label: "Cancel",
+                        on_press: answer(false),
+                    },
+                ],
+            }),
             Confirm::DiscardCode => Some(Modal {
                 title: "Discard changes?",
                 body: "The code editor has unsaved changes.".to_owned(),
@@ -411,12 +449,15 @@ impl App {
         }
     }
 
-    /// Escape while the page is open: the search text, then the code editor (asking when it
-    /// has unsaved changes), then the page.
+    /// Escape while the page is open: a shortcut being recorded or its question, the search
+    /// text, then the code editor (asking when it has unsaved changes), then the page.
     pub(crate) fn settings_escape(&mut self) -> Task<Message> {
         let Some(page) = &mut self.settings else {
             return Task::none();
         };
+        if page.shortcuts.capture.take().is_some() || page.shortcuts.notice.take().is_some() {
+            return Task::none();
+        }
         if !page.query.is_empty() {
             page.query.clear();
             return Task::none();
@@ -432,9 +473,23 @@ impl App {
         self.close_settings()
     }
 
-    /// A key no widget took while the page is open: search result navigation. Everything else
-    /// is swallowed so nothing hidden behind the page reacts.
-    pub(crate) fn settings_key(&mut self, key: &Key, _mods: Modifiers) -> Task<Message> {
+    /// A key no widget took while the page is open: a shortcut being recorded, Open Settings
+    /// (closes the page), search result navigation. Everything else is swallowed so nothing
+    /// hidden behind the page reacts.
+    pub(crate) fn settings_key(
+        &mut self,
+        key: &Key,
+        modified: &Key,
+        mods: Modifiers,
+    ) -> Task<Message> {
+        if let Some(task) = self.shortcut_key(key, mods) {
+            return task;
+        }
+        if crate::keys::hotkey(&self.config.hotkeys, key, modified, mods)
+            == Some(fogu_core::Action::OpenSettings)
+        {
+            return self.close_settings();
+        }
         let Some(page) = &mut self.settings else {
             return Task::none();
         };

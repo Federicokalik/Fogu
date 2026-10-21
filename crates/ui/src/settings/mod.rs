@@ -6,6 +6,7 @@ mod handlers;
 mod index;
 mod render;
 mod reveal;
+mod shortcuts;
 mod spec;
 mod terminal;
 
@@ -24,6 +25,7 @@ use crate::message::Message;
 use crate::palette::Look;
 use crate::style_code::{self, CodeEditor, CodeKind};
 
+pub use shortcuts::ShortcutMsg;
 pub use spec::SettingId;
 
 /// The page's scrollable (for revealing a row).
@@ -130,6 +132,8 @@ pub enum Target {
     Setting(SettingId),
     /// A page block.
     Anchor(Anchor),
+    /// An action's shortcuts (the Shortcuts page, filtered to it).
+    Action(fogu_core::Action),
 }
 
 impl Target {
@@ -138,6 +142,7 @@ impl Target {
         match self {
             Self::Setting(id) => id.spec().section,
             Self::Anchor(anchor) => anchor.section(),
+            Self::Action(_) => Section::Shortcuts,
         }
     }
 
@@ -145,6 +150,7 @@ impl Target {
         match self {
             Self::Setting(id) => id.widget_id(),
             Self::Anchor(anchor) => anchor.id(),
+            Self::Action(_) => Id::new(shortcuts::ANCHOR),
         }
     }
 }
@@ -181,6 +187,8 @@ pub enum Edit {
 pub enum Confirm {
     /// The code editor has unsaved changes and the page is being closed.
     DiscardCode,
+    /// Every shortcut back to its default.
+    ResetShortcuts,
 }
 
 /// A choice in the settings page.
@@ -204,6 +212,8 @@ pub enum SettingsMsg {
     Outside,
     /// The answer to the page's question.
     Confirm(bool),
+    /// A choice on the Shortcuts page.
+    Shortcut(ShortcutMsg),
     /// Switch the UI style by key (applies immediately and is saved); the terminal palette
     /// follows when it was the default or another style's paired palette.
     Style(String),
@@ -253,6 +263,8 @@ pub struct SettingsPage {
     pub editor_original: String,
     /// The font family pickers (installed monospace families), filled when the page opens.
     pub fonts: Option<FontPickers>,
+    /// The Shortcuts page.
+    pub shortcuts: shortcuts::ShortcutsState,
 }
 
 /// The searchable font lists of the Terminal page.
@@ -413,6 +425,7 @@ fn section_body<'a>(
     };
     match page.section {
         Section::Appearance => appearance::body(look, config, catalogs, env, anchor),
+        Section::Shortcuts => shortcuts::body(&page.shortcuts, &config.hotkeys, look),
         Section::Terminal => render::rows(
             page,
             look,

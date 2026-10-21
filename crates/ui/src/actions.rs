@@ -320,6 +320,7 @@ impl App {
             Action::SwapPanes => self.swap_focused(),
             Action::EqualizePanes => return self.update(Message::Equalize(self.active)),
             Action::MaximizePane => self.toggle_maximize(),
+            Action::OpenSettings => return self.toggle_settings(),
             Action::ResizePane(dir) => {
                 let step = self.config.terminal.pane_resize_step.clamp(0.01, 0.5);
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == self.active) {

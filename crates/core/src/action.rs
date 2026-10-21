@@ -126,6 +126,8 @@ pub enum Action {
     MaximizePane,
     /// Grows the focused pane toward `Dir` by `terminal.pane_resize_step`.
     ResizePane(Dir),
+    /// Opens the settings page (closes it when open).
+    OpenSettings,
 }
 
 /// An `Action` string was not one of the known slugs (e.g. `"new-tab"`, `"go-to-tab-3"`,
@@ -176,6 +178,7 @@ impl fmt::Display for Action {
             Self::CopyPath => write!(f, "copy-current-path"),
             Self::SwapPanes => write!(f, "swap-panes"),
             Self::EqualizePanes => write!(f, "equalize-panes"),
+            Self::OpenSettings => write!(f, "open-settings"),
         }
     }
 }
@@ -237,6 +240,7 @@ impl FromStr for Action {
             "swap-panes" => Self::SwapPanes,
             "equalize-panes" => Self::EqualizePanes,
             "pane-maximize" => Self::MaximizePane,
+            "open-settings" => Self::OpenSettings,
             _ => return Err(ActionParseError(s.to_owned())),
         })
     }
@@ -360,6 +364,7 @@ impl Hotkeys {
         bindings.insert(Action::SwapPanes, chords(&[]));
         bindings.insert(Action::EqualizePanes, chords(&[]));
         bindings.insert(Action::MaximizePane, chords(&["Ctrl-Alt-Enter"]));
+        bindings.insert(Action::OpenSettings, chords(&["Ctrl-,"]));
         // Ctrl+Alt+arrows already move focus, Shift makes them resize.
         for (dir, key) in [
             (Dir::Left, "Ctrl-Alt-Shift-Left"),
@@ -392,6 +397,51 @@ impl Hotkeys {
     pub const fn bindings(&self) -> &BTreeMap<Action, Vec<KeyChord>> {
         &self.bindings
     }
+
+    /// Binds exactly `chords` to `action` (none: unbound).
+    pub fn set_chords(&mut self, action: Action, chords: Vec<KeyChord>) {
+        let mut bindings = std::mem::take(&mut self.bindings);
+        bindings.insert(action, chords);
+        *self = Self::new(bindings);
+    }
+
+    /// The smallest `[hotkeys]` table that, merged over the platform's defaults the way the
+    /// config is loaded, gives these bindings back: the actions whose chords differ, minus those
+    /// the merge already reproduces (a default action that only lost a chord the table
+    /// assigns elsewhere).
+    #[must_use]
+    pub fn overrides(&self) -> BTreeMap<Action, Vec<KeyChord>> {
+        let defaults = Self::default_keymap();
+        let mut table: BTreeMap<Action, Vec<KeyChord>> = self
+            .bindings
+            .iter()
+            .filter(|(action, chords)| defaults.chords_for(**action) != chords.as_slice())
+            .map(|(action, chords)| (*action, chords.clone()))
+            .collect();
+        let actions: Vec<Action> = table.keys().copied().collect();
+        for action in actions {
+            let Some(chords) = table.remove(&action) else {
+                continue;
+            };
+            if merged(table.clone()) != self.bindings {
+                table.insert(action, chords);
+            }
+        }
+        table
+    }
+}
+
+/// `user` (a `[hotkeys]` table) over the platform's defaults: each listed action replaces its
+/// default chords (`[]` unbinds it), and a chord the table assigns is taken away from whichever
+/// default action had it.
+fn merged(user: BTreeMap<Action, Vec<KeyChord>>) -> BTreeMap<Action, Vec<KeyChord>> {
+    let claimed: HashSet<KeyChord> = user.values().flatten().copied().collect();
+    let mut bindings = Hotkeys::default_keymap().bindings;
+    for chords in bindings.values_mut() {
+        chords.retain(|chord| !claimed.contains(chord));
+    }
+    bindings.extend(user);
+    bindings
 }
 
 impl Serialize for Hotkeys {
@@ -438,6 +488,7 @@ fn macos_overrides(bindings: &mut BTreeMap<Action, Vec<KeyChord>>) {
         (Action::OpenProfilePicker, &["Cmd-E"]),
         (Action::ToggleSftp, &["Cmd-Shift-O"]),
         (Action::ToggleProfiles, &["Cmd-Shift-M"]),
+        (Action::OpenSettings, &["Cmd-,"]),
     ];
     for (action, keys) in mac {
         bindings.insert(*action, chords(keys));
@@ -462,13 +513,7 @@ impl<'de> Deserialize<'de> for Hotkeys {
         // `[hotkeys]` overrides the defaults per action (`[]` unbinds); a chord the user assigns is
         // taken away from whichever default action had it.
         let user = BTreeMap::<Action, Vec<KeyChord>>::deserialize(deserializer)?;
-        let claimed: HashSet<KeyChord> = user.values().flatten().copied().collect();
-        let mut bindings = Self::default_keymap().bindings;
-        for chords in bindings.values_mut() {
-            chords.retain(|chord| !claimed.contains(chord));
-        }
-        bindings.extend(user);
-        Ok(Self::new(bindings))
+        Ok(Self::new(merged(user)))
     }
 }
 
@@ -554,6 +599,7 @@ mod tests {
             Action::MaximizePane,
             Action::ResizePane(Dir::Up),
             Action::Find,
+            Action::OpenSettings,
         ];
         for action in actions {
             let s = action.to_string();
@@ -562,6 +608,22 @@ mod tests {
         assert!("not-an-action".parse::<Action>().is_err());
         assert!("go-to-tab-not-a-number".parse::<Action>().is_err());
         assert!("pane-nav-sideways".parse::<Action>().is_err());
+    }
+
+    #[test]
+    fn overrides_are_the_smallest_table_that_loads_back() {
+        let defaults = Hotkeys::default_keymap();
+        assert!(defaults.overrides().is_empty());
+        let first = |a| defaults.chords_for(a).first().copied().unwrap();
+        // Copy takes New tab's chord: only Copy is written, New tab loses it on load.
+        let mut keymap = defaults.clone();
+        keymap.set_chords(Action::Copy, vec![first(Action::NewTab)]);
+        keymap.set_chords(Action::NewTab, Vec::new());
+        let table = keymap.overrides();
+        assert_eq!(table.keys().copied().collect::<Vec<_>>(), [Action::Copy]);
+        let text = toml::to_string(&table).unwrap();
+        let back: Hotkeys = toml::from_str(&text).unwrap();
+        assert_eq!(back.bindings(), keymap.bindings());
     }
 
     #[test]

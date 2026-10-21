@@ -15,7 +15,7 @@ pub use edit::{
     unique_group_id, unique_profile_id, unique_profile_name,
 };
 pub use io::{ConfigError, config_dir, load, set_profile_background};
-pub use section::{KeyEdit, TomlValue, set_keys};
+pub use section::{KeyEdit, TomlValue, set_hotkeys, set_keys};
 pub use sftp::SftpCfg;
 pub use validate::{ConfigIssue, validate, validate_with_catalog};
 

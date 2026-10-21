@@ -40,7 +40,17 @@ fn entries() -> Vec<(Target, FuzzyRow)> {
         };
         (Target::Anchor(anchor), row)
     });
-    let mut all: Vec<(Target, FuzzyRow)> = anchors.chain(settings).collect();
+    let hotkeys = fogu_core::Hotkeys::default_keymap();
+    let actions = hotkeys.bindings().keys().map(|&action| {
+        let row = FuzzyRow {
+            title: super::shortcuts::label(action),
+            subtitle: "Shortcuts".to_owned(),
+            keywords: vec![action.to_string(), "shortcut key binding".to_owned()],
+            ..FuzzyRow::default()
+        };
+        (Target::Action(action), row)
+    });
+    let mut all: Vec<(Target, FuzzyRow)> = anchors.chain(settings).chain(actions).collect();
     all.sort_by_key(|(target, _)| Section::ALL.iter().position(|s| *s == target.section()));
     all
 }
