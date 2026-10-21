@@ -36,6 +36,22 @@ pub enum ProfileEdit {
     },
     /// Append a group.
     AddGroup(Group),
+    /// Rename group `id`.
+    RenameGroup {
+        /// The group.
+        id: GroupId,
+        /// Its new name.
+        name: String,
+    },
+    /// Remove group `id`; its profiles become ungrouped.
+    DeleteGroup(GroupId),
+    /// Move group `id` one place up (`up`) or down in `[[groups]]` (the sidebar's order).
+    MoveGroup {
+        /// The group.
+        id: GroupId,
+        /// Towards the start of the list.
+        up: bool,
+    },
     /// Remove a stored profile.
     Delete(ProfileId),
     /// Save the profile editor: stored profile `old.id` becomes `new`. Only the keys whose value
@@ -68,6 +84,29 @@ impl ProfileEdit {
                 }
             }
             Self::AddGroup(group) => config.groups.push(group.clone()),
+            Self::RenameGroup { id, name } => {
+                if let Some(g) = config.groups.iter_mut().find(|g| &g.id == id) {
+                    g.name.clone_from(name);
+                }
+            }
+            Self::DeleteGroup(id) => {
+                config.groups.retain(|g| &g.id != id);
+                for p in config
+                    .profiles
+                    .iter_mut()
+                    .filter(|p| p.group.as_ref() == Some(id))
+                {
+                    p.group = None;
+                }
+            }
+            Self::MoveGroup { id, up } => {
+                if let Some(i) = config.groups.iter().position(|g| &g.id == id) {
+                    let j = if *up { i.checked_sub(1) } else { Some(i + 1) };
+                    if let Some(j) = j.filter(|j| *j < config.groups.len()) {
+                        config.groups.swap(i, j);
+                    }
+                }
+            }
             Self::Delete(id) => config.profiles.retain(|p| &p.id != id),
             Self::Update { old, new } => {
                 if let Some(p) = config.profiles.iter_mut().find(|p| p.id == old.id) {
@@ -218,6 +257,37 @@ fn apply_to_doc(doc: &mut DocumentMut, edit: &ProfileEdit) -> Result<(), DocErro
             let index = find(doc, id)?;
             profiles(doc)?.remove(index);
         }
+        ProfileEdit::RenameGroup { id, name } => {
+            let index = find_group(doc, id)?;
+            if let Some(table) = array_of_tables(doc, "groups")?.get_mut(index) {
+                let mut value = toml_edit::Value::from(name.as_str());
+                if let Some(old) = table.get("name").and_then(Item::as_value) {
+                    *value.decor_mut() = old.decor().clone();
+                }
+                table.insert("name", Item::Value(value));
+            }
+        }
+        ProfileEdit::DeleteGroup(id) => {
+            let index = find_group(doc, id)?;
+            array_of_tables(doc, "groups")?.remove(index);
+            for table in profiles(doc)?.iter_mut() {
+                if table.get("group").and_then(Item::as_str) == Some(id.0.as_str()) {
+                    table.remove("group");
+                }
+            }
+        }
+        ProfileEdit::MoveGroup { id, up } => {
+            let index = find_group(doc, id)?;
+            let groups = array_of_tables(doc, "groups")?;
+            let other = if *up {
+                index.checked_sub(1)
+            } else {
+                Some(index + 1)
+            };
+            if let Some(other) = other.filter(|o| *o < groups.len()) {
+                swap_tables(groups, index, other);
+            }
+        }
         ProfileEdit::Update { old, new } => update(doc, old, new)?,
     }
     Ok(())
@@ -281,6 +351,81 @@ fn array_of_tables<'a>(
         .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()))
         .as_array_of_tables_mut()
         .ok_or(DocError::Shape("expected [[profiles]] / [[groups]] tables"))
+}
+
+/// Index of the `[[groups]]` entry whose `id` is `id`.
+fn find_group(doc: &mut DocumentMut, id: &GroupId) -> Result<usize, DocError> {
+    array_of_tables(doc, "groups")?
+        .iter()
+        .position(|t| t.get("id").and_then(Item::as_str) == Some(id.0.as_str()))
+        .ok_or_else(|| DocError::NoSuchProfile(id.0.clone()))
+}
+
+/// Swaps entries `a` and `b` of `array`, each keeping the other's place in the file (a table's
+/// position decides where it is written).
+fn swap_tables(array: &mut ArrayOfTables, a: usize, b: usize) {
+    let (Some(first), Some(second)) = (array.get(a).cloned(), array.get(b).cloned()) else {
+        return;
+    };
+    let (pos_a, pos_b) = (first.position(), second.position());
+    if let Some(slot) = array.get_mut(a) {
+        *slot = second;
+        slot.set_position(pos_a);
+    }
+    if let Some(slot) = array.get_mut(b) {
+        *slot = first;
+        slot.set_position(pos_b);
+    }
+}
+
+/// Writes the profile defaults that differ between `old` and `new` into
+/// `[profile_defaults.local]` and `[profile_defaults.ssh]`, key by key and in place (a key `new`
+/// no longer sets is removed); one write.
+pub fn set_profile_defaults(
+    dir: &Path,
+    old: &crate::profile::ProfileDefaults,
+    new: &crate::profile::ProfileDefaults,
+) -> Result<(), ConfigError> {
+    let bad = || ConfigError::Parse {
+        path: dir.join(FILE_NAME),
+        message: "unserializable profile defaults".to_owned(),
+    };
+    let table = |opts: Result<toml::Table, toml::ser::Error>| opts.map_err(|_| bad());
+    let tables = [
+        (
+            "local",
+            table(toml::Table::try_from(&old.local))?,
+            table(toml::Table::try_from(&new.local))?,
+        ),
+        (
+            "ssh",
+            table(toml::Table::try_from(&old.ssh))?,
+            table(toml::Table::try_from(&new.ssh))?,
+        ),
+    ];
+    for (kind, before, after) in tables {
+        if before == after {
+            continue;
+        }
+        let result = super::section::edit_section(dir, &["profile_defaults", kind], |table| {
+            let keys = before
+                .keys()
+                .chain(after.keys().filter(|k| !before.contains_key(*k)));
+            for key in keys {
+                let value = after.get(key);
+                if before.get(key) == value {
+                    continue;
+                }
+                let Ok(value) = value.map(inline_value).transpose() else {
+                    return Err(());
+                };
+                put(table, key, value);
+            }
+            Ok(())
+        })?;
+        result.map_err(|()| bad())?;
+    }
+    Ok(())
 }
 
 /// Index of the `[[profiles]]` entry whose `id` is `id`.

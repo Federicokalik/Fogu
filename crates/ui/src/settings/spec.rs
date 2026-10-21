@@ -6,6 +6,7 @@ use fogu_core::Config;
 use fogu_core::config::TomlValue;
 
 use super::Section;
+use super::profiles::ProfKey;
 use super::terminal::TermKey;
 
 /// How a setting is edited.
@@ -177,18 +178,25 @@ impl Value {
 pub enum SettingId {
     /// A Terminal page setting.
     Term(TermKey),
+    /// A Profiles page setting.
+    Prof(ProfKey),
 }
 
 impl SettingId {
     /// Every setting, in page order.
     pub fn all() -> impl Iterator<Item = Self> {
-        TermKey::ALL.iter().copied().map(Self::Term)
+        TermKey::ALL
+            .iter()
+            .copied()
+            .map(Self::Term)
+            .chain(ProfKey::ALL.iter().copied().map(Self::Prof))
     }
 
     /// Its description.
     pub fn spec(self) -> Spec {
         match self {
             Self::Term(key) => key.spec(),
+            Self::Prof(key) => key.spec(),
         }
     }
 
@@ -196,6 +204,7 @@ impl SettingId {
     pub fn get(self, config: &Config) -> Value {
         match self {
             Self::Term(key) => key.get(config),
+            Self::Prof(key) => key.get(config),
         }
     }
 
@@ -203,6 +212,7 @@ impl SettingId {
     pub fn set(self, config: &mut Config, value: &Value) {
         match self {
             Self::Term(key) => key.set(config, value),
+            Self::Prof(key) => key.set(config, value),
         }
     }
 
@@ -219,6 +229,7 @@ impl SettingId {
             (Kind::Number { .. }, Value::Num(n)) => Some(TomlValue::Int(round(*n))),
             (Kind::Choice(_) | Kind::Flags(_), _) => match self {
                 Self::Term(key) => key.named(value),
+                Self::Prof(key) => key.named(value),
             },
             (_, Value::List(items)) => Some(TomlValue::List(items.clone())),
             (_, Value::Text(t)) => Some(TomlValue::Str(t.clone())),

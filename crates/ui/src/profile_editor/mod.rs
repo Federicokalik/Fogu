@@ -22,10 +22,10 @@ use std::collections::BTreeMap;
 use fogu_core::config::{ConfigIssue, validate};
 use fogu_core::{Config, GroupId, Profile, ProfileId, ProfileKind};
 
-pub use fields::FieldId;
+pub use fields::{Effect, FieldId};
 pub use handlers::EditorMsg;
 pub use stored::StoredEntry;
-pub use view::page;
+pub use view::{defaults_sections, page};
 
 /// Where the edited profile comes from.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +36,9 @@ pub enum Source {
     Stored(Box<Profile>),
     /// A `~/.ssh/config` host: shown read-only, with "Copy to my profiles".
     SshConfig,
+    /// The defaults every local or SSH profile inherits (`[profile_defaults]`), edited in
+    /// Settings: no host, secrets, forwards or login scripts of its own.
+    Defaults,
 }
 
 /// One open editor (the state of a "Profile: …" tab).
@@ -122,6 +125,11 @@ impl ProfileEditor {
         }
     }
 
+    /// The defaults editor of the settings page.
+    pub fn is_defaults(&self) -> bool {
+        self.source == Source::Defaults
+    }
+
     /// Save is possible: editable, no issue, every field parses.
     pub fn can_save(&self) -> bool {
         !self.read_only() && self.issues.is_empty() && self.errors.is_empty()
@@ -175,13 +183,13 @@ impl ProfileEditor {
     /// `validate` on `config` with the draft in place of (or added to) the stored profiles;
     /// only the issues about the draft are kept.
     fn validate(&self, config: &Config) -> Vec<ConfigIssue> {
-        if self.read_only() {
+        if self.read_only() || self.is_defaults() {
             return Vec::new();
         }
         let mut candidate = config.clone();
         let stored_id = match &self.source {
             Source::Stored(old) => Some(&old.id),
-            Source::New | Source::SshConfig => None,
+            Source::New | Source::SshConfig | Source::Defaults => None,
         };
         match candidate
             .profiles

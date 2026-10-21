@@ -246,12 +246,17 @@ impl App {
         let settings = self.settings.as_ref().map(|page| {
             let width = (self.window_size.width * 0.9).clamp(860.0, 1200.0);
             let height = (self.window_size.height * 0.86).clamp(600.0, 900.0);
+            let entries = if page.section == crate::settings::Section::Profiles {
+                self.all_entries()
+            } else {
+                Vec::new()
+            };
             let page = crate::settings::view(
                 page,
                 look,
                 &self.config,
                 (&self.schemes, &self.styles),
-                self.env,
+                (self.env, &entries),
             );
             let card = container(page)
                 .width(width)

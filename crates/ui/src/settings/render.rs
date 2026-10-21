@@ -428,6 +428,27 @@ pub fn choice<'a>(
     .into()
 }
 
+/// A drop-down of owned `options` (profile names).
+pub fn choice_owned<'a>(
+    look: Look,
+    options: Vec<String>,
+    selected: Option<usize>,
+    on_pick: impl Fn(usize) -> Message + 'a,
+) -> Element<'a, Message> {
+    let current = selected.and_then(|i| options.get(i).cloned());
+    let lookup = options.clone();
+    pick_list(options, current, move |picked: String| {
+        on_pick(lookup.iter().position(|o| *o == picked).unwrap_or(0))
+    })
+    .text_size(13)
+    .font(look.text.chrome)
+    .padding([5, 8])
+    .width(Length::Fill)
+    .style(move |_theme: &iced::Theme, status| pick_style(look, status))
+    .menu_style(move |_theme: &iced::Theme| menu_style(look))
+    .into()
+}
+
 fn pick_style(look: Look, status: pick_list::Status) -> pick_list::Style {
     let open = matches!(
         status,

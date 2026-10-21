@@ -73,15 +73,24 @@ impl App {
         id
     }
 
-    /// `config.default_profile`, or the built-in default shell.
+    /// `config.default_profile` (a stored profile, a built-in shell or a `~/.ssh/config` host),
+    /// or the built-in default shell when it names none of them.
     pub(crate) fn default_profile(&self) -> Profile {
         let config = &self.config;
+        let Some(id) = config.default_profile.as_ref() else {
+            return Profile::default_shell();
+        };
         config
-            .default_profile
-            .as_ref()
-            .and_then(|id| config.profiles.iter().find(|p| &p.id == id))
+            .profiles
+            .iter()
+            .chain(&self.profiles.builtins)
+            .chain(&self.profiles.ssh_hosts.profiles)
+            .find(|p| &p.id == id)
             .cloned()
-            .unwrap_or_else(Profile::default_shell)
+            .unwrap_or_else(|| {
+                tracing::warn!(id = id.0, "default profile not found; using Default shell");
+                Profile::default_shell()
+            })
     }
 
     /// Opens `profile` (local `cwd` override for "new tab here") in a new last tab and

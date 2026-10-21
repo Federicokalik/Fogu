@@ -56,6 +56,75 @@ fn read(t: &Tmp) -> String {
     std::fs::read_to_string(t.0.join(FILE_NAME)).unwrap()
 }
 
+#[test]
+fn groups_are_renamed_moved_and_deleted_in_place() {
+    let text = "\
+[[groups]]
+id = \"a\"
+name = \"Alpha\"   # first
+
+[[groups]]
+id = \"b\"
+name = \"Beta\"
+
+[[profiles]]
+id = \"p\"
+name = \"P\"
+type = \"local\"
+group = \"b\"
+";
+    let t = tmp(Some(text));
+    let gid = |s: &str| GroupId(s.to_owned());
+    edit_profiles(
+        &t.0,
+        &[ProfileEdit::RenameGroup {
+            id: gid("a"),
+            name: "Apps".to_owned(),
+        }],
+    )
+    .unwrap();
+    assert!(
+        read(&t).contains("name = \"Apps\"   # first"),
+        "{}",
+        read(&t)
+    );
+    edit_profiles(
+        &t.0,
+        &[ProfileEdit::MoveGroup {
+            id: gid("b"),
+            up: true,
+        }],
+    )
+    .unwrap();
+    let (config, _) = load(&t.0);
+    let ids: Vec<&str> = config.groups.iter().map(|g| g.id.0.as_str()).collect();
+    assert_eq!(ids, ["b", "a"]);
+    edit_profiles(&t.0, &[ProfileEdit::DeleteGroup(gid("b"))]).unwrap();
+    let (config, _) = load(&t.0);
+    assert_eq!(config.groups.len(), 1);
+    assert_eq!(config.profiles[0].group, None);
+}
+
+#[test]
+fn profile_defaults_write_only_changed_keys() {
+    let t = tmp(Some(
+        "# mine\n[profile_defaults.ssh]\nport = 2222   # office\n",
+    ));
+    let (config, _) = load(&t.0);
+    let mut new = config.profile_defaults.clone();
+    new.ssh.user = Some("me".to_owned());
+    new.ssh.port = Some(2200);
+    set_profile_defaults(&t.0, &config.profile_defaults, &new).unwrap();
+    let text = read(&t);
+    assert!(
+        text.starts_with("# mine\n[profile_defaults.ssh]\nport = 2200   # office\n"),
+        "{text}"
+    );
+    assert!(text.contains("user = \"me\""), "{text}");
+    let (back, _) = load(&t.0);
+    assert_eq!(back.profile_defaults, new);
+}
+
 fn id(s: &str) -> ProfileId {
     ProfileId(s.to_owned())
 }

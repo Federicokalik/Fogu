@@ -60,6 +60,9 @@ impl App {
                     page.query.clear();
                     page.highlight = None;
                 }
+                if section == super::Section::Profiles {
+                    self.profiles_page_shown();
+                }
                 tasks.push(iced::widget::operation::snap_to(
                     Id::new(SCROLL_ID),
                     iced::widget::operation::RelativeOffset::START,
@@ -96,10 +99,14 @@ impl App {
             }
             SettingsMsg::Set(id, edit) => return self.edit_setting(id, edit),
             SettingsMsg::Shortcut(message) => return self.on_shortcut(message),
+            SettingsMsg::Profiles(message) => return self.on_profiles_page(message),
             SettingsMsg::Outside => return self.settings_outside(),
             SettingsMsg::Confirm(yes) => {
                 let confirm = self.settings.as_mut().and_then(|p| p.confirm.take());
                 match confirm {
+                    Some(Confirm::DeleteGroup(id)) if yes => {
+                        return self.save_edits(&[fogu_core::config::ProfileEdit::DeleteGroup(id)]);
+                    }
                     Some(Confirm::DiscardCode) if yes => {
                         if let Some(page) = &mut self.settings {
                             page.editor = None;
@@ -192,6 +199,9 @@ impl App {
         page.highlight = Some(target);
         page.highlight_gen += 1;
         let generation = page.highlight_gen;
+        if target.section() == super::Section::Profiles {
+            self.profiles_page_shown();
+        }
         // The reveal waits a frame: the new page must be laid out before it is measured.
         Task::batch([
             flush,
@@ -286,7 +296,12 @@ impl App {
             .as_ref()
             .map(|p| p.pending.keys().copied().collect())
             .unwrap_or_default();
-        Task::batch(ids.into_iter().map(|id| self.flush_setting(id)))
+        let fields: Vec<Task<Message>> = ids.into_iter().map(|id| self.flush_setting(id)).collect();
+        Task::batch(
+            fields
+                .into_iter()
+                .chain([self.flush_group_names(), self.commit_defaults()]),
+        )
     }
 
     /// A click anywhere: saves the typed text of plain fields. A font field is left alone: the
@@ -303,7 +318,12 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
-        Task::batch(ids.into_iter().map(|id| self.flush_setting(id)))
+        let fields: Vec<Task<Message>> = ids.into_iter().map(|id| self.flush_setting(id)).collect();
+        Task::batch(
+            fields
+                .into_iter()
+                .chain([self.flush_group_names(), self.commit_defaults()]),
+        )
     }
 
     /// Saves field `id`'s typed text when valid; an invalid text stays with its error.
@@ -382,6 +402,14 @@ impl App {
         {
             self.apply_metrics();
         }
+        if a.profiles_sidebar_width.to_bits() != was.profiles_sidebar_width.to_bits() {
+            self.profiles.width = a.profiles_sidebar_width.max(crate::profiles::MIN_WIDTH);
+        }
+        let mut tasks = Vec::new();
+        if new.ssh.read_ssh_config != old.ssh.read_ssh_config {
+            self.profiles.ssh_hosts.forget();
+            tasks.push(self.refresh_ssh_hosts());
+        }
         let (t, before) = (&new.terminal, &old.terminal);
         if t.scrollback_lines != before.scrollback_lines
             || t.word_separators != before.word_separators
@@ -389,7 +417,8 @@ impl App {
         {
             self.apply_term_options();
         }
-        Task::batch(notes.into_iter().map(|n| self.notify(n)))
+        tasks.extend(notes.into_iter().map(|n| self.notify(n)));
+        Task::batch(tasks)
     }
 
     /// A press on the dimmed window around the page: closes it, unless a shortcut is being
@@ -415,7 +444,32 @@ impl App {
     /// The page's question, drawn over it.
     pub(crate) fn settings_modal(&self) -> Option<Modal> {
         let answer = |yes| Message::Settings(SettingsMsg::Confirm(yes));
-        match self.settings.as_ref()?.confirm? {
+        match self.settings.as_ref()?.confirm.clone()? {
+            Confirm::DeleteGroup(id) => {
+                let name = self
+                    .config
+                    .groups
+                    .iter()
+                    .find(|g| g.id == id)
+                    .map_or_else(|| id.0.clone(), |g| g.name.clone());
+                Some(Modal {
+                    title: "Delete group?",
+                    body: format!(
+                        "\"{}\" is removed; its profiles stay, without a group.",
+                        fogu_term::sanitize_title(&name)
+                    ),
+                    buttons: vec![
+                        ModalButton {
+                            label: "Delete",
+                            on_press: answer(true),
+                        },
+                        ModalButton {
+                            label: "Cancel",
+                            on_press: answer(false),
+                        },
+                    ],
+                })
+            }
             Confirm::ResetShortcuts => Some(Modal {
                 title: "Reset all shortcuts?",
                 body: "Every action gets its default keys back; your changes in [hotkeys] are \

@@ -51,6 +51,21 @@ pub fn page<'a>(
         .into()
 }
 
+/// The defaults editor's form (Settings → Profiles): the kind's sections without the fields
+/// that only make sense per profile. Placeholders come from `config`'s defaults (pass the
+/// built-in ones).
+pub fn defaults_sections<'a>(
+    ed: &'a ProfileEditor,
+    config: &Config,
+    look: Look,
+) -> Element<'a, Field<FieldId>> {
+    let sections = match &ed.draft.kind {
+        ProfileKind::Local(local) => local_sections(ed, local, config, look),
+        ProfileKind::Ssh(ssh) => super::view_ssh::sections(ed, ssh, config, look),
+    };
+    Column::with_children(sections).spacing(12).into()
+}
+
 fn header(tab: TabId, ed: &ProfileEditor, look: Look) -> Element<'_, Message> {
     let msg = move |m: EditorMsg| Message::Editor(tab, m);
     let action = |label: &str, on: Option<Message>| {

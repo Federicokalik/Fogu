@@ -280,7 +280,7 @@ impl App {
                 new.id = unique_profile_id(&self.config, &slug(&new.name, "profile"));
                 ProfileEdit::Add(Box::new(new.clone()))
             }
-            Source::SshConfig => return Task::none(),
+            Source::SshConfig | Source::Defaults => return Task::none(),
         };
         if let Err(task) = self.write_edits(&[edit]) {
             return task;

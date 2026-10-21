@@ -4,6 +4,7 @@
 mod appearance;
 mod handlers;
 mod index;
+mod profiles;
 mod render;
 mod reveal;
 mod shortcuts;
@@ -25,6 +26,7 @@ use crate::message::Message;
 use crate::palette::Look;
 use crate::style_code::{self, CodeEditor, CodeKind};
 
+pub use profiles::ProfilesPageMsg;
 pub use shortcuts::ShortcutMsg;
 pub use spec::SettingId;
 
@@ -81,16 +83,32 @@ pub enum Anchor {
     Accent,
     Palette,
     Density,
+    DefaultProfile,
+    ProfileList,
+    Groups,
+    ProfileDefaults,
 }
 
 impl Anchor {
     /// Every anchor.
-    pub const ALL: [Self; 4] = [Self::UiStyle, Self::Accent, Self::Palette, Self::Density];
+    pub const ALL: [Self; 8] = [
+        Self::UiStyle,
+        Self::Accent,
+        Self::Palette,
+        Self::Density,
+        Self::DefaultProfile,
+        Self::ProfileList,
+        Self::Groups,
+        Self::ProfileDefaults,
+    ];
 
     /// Its page.
     pub fn section(self) -> Section {
         match self {
             Self::UiStyle | Self::Accent | Self::Palette | Self::Density => Section::Appearance,
+            Self::DefaultProfile | Self::ProfileList | Self::Groups | Self::ProfileDefaults => {
+                Section::Profiles
+            }
         }
     }
 
@@ -101,6 +119,10 @@ impl Anchor {
             Self::Accent => "Accent colour",
             Self::Palette => "Terminal palette",
             Self::Density => "Density",
+            Self::DefaultProfile => "Default profile",
+            Self::ProfileList => "Profiles",
+            Self::Groups => "Profile groups",
+            Self::ProfileDefaults => "Defaults for every profile",
         }
     }
 
@@ -111,6 +133,12 @@ impl Anchor {
             Self::Accent => "color highlight selection focus",
             Self::Palette => "color scheme colours ansi theme custom code",
             Self::Density => "rows compact comfortable spacing",
+            Self::DefaultProfile => "new tab startup shell first",
+            Self::ProfileList => "ssh hosts connections edit delete duplicate new",
+            Self::Groups => "folders rename order",
+            Self::ProfileDefaults => {
+                "inherit user port keepalive agent shell program environment cwd"
+            }
         }
     }
 
@@ -121,6 +149,10 @@ impl Anchor {
             Self::Accent => "anchor:accent",
             Self::Palette => "anchor:palette",
             Self::Density => "anchor:density",
+            Self::DefaultProfile => profiles::DEFAULT_ANCHOR,
+            Self::ProfileList => profiles::LIST_ANCHOR,
+            Self::Groups => profiles::GROUPS_ANCHOR,
+            Self::ProfileDefaults => profiles::DEFAULTS_ANCHOR,
         })
     }
 }
@@ -183,12 +215,14 @@ pub enum Edit {
 }
 
 /// A question the page asks before going on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Confirm {
     /// The code editor has unsaved changes and the page is being closed.
     DiscardCode,
     /// Every shortcut back to its default.
     ResetShortcuts,
+    /// Delete a group (its profiles become ungrouped).
+    DeleteGroup(fogu_core::GroupId),
 }
 
 /// A choice in the settings page.
@@ -214,6 +248,8 @@ pub enum SettingsMsg {
     Confirm(bool),
     /// A choice on the Shortcuts page.
     Shortcut(ShortcutMsg),
+    /// A choice on the Profiles page.
+    Profiles(ProfilesPageMsg),
     /// Switch the UI style by key (applies immediately and is saved); the terminal palette
     /// follows when it was the default or another style's paired palette.
     Style(String),
@@ -265,6 +301,8 @@ pub struct SettingsPage {
     pub fonts: Option<FontPickers>,
     /// The Shortcuts page.
     pub shortcuts: shortcuts::ShortcutsState,
+    /// The Profiles page.
+    pub profiles: profiles::ProfilesPage,
 }
 
 /// The searchable font lists of the Terminal page.
@@ -301,7 +339,7 @@ pub fn view<'a>(
     look: Look,
     config: &Config,
     catalogs: (&SchemeCatalog, &StyleCatalog),
-    env: Env,
+    (env, entries): (Env, &[crate::profiles::Entry]),
 ) -> Element<'a, Message> {
     let header = header(page, look);
     let nav = Section::ALL
@@ -327,7 +365,7 @@ pub fn view<'a>(
         .height(Length::Fill)
         .into()
     } else {
-        let body = section_body(page, look, config, catalogs, env);
+        let body = section_body(page, look, config, catalogs, (env, entries));
         scrollable(container(body).padding(iced::Padding::ZERO.right(14)))
             .id(Id::new(SCROLL_ID))
             .height(Length::Fill)
@@ -417,7 +455,7 @@ fn section_body<'a>(
     look: Look,
     config: &Config,
     catalogs: (&SchemeCatalog, &StyleCatalog),
-    env: Env,
+    (env, entries): (Env, &[crate::profiles::Entry]),
 ) -> Element<'a, Message> {
     let anchor = match page.highlight {
         Some(Target::Anchor(anchor)) => Some(anchor),
@@ -426,6 +464,15 @@ fn section_body<'a>(
     match page.section {
         Section::Appearance => appearance::body(look, config, catalogs, env, anchor),
         Section::Shortcuts => shortcuts::body(&page.shortcuts, &config.hotkeys, look),
+        Section::Profiles => {
+            let rows = render::rows(
+                page,
+                look,
+                config,
+                profiles::ProfKey::ALL.iter().copied().map(SettingId::Prof),
+            );
+            profiles::body(&page.profiles, config, entries, rows, look)
+        }
         Section::Terminal => render::rows(
             page,
             look,

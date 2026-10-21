@@ -28,14 +28,19 @@ pub(super) fn sections<'a>(
 ) -> Vec<Row<'a>> {
     let d = &config.profile_defaults.ssh;
     let eff = resolve_ssh(ssh, d);
-    vec![
+    let mut sections = vec![
         connection(ed, ssh, d, &eff, look),
         authentication(ed, ssh, d, &eff, look),
         network(ed, ssh, &eff, look),
         algorithms(ed, ssh, look),
         scripts(ed, ssh, look),
         terminal(ed, ssh, &eff, look),
-    ]
+    ];
+    if ed.is_defaults() {
+        // Login scripts belong to one server.
+        sections.remove(4);
+    }
+    sections
 }
 
 /// A number field with its notes; `key` is its config name.
@@ -174,6 +179,10 @@ fn connection<'a>(
     rows.splice(4..4, timing_rows(ed, ssh, d, look));
     let at = rows.len() - 1;
     rows.splice(at..at, reuse_rows(ed, ssh, d, eff, look));
+    if ed.is_defaults() {
+        // Every profile names its own host.
+        rows.remove(0);
+    }
     forms::section(look, "Connection", rows)
 }
 
@@ -319,7 +328,9 @@ fn authentication<'a>(
             eff.stored_secrets,
         ),
     );
-    rows.splice(3..3, super::stored::rows(ed, eff, look));
+    if !ed.is_defaults() {
+        rows.splice(3..3, super::stored::rows(ed, eff, look));
+    }
     forms::section(look, "Authentication", rows)
 }
 
@@ -371,7 +382,7 @@ fn network<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, eff: &EffectiveSsh, look
          watching your display.",
         look.dim,
     );
-    let rows = vec![
+    let mut rows = vec![
         line(look.dim, ROUTE_NOTE),
         jump_row,
         proxy,
@@ -416,8 +427,10 @@ fn network<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, eff: &EffectiveSsh, look
         ),
         agent,
         x11,
-        forwards(ed, ssh, look),
     ];
+    if !ed.is_defaults() {
+        rows.push(forwards(ed, ssh, look));
+    }
     forms::section(look, "Network", rows)
 }
 

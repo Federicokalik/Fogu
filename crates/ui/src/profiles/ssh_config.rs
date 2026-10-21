@@ -47,6 +47,12 @@ impl SshHosts {
 
     /// Re-reads the files if they changed (or were never read); returns the new issues as
     /// `~/…:line: message` texts, so the caller can show them once per change.
+    /// Drops the hosts and what was read, so the next [`Self::refresh`] reads the file again.
+    pub fn forget(&mut self) {
+        self.profiles.clear();
+        self.loaded = None;
+    }
+
     pub fn refresh(&mut self) -> Vec<String> {
         let Some((env, path)) = &self.source else {
             return Vec::new();
