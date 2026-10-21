@@ -24,18 +24,33 @@ pub enum Icon {
     Close,
     Plus,
     ChevronDown,
+    ChevronRight,
     /// The profile sidebar (a window with a right-hand panel).
     Sidebar,
     /// The SFTP panel.
     Folder,
     /// Port forwarding (two opposite arrows).
     Ports,
+    ArrowLeft,
+    ArrowUp,
+    Home,
+    Refresh,
+    Search,
+    Settings,
 }
 
 /// `icon`, `size` px square in `color`, centred in all the space it is given.
 pub fn icon<'a>(icon: Icon, size: f32, color: Color) -> Element<'a, Message> {
     container(image(handle(icon, size, color)).width(size).height(size))
         .center(Length::Fill)
+        .into()
+}
+
+/// The same icon in a fixed-size box, for rows where `icon`'s fill would push text away.
+pub fn fixed<'a>(glyph: Icon, size: f32, color: Color) -> Element<'a, Message> {
+    container(icon(glyph, size, color))
+        .width(size)
+        .height(size)
         .into()
 }
 
@@ -103,6 +118,10 @@ fn rasterize(icon: Icon, size: f32, color: Color) -> image::Handle {
 }
 
 /// The icon's outline on the 16×16 grid, scaled by `u` pixels per grid unit.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one match holding the complete icon set; splitting it would hide the glyph shapes"
+)]
 fn path(icon: Icon, u: f32) -> Option<tiny_skia::Path> {
     let mut b = PathBuilder::new();
     let mut line = |points: &[(f32, f32)]| {
@@ -131,6 +150,76 @@ fn path(icon: Icon, u: f32) -> Option<tiny_skia::Path> {
             line(&[(3.0, 8.0), (13.0, 8.0)]);
         }
         Icon::ChevronDown => line(&[(5.0, 6.5), (8.0, 9.5), (11.0, 6.5)]),
+        Icon::ChevronRight => line(&[(6.5, 5.0), (9.5, 8.0), (6.5, 11.0)]),
+        Icon::ArrowLeft => {
+            line(&[(13.0, 8.0), (3.0, 8.0)]);
+            line(&[(6.5, 4.5), (3.0, 8.0), (6.5, 11.5)]);
+        }
+        Icon::ArrowUp => {
+            line(&[(8.0, 13.0), (8.0, 3.0)]);
+            line(&[(4.5, 6.5), (8.0, 3.0), (11.5, 6.5)]);
+        }
+        Icon::Home => {
+            line(&[(2.5, 7.5), (8.0, 2.5), (13.5, 7.5)]);
+            line(&[(4.5, 6.5), (4.5, 13.0), (11.5, 13.0), (11.5, 6.5)]);
+        }
+        Icon::Refresh => {
+            line(&[(3.5, 6.0), (4.6, 3.6), (7.2, 2.6), (10.2, 3.2), (12.2, 5.2)]);
+            line(&[(12.5, 2.7), (12.2, 5.2), (9.7, 5.6)]);
+            line(&[
+                (12.5, 10.0),
+                (11.4, 12.4),
+                (8.8, 13.4),
+                (5.8, 12.8),
+                (3.8, 10.8),
+            ]);
+            line(&[(3.5, 13.3), (3.8, 10.8), (6.3, 10.4)]);
+        }
+        Icon::Settings => {
+            line(&[(2.5, 4.5), (13.5, 4.5)]);
+            line(&[(2.5, 8.0), (13.5, 8.0)]);
+            line(&[(2.5, 11.5), (13.5, 11.5)]);
+            line(&[
+                (11.2, 4.5),
+                (10.5, 5.5),
+                (9.3, 5.0),
+                (9.3, 4.0),
+                (10.5, 3.5),
+                (11.2, 4.5),
+            ]);
+            line(&[
+                (4.2, 8.0),
+                (4.9, 9.0),
+                (6.1, 8.5),
+                (6.1, 7.5),
+                (4.9, 7.0),
+                (4.2, 8.0),
+            ]);
+            line(&[
+                (9.2, 11.5),
+                (9.9, 12.5),
+                (11.1, 12.0),
+                (11.1, 11.0),
+                (9.9, 10.5),
+                (9.2, 11.5),
+            ]);
+        }
+        Icon::Search => {
+            line(&[(10.8, 10.8), (14.0, 14.0)]);
+            line(&[
+                (7.0, 2.5),
+                (9.4, 3.5),
+                (10.5, 5.8),
+                (10.0, 8.3),
+                (8.2, 10.2),
+                (5.7, 10.7),
+                (3.4, 9.6),
+                (2.2, 7.3),
+                (2.5, 4.8),
+                (4.3, 3.0),
+                (7.0, 2.5),
+            ]);
+        }
         Icon::Sidebar => {
             line(&[
                 (2.0, 3.0),
@@ -173,9 +262,15 @@ mod tests {
             Icon::Close,
             Icon::Plus,
             Icon::ChevronDown,
+            Icon::ChevronRight,
             Icon::Sidebar,
             Icon::Folder,
             Icon::Ports,
+            Icon::ArrowLeft,
+            Icon::ArrowUp,
+            Icon::Home,
+            Icon::Refresh,
+            Icon::Search,
         ] {
             let rgba = pixels(icon, 32, red);
             assert_eq!(rgba.len(), 32 * 32 * 4, "{icon:?}");

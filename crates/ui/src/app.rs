@@ -7,7 +7,7 @@ use std::sync::Arc;
 use iced::keyboard;
 use std::time::{Duration, Instant};
 
-use fogu_core::Config;
+use fogu_core::{Config, SchemeCatalog};
 use fogu_session::SessionRuntime;
 use fogu_term::input;
 use iced::{Point, Task, clipboard, window};
@@ -72,6 +72,8 @@ pub struct App {
     pub(crate) metrics: CellMetrics,
     pub(crate) scale: f32,
     pub(crate) colors: Colors,
+    /// Built-in plus custom terminal colour schemes, reloadable from Settings.
+    pub(crate) schemes: SchemeCatalog,
     /// Chrome colours and the matching iced theme, both from `colors`.
     pub(crate) look: Look,
     pub(crate) theme: iced::Theme,
@@ -83,6 +85,8 @@ pub struct App {
     pub(crate) picker: Option<ProfilePicker>,
     /// The profile manager sidebar.
     pub(crate) profiles: ProfilesView,
+    /// The settings page, when open.
+    pub(crate) settings: Option<crate::settings::SettingsPage>,
     /// The "Port forwarding" dialog of an SSH pane.
     pub(crate) forwards: Option<crate::forwards_dialog::ForwardsDialog>,
     /// The editor's "Set stored secret" dialog.
@@ -135,17 +139,28 @@ fn builtins() -> Vec<fogu_core::Profile> {
 
 impl App {
     /// State with no tabs yet.
+    #[cfg(test)]
     pub(crate) fn new(
         runtime: Arc<SessionRuntime>,
         config: Arc<Config>,
         resolved: ResolvedFont,
+    ) -> Self {
+        Self::with_schemes(runtime, config, resolved, SchemeCatalog::builtins())
+    }
+
+    /// [`new`](Self::new) with the custom terminal schemes found at startup.
+    pub(crate) fn with_schemes(
+        runtime: Arc<SessionRuntime>,
+        config: Arc<Config>,
+        resolved: ResolvedFont,
+        schemes: SchemeCatalog,
     ) -> Self {
         let font = FontSpec {
             family: config.appearance.font_family.clone(),
             size_pt: config.appearance.font_size,
         };
         let metrics = CellMetrics::new(resolved.units, font.size_px(), 1.0);
-        let (scheme, scheme_note) = resolve_scheme(&config.appearance.color_scheme);
+        let (scheme, scheme_note) = resolve_scheme(&config.appearance.color_scheme, &schemes);
         let colors = Colors::new(&scheme);
         let (preset, preset_note) = UiTheme::resolve(&config.appearance.ui_theme);
         let look = Look::new(&colors, preset, config.appearance.accent);
@@ -179,6 +194,7 @@ impl App {
             look,
             theme: look.theme(&colors),
             colors,
+            schemes,
             focused: true,
             pending_paste: None,
             toasts,
@@ -189,6 +205,7 @@ impl App {
                 ssh_hosts: ssh_hosts(),
                 ..ProfilesView::new(config.appearance.profiles_sidebar_width, builtins())
             },
+            settings: None,
             pending_close: None,
             forwards: None,
             secret_dialog: None,
@@ -222,7 +239,7 @@ impl App {
             &config.appearance.font_family,
             &config.appearance.fallback_fonts,
         );
-        let mut app = Self::new(runtime, config, resolved);
+        let mut app = Self::with_schemes(runtime, config, resolved, options.schemes);
         app.exit_after_first_frame = options.exit_after_first_frame;
         app.config_dir = options.config_dir;
         let mut tasks = vec![app.refresh_ssh_hosts()];
@@ -276,6 +293,93 @@ impl App {
         self.theme.clone()
     }
 
+    /// Recomputes the chrome look and stock-widget theme after an appearance change.
+    fn refresh_look(&mut self) {
+        let (preset, _) = UiTheme::resolve(&self.config.appearance.ui_theme);
+        self.look = Look::new(&self.colors, preset, self.config.appearance.accent);
+        self.theme = self.look.theme(&self.colors);
+    }
+
+    /// Re-resolves the selected terminal scheme against the current catalog.
+    fn apply_scheme(&mut self) -> Option<Notification> {
+        let (scheme, note) = resolve_scheme(&self.config.appearance.color_scheme, &self.schemes);
+        self.colors = Colors::new(&scheme);
+        self.refresh_look();
+        note
+    }
+
+    fn save_ui(&self) -> Option<Notification> {
+        let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
+        let (theme, accent) = {
+            let appearance = &self.config.appearance;
+            (appearance.ui_theme.clone(), appearance.accent)
+        };
+        fogu_core::config::set_appearance_ui(&dir, &theme, accent)
+            .err()
+            .map(|err| {
+                Notification::new(Level::Error, "Settings not saved").detail(err.to_string())
+            })
+    }
+
+    /// Applies and persists one settings choice.
+    fn on_settings(&mut self, message: crate::settings::SettingsMsg) -> Task<Message> {
+        use crate::settings::SettingsMsg;
+        let mut tasks = Vec::new();
+        match message {
+            SettingsMsg::Theme(theme) => {
+                let saved = &mut Arc::make_mut(&mut self.config).appearance.ui_theme;
+                saved.clear();
+                saved.push_str(theme.as_str());
+                self.refresh_look();
+                if let Some(note) = self.save_ui() {
+                    tasks.push(self.notify(note));
+                }
+            }
+            SettingsMsg::Accent(accent) => {
+                Arc::make_mut(&mut self.config).appearance.accent = accent;
+                self.refresh_look();
+                if let Some(note) = self.save_ui() {
+                    tasks.push(self.notify(note));
+                }
+            }
+            SettingsMsg::Scheme(name) => {
+                Arc::make_mut(&mut self.config).appearance.color_scheme = name;
+                if let Some(note) = self.apply_scheme() {
+                    tasks.push(self.notify(note));
+                }
+                let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
+                if let Err(err) = fogu_core::config::set_appearance_scheme(
+                    &dir,
+                    &self.config.appearance.color_scheme,
+                ) {
+                    tasks.push(
+                        self.notify(
+                            Notification::new(Level::Error, "Settings not saved")
+                                .detail(err.to_string()),
+                        ),
+                    );
+                }
+            }
+            SettingsMsg::ReloadSchemes => {
+                let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
+                self.schemes = SchemeCatalog::load(&dir);
+                let warnings: Vec<fogu_core::SchemeWarning> = self.schemes.warnings().to_vec();
+                if let Some(note) = self.apply_scheme() {
+                    tasks.push(self.notify(note));
+                }
+                for warning in warnings {
+                    tasks.push(
+                        self.notify(
+                            Notification::new(Level::Warn, "Colour scheme skipped")
+                                .detail(warning.to_string()),
+                        ),
+                    );
+                }
+            }
+        }
+        Task::batch(tasks)
+    }
+
     /// Window title = the active tab's title.
     pub fn title(&self) -> String {
         match self.active_tab().map(Tab::title) {
@@ -305,6 +409,10 @@ impl App {
         task
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive message dispatch; grouping arms hides the message flow"
+    )]
     fn dispatch(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::DismissToast(id) => {
@@ -350,6 +458,15 @@ impl App {
             Message::Prompt(message) => self.on_prompt_msg(message),
             Message::Picker(message) => self.on_picker(message),
             Message::Profiles(message) => self.on_profiles(message),
+            Message::OpenSettings => {
+                self.settings = Some(crate::settings::SettingsPage);
+                Task::none()
+            }
+            Message::CloseSettings => {
+                self.settings = None;
+                Task::none()
+            }
+            Message::Settings(message) => self.on_settings(message),
             Message::Editor(tab, message) => self.on_editor(tab, message),
             Message::Enter => self.on_enter(),
             Message::ConfirmClose(confirmed) => self.on_confirm_close(confirmed),

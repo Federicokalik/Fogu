@@ -141,11 +141,7 @@ pub(crate) struct Look {
 }
 
 impl Look {
-    pub(crate) fn new(
-        colors: &Colors,
-        preset: UiTheme,
-        accent: Option<RgbColor>,
-    ) -> Self {
+    pub(crate) fn new(colors: &Colors, preset: UiTheme, accent: Option<RgbColor>) -> Self {
         let base = to_iced(colors.background());
         let fg = to_iced(colors.foreground());
         let dark = base.r * 0.299 + base.g * 0.587 + base.b * 0.114 < 0.5;
@@ -154,7 +150,7 @@ impl Look {
                 let (r, g, b) = preset.accent_rgb();
                 iced::Color::from_rgb8(r, g, b)
             },
-            to_iced,
+            |c: RgbColor| iced::Color::from_rgb8(c.r, c.g, c.b),
         );
         let bg = match preset {
             UiTheme::Minimal => mix(base, fg, if dark { 0.02 } else { 0.03 }),
@@ -180,7 +176,15 @@ impl Look {
         Self {
             bg,
             fg,
-            dim: mix(fg, base, if preset == UiTheme::Minimal { 0.38 } else { 0.45 }),
+            dim: mix(
+                fg,
+                base,
+                if preset == UiTheme::Minimal {
+                    0.38
+                } else {
+                    0.45
+                },
+            ),
             accent,
             accent_soft: iced::Color {
                 a: if dark { 0.16 } else { 0.12 },

@@ -14,6 +14,7 @@ mod background_menu;
 mod blink;
 mod color_picker;
 mod context_menu;
+mod controls;
 mod design;
 mod drag;
 mod forms;
@@ -42,6 +43,7 @@ mod right_click;
 mod runs;
 mod search;
 mod secret_dialog;
+mod settings;
 mod sftp;
 mod split_container;
 mod subscription;
@@ -52,7 +54,7 @@ mod view;
 
 use std::sync::Arc;
 
-use fogu_core::Config;
+use fogu_core::{Config, SchemeCatalog};
 use fogu_session::SessionRuntime;
 
 // Re-exported so callers of `run()` (the `fogu` binary) don't need their own `iced`
@@ -66,6 +68,8 @@ pub use notifications::{Level, Notification};
 pub struct RunOptions {
     /// Toasts to show at startup (config load errors, validation issues).
     pub notices: Vec<Notification>,
+    /// Built-in plus custom terminal colour schemes for this run.
+    pub schemes: SchemeCatalog,
     /// Exit right after the first presented frame (benchmarks).
     pub exit_after_first_frame: bool,
     /// `--config-dir`: SSH sessions keep their `known_hosts` there (default:

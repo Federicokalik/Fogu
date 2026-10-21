@@ -517,24 +517,7 @@ pub(crate) fn from_hsv(h: f32, s: f32, v: f32) -> RgbColor {
 
 /// Floating panels (menus, the profile picker): raised surface, thin border, soft shadow.
 pub(crate) fn panel_style(look: Look) -> container::Style {
-    container::Style {
-        background: Some(look.bg.into()),
-        text_color: Some(look.fg),
-        border: Border {
-            color: look.border,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        shadow: iced::Shadow {
-            color: Color {
-                a: 0.35,
-                ..Color::BLACK
-            },
-            offset: iced::Vector::new(0.0, 4.0),
-            blur_radius: 12.0,
-        },
-        ..container::Style::default()
-    }
+    crate::controls::floating(look)
 }
 
 /// Stacks `menu` over `base` at its anchor; clicks outside it (any button) close it and never

@@ -1,6 +1,7 @@
-//! The tab bar (stock iced widgets): one header per tab with title, close `×` (hover/active),
-//! colour underline; `+` right after them, pinned at the right edge once they overflow and
-//! scroll horizontally (vertical wheel included).
+//! The tab bar: a custom title bar with pill tabs, quick actions and window controls.
+//!
+//! Tabs scroll horizontally (vertical wheel included), keep a per-tab colour dot, and can be
+//! renamed inline. The bar itself moves the window; the resize edges are layered above.
 
 use fogu_core::Action;
 use iced::widget::scrollable::{Direction, Scrollbar};
@@ -8,9 +9,11 @@ use iced::widget::{
     Id, Row, button, column, container, mouse_area, row, scrollable, space, text, text_input,
     tooltip,
 };
-use iced::{Alignment, Color, Element, Length};
+use iced::{Alignment, Border, Color, Element, Length};
 
 use crate::context_menu::to_iced;
+use crate::controls;
+use crate::design::UiTheme;
 use crate::drag::{DragMsg, Payload};
 use crate::icons::{Icon, icon};
 use crate::lifecycle::{warning_detail, warning_title};
@@ -23,13 +26,11 @@ pub const TAB_W: f32 = 200.0;
 /// A header plus the 1 px between headers (drag targets in the bar).
 pub const TAB_STRIDE: f32 = TAB_W + 1.0;
 /// Height of the bar (it is the window's title bar).
-pub const BAR_H: f32 = 36.0;
 /// macOS: room at the bar's left end for the native window buttons (the title bar is hidden).
 pub const TRAFFIC_LIGHTS_W: f32 = 80.0;
+pub const BAR_H: f32 = 40.0;
 /// Titles longer than this many characters end in `…`.
 const MAX_TITLE_CHARS: usize = 20;
-/// Height of the colour / active underline.
-const UNDERLINE_H: f32 = 2.0;
 const TITLE_SIZE: f32 = 13.0;
 /// Width of the window's resize edges.
 const EDGE: f32 = 5.0;
@@ -86,7 +87,8 @@ fn solid<'a>(color: Color, width: Length, height: f32) -> Element<'a, Message> {
 
 impl<'a> TabBar<'a> {
     fn header(&self, tab: &'a Tab) -> Element<'a, Message> {
-        let (bg, fg) = (self.look.base, self.look.fg);
+        let look = self.look;
+        let (bg, fg) = (look.base, look.fg);
         let active = tab.id == self.active;
         let hovered = self.hovered == Some(tab.id);
         let title: Element<'a, Message> = match self.renaming {
@@ -95,24 +97,24 @@ impl<'a> TabBar<'a> {
                 .on_input(Message::RenameInput)
                 .on_submit(Message::CommitRename)
                 .size(TITLE_SIZE)
-                .padding(2)
+                .padding([2, 4])
+                .style(move |_theme, status| controls::field(look, status))
                 .into(),
             _ => text(truncate(tab.title()))
                 .size(TITLE_SIZE)
-                .color(if active { fg } else { mix(fg, bg, 0.4) })
+                .color(if active { fg } else { mix(fg, bg, 0.38) })
                 .wrapping(text::Wrapping::None)
                 .width(Length::Fill)
                 .into(),
         };
         let close: Element<'a, Message> = if active || hovered {
-            let look = self.look;
-            button(icon(Icon::Close, 10.0, fg))
+            button(icon(Icon::Close, 9.0, if hovered { fg } else { look.dim }))
                 .width(20)
                 .height(20)
                 .padding(0)
                 .style(move |_theme: &iced::Theme, status| {
-                    let mut style = hover_style(look, status, false);
-                    style.border = iced::Border::default().rounded(3);
+                    let mut style = controls::flat_button(look, status, false);
+                    style.border = Border::default().rounded(10);
                     style
                 })
                 .on_press(Message::CloseTab(tab.id))
@@ -120,34 +122,63 @@ impl<'a> TabBar<'a> {
         } else {
             space().width(20).into()
         };
-        let title = match warning_badge(tab) {
-            Some(badge) => row![badge, title]
-                .spacing(6)
-                .align_y(Alignment::Center)
-                .into(),
-            None => title,
+        let dot_color = tab.color.map_or_else(
+            || {
+                if active {
+                    look.accent
+                } else {
+                    mix(fg, bg, 0.7)
+                }
+            },
+            to_iced,
+        );
+        let dot_radius = match look.preset {
+            UiTheme::Retro => 0.0,
+            UiTheme::Minimal => 1.0,
+            UiTheme::Fogu | UiTheme::Fluent => 3.0,
         };
-        let underline = match tab.color {
-            Some(color) => to_iced(color),
-            None if active => self.look.accent,
-            None => Color::TRANSPARENT,
+        let dot = container(space().width(6).height(6)).style(move |_theme: &iced::Theme| {
+            container::Style {
+                background: Some(dot_color.into()),
+                border: Border::default().rounded(dot_radius),
+                ..container::Style::default()
+            }
+        });
+        let warning = warning_badge(tab);
+        let mut line = row![dot].spacing(8).align_y(Alignment::Center);
+        if let Some(badge) = warning {
+            line = line.push(badge);
+        }
+        line = line.push(title).push(close);
+        let surface = if active && look.preset == UiTheme::Retro {
+            mix(look.raised, look.accent, 0.16)
+        } else if active {
+            mix(look.raised, fg, 0.09)
+        } else if hovered {
+            mix(look.raised, fg, 0.05)
+        } else {
+            Color::TRANSPARENT
         };
-        let header_bg = match (active, hovered) {
-            (true, _) => bg,
-            (false, true) => mix(self.look.raised, fg, 0.08),
-            (false, false) => self.look.raised,
+        let border = if active {
+            mix(look.raised, look.accent, 0.55)
+        } else {
+            Color::TRANSPARENT
         };
-        let content = column![
-            container(row![title, close].spacing(6).align_y(Alignment::Center))
-                .padding([0, 12])
-                .height(BAR_H - UNDERLINE_H)
-                .align_y(Alignment::Center)
-                .width(Length::Fill),
-            solid(underline, Length::Fill, UNDERLINE_H),
-        ];
-        let body = container(content)
-            .width(TAB_W)
-            .style(move |_theme: &iced::Theme| container::background(header_bg));
+        let content = container(line)
+            .padding([0.0, look.gutter])
+            .height(BAR_H - 8.0)
+            .width(Length::Fill)
+            .align_y(Alignment::Center)
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(surface.into()),
+                border: Border {
+                    color: border,
+                    width: 1.0,
+                    radius: look.radius_small.into(),
+                },
+                ..container::Style::default()
+            });
+        let body = container(content).padding([4, 4]).width(TAB_W);
         mouse_area(body)
             .on_press(Message::Drag(DragMsg::Start(Payload::Tab(tab.id))))
             .on_middle_press(Message::CloseTab(tab.id))
@@ -158,16 +189,20 @@ impl<'a> TabBar<'a> {
             .into()
     }
 
-    /// The bar: scrollable headers with `+` / `▾` after them (their empty rest moves the
+    /// The bar: scrollable headers with `+` / `⌄` after them (their empty rest moves the
     /// window), the panel toggles, then the window buttons.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one title bar layout; tabs, actions and window buttons share its row"
+    )]
     pub fn view(self) -> Element<'a, Message> {
         let look = self.look;
-        let plus = icon_button(Icon::Plus, 36.0, look, Message::Action(Action::NewTab));
+        let plus = icon_button(Icon::Plus, 28.0, look, Message::Action(Action::NewTab));
         // Right-click on `+` or the chevron next to it: the profile picker.
         let plus = mouse_area(plus).on_right_press(Message::Action(Action::OpenProfilePicker));
         let picker = icon_button(
             Icon::ChevronDown,
-            28.0,
+            24.0,
             look,
             Message::Action(Action::OpenProfilePicker),
         );
@@ -183,15 +218,11 @@ impl<'a> TabBar<'a> {
         let strip = container(strip)
             .width(Length::FillPortion(1000))
             .max_width(crate::metrics::cells_f32(self.tabs.len()) * TAB_STRIDE);
-        let tabs = row![
-            space().width(self.inset),
-            strip,
-            plus,
-            picker,
-            space().width(Length::FillPortion(1))
-        ]
-        .align_y(Alignment::Center)
-        .width(Length::Fill);
+        let add =
+            container(row![plus, picker].spacing(0).align_y(Alignment::Center)).padding([6, 2]);
+        let tabs = row![space().width(self.inset), strip, add, space().width(Length::FillPortion(1))]
+            .align_y(Alignment::Center)
+            .width(Length::Fill);
         // The bar's empty part (tab headers and buttons take their own presses first).
         let tabs = mouse_area(tabs)
             .on_press(Message::Window(WindowCmd::Press))
@@ -202,10 +233,16 @@ impl<'a> TabBar<'a> {
         let toggle = |glyph: Icon, on: bool, tip: String, message| {
             let color = if on { look.accent } else { look.fg };
             let button = button(icon(glyph, 16.0, color))
-                .width(36)
-                .height(BAR_H)
+                .width(32)
+                .height(28)
                 .padding(0)
-                .style(move |_theme: &iced::Theme, status| hover_style(look, status, false))
+                .style(move |_theme: &iced::Theme, status| {
+                    let mut style = controls::flat_button(look, status, false);
+                    if on {
+                        style.background = Some(look.accent_soft.into());
+                    }
+                    style
+                })
                 .on_press(message);
             let tip = container(text(tip).size(12))
                 .padding(4)
@@ -229,59 +266,50 @@ impl<'a> TabBar<'a> {
                 Message::Action(Action::ToggleSftp),
             ));
         }
-        bar_row = bar_row.push(toggle(
-            Icon::Sidebar,
-            self.profiles,
-            "Profiles (toggle-profiles)".to_owned(),
-            Message::Action(Action::ToggleProfiles),
-        ));
+        bar_row = bar_row
+            .push(toggle(
+                Icon::Sidebar,
+                self.profiles,
+                "Profiles (toggle-profiles)".to_owned(),
+                Message::Action(Action::ToggleProfiles),
+            ))
+            .push(toggle(
+                Icon::Settings,
+                false,
+                "Settings".to_owned(),
+                Message::OpenSettings,
+            ));
         // macOS: the native title bar has the window buttons.
         if !cfg!(target_os = "macos") {
             bar_row = bar_row
-                .push(space().width(8))
-                .push(solid(look.border, Length::Fixed(1.0), 18.0))
-                .push(space().width(8))
-                .push(window_button(
-                    Icon::Minimize,
-                    look,
-                    false,
-                    Message::Window(WindowCmd::Minimize),
-                ))
-                .push(window_button(
-                    Icon::Maximize,
-                    look,
-                    false,
-                    Message::Window(WindowCmd::ToggleMaximize),
-                ))
-                .push(window_button(
-                    Icon::Close,
-                    look,
-                    true,
-                    Message::CloseRequested,
-                ));
+            .push(space().width(6))
+            .push(solid(look.border, Length::Fixed(1.0), 20.0))
+            .push(space().width(2))
+            .push(window_button(
+                Icon::Minimize,
+                look,
+                false,
+                Message::Window(WindowCmd::Minimize),
+            ))
+            .push(window_button(
+                Icon::Maximize,
+                look,
+                false,
+                Message::Window(WindowCmd::ToggleMaximize),
+            ))
+            .push(window_button(
+                Icon::Close,
+                look,
+                true,
+                Message::CloseRequested,
+            ));
         }
         let bar = container(bar_row)
             .width(Length::Fill)
             .height(BAR_H)
             .style(move |_theme: &iced::Theme| container::background(look.raised));
-        mouse_area(bar).on_move(Message::TabBarCursor).into()
-    }
-}
-
-/// Flat chrome button colours: `hover` on hover, `danger` (white text) for the close button.
-pub(crate) fn hover_style(look: Look, status: button::Status, danger: bool) -> button::Style {
-    let (background, text_color) = match status {
-        button::Status::Hovered | button::Status::Pressed if danger => {
-            (Some(look.danger), Color::WHITE)
-        }
-        button::Status::Hovered => (Some(look.hover), look.fg),
-        button::Status::Pressed => (Some(Color { a: 0.18, ..look.fg }), look.fg),
-        _ => (None, look.fg),
-    };
-    button::Style {
-        background: background.map(Into::into),
-        text_color,
-        ..button::Style::default()
+        let bar = mouse_area(bar).on_move(Message::TabBarCursor);
+        column![bar, solid(look.border, Length::Fill, 1.0)].into()
     }
 }
 
@@ -289,9 +317,9 @@ pub(crate) fn hover_style(look: Look, status: button::Status, danger: bool) -> b
 fn icon_button<'a>(glyph: Icon, width: f32, look: Look, message: Message) -> Element<'a, Message> {
     button(icon(glyph, 16.0, look.fg))
         .width(width)
-        .height(BAR_H)
+        .height(28)
         .padding(0)
-        .style(move |_theme: &iced::Theme, status| hover_style(look, status, false))
+        .style(move |_theme: &iced::Theme, status| controls::flat_button(look, status, false))
         .on_press(message)
         .into()
 }
@@ -303,11 +331,15 @@ fn window_button<'a>(
     danger: bool,
     message: Message,
 ) -> Element<'a, Message> {
-    button(icon(glyph, 16.0, look.fg))
-        .width(46)
+    button(icon(glyph, 15.0, look.fg))
+        .width(44)
         .height(BAR_H)
         .padding(0)
-        .style(move |_theme: &iced::Theme, status| hover_style(look, status, danger))
+        .style(move |_theme: &iced::Theme, status| {
+            let mut style = controls::flat_button(look, status, danger);
+            style.border = Border::default().rounded(0);
+            style
+        })
         .on_press(message)
         .into()
 }
@@ -385,7 +417,7 @@ mod tests {
         assert_eq!(cut.chars().count(), MAX_TITLE_CHARS);
         assert!(cut.ends_with('…'));
         assert_eq!(
-            truncate(&"é".repeat(MAX_TITLE_CHARS)).chars().count(),
+            truncate(&"Ǹ".repeat(MAX_TITLE_CHARS)).chars().count(),
             MAX_TITLE_CHARS
         );
     }

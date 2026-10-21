@@ -198,6 +198,12 @@ pub enum Message {
     Picker(PickerMsg),
     /// The profile manager sidebar.
     Profiles(ProfilesMsg),
+    /// Open the settings page.
+    OpenSettings,
+    /// Close the settings page.
+    CloseSettings,
+    /// A choice inside the settings page.
+    Settings(crate::settings::SettingsMsg),
     /// The profile editor of tab `.0`.
     Editor(TabId, EditorMsg),
     /// The "close live SSH session?" modal: `true` = close, `false` = keep it.

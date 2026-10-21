@@ -153,6 +153,48 @@ user = "me"
 
 Hosts from `~/.ssh/config` appear in the sidebar automatically.
 
+### Custom terminal colour schemes
+
+Put a TOML file in `themes/` under the Fogu config directory, then select it by its `name`:
+
+- Linux: `~/.config/fogu/themes/my-theme.toml`
+- Windows: `%APPDATA%\fogu\themes\my-theme.toml`
+- With `--config-dir`: `<dir>/themes/my-theme.toml`
+
+```toml
+name = "Midnight Ocean"
+extends = "Fogu Dark"
+
+bg = "#0b1020"
+fg = "#d8dee9"
+cursor = "#88c0d0"
+```
+
+`extends` must name one of the built-in schemes (`Fogu Dark`, `Fogu Light`, `Solarized Dark`,
+`Dracula`); every colour you omit is inherited. A file without `extends` must provide all fields:
+
+```toml
+name = "Midnight Ocean"
+fg = "#d8dee9"
+bg = "#0b1020"
+cursor = "#88c0d0"
+cursor_text = "#0b1020"
+selection_bg = "#2e3440"
+selection_fg = "#eceff4"
+ansi = [
+  "#0b1020", "#ff6b6b", "#a3be8c", "#ebcb8b",
+  "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
+  "#4c566a", "#ff8787", "#b9d99a", "#f0d9a0",
+  "#9bb8d3", "#c9a6d6", "#a3d8e8", "#ffffff",
+]
+```
+
+Files are loaded at startup, sorted by file name. Invalid files are skipped with a warning.
+Custom schemes cannot reuse a built-in name; the first custom file claiming a name wins.
+
+You can also select a palette and press **Reload themes** in Settings → Appearance, without
+restarting. If you edit the TOML on disk, press Reload themes to pick up the changes.
+
 ### Default keys
 
 | Action | Linux | macOS |

@@ -355,3 +355,39 @@ fn unique_profile_name_skips_taken_names_ignoring_case() {
         "prod-2"
     );
 }
+
+#[test]
+fn appearance_ui_is_saved_and_accent_can_be_cleared() {
+    use crate::scheme::RgbColor;
+
+    let t = tmp(Some(FIXTURE));
+    set_appearance_ui(&t.0, "retro", Some(RgbColor::from_hex(0x12_3456))).unwrap();
+    let text = read(&t);
+    assert!(text.contains("# my config"), "{text}");
+    let (config, err) = load(&t.0);
+    assert!(err.is_none());
+    assert_eq!(config.appearance.ui_theme, "retro");
+    assert_eq!(
+        config.appearance.accent,
+        Some(RgbColor::from_hex(0x12_3456))
+    );
+
+    set_appearance_ui(&t.0, "fluent", None).unwrap();
+    let (config, err) = load(&t.0);
+    assert!(err.is_none());
+    assert_eq!(config.appearance.ui_theme, "fluent");
+    assert_eq!(config.appearance.accent, None);
+}
+
+#[test]
+fn appearance_scheme_is_saved_without_touching_the_rest() {
+    let t = tmp(Some(FIXTURE));
+    set_appearance_scheme(&t.0, "Midnight Ocean").unwrap();
+    let text = read(&t);
+    assert!(text.contains("# my config"), "{text}");
+    assert!(text.contains("# --- work ---"), "{text}");
+    let (config, err) = load(&t.0);
+    assert!(err.is_none());
+    assert_eq!(config.appearance.color_scheme, "Midnight Ocean");
+    assert_eq!(config.appearance.ui_theme, "fogu");
+}

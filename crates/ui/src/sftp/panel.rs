@@ -12,8 +12,9 @@ use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
 
 use super::breadcrumb::segments;
 use super::{PanelMsg, SftpMsg, SftpPanelState};
+use crate::controls;
+use crate::icons::{Icon, icon};
 use crate::message::Message;
-use crate::palette::Colors;
 use crate::tab::TabId;
 
 /// Height of one list row (keyboard scrolling uses it too).
@@ -73,7 +74,7 @@ pub(crate) fn flat<'a>(
                     button::Status::Disabled => Color { a: 0.35, ..fg },
                     _ => fg,
                 },
-                border: Border::default().rounded(3),
+                border: Border::default().rounded(look.radius_small),
                 ..button::Style::default()
             }
         })
@@ -89,58 +90,84 @@ pub(super) fn label<'a>(value: impl text::IntoFragment<'a>, color: Color) -> tex
 }
 
 /// The whole panel of tab `tab`.
-pub fn view<'a>(tab: TabId, panel: &'a SftpPanelState, colors: &Colors) -> Element<'a, Message> {
-    let look = Look::new(colors, crate::design::UiTheme::Fogu, None);
+#[expect(
+    clippy::too_many_lines,
+    reason = "one SFTP panel layout; splitting it would duplicate the shared toolbar and list"
+)]
+pub fn view<'a>(tab: TabId, panel: &'a SftpPanelState, look: Look) -> Element<'a, Message> {
     let has_path = panel.path.is_some();
-    let nav = |label: &str, tip: &'a str, m: PanelMsg, enabled: bool| {
+    let nav = |glyph: Icon, tip: &'a str, m: PanelMsg, enabled: bool| {
+        let color = if enabled { look.fg } else { look.dim };
         tooltip(
-            flat(label.to_owned(), look, enabled.then(|| msg(tab, m))),
+            button(icon(glyph, 13.0, color))
+                .width(24)
+                .height(24)
+                .padding(0)
+                .style(move |_theme: &Theme, status| controls::flat_button(look, status, false))
+                .on_press_maybe(enabled.then(|| msg(tab, m))),
             container(text(tip).size(12))
                 .padding(4)
                 .style(container::rounded_box),
             tooltip::Position::Bottom,
         )
     };
+    let dot =
+        container(Space::new().width(6).height(6)).style(move |_theme: &Theme| container::Style {
+            background: Some(look.accent.into()),
+            border: Border::default().rounded(3),
+            ..container::Style::default()
+        });
     let header = row![
+        dot,
         label("SFTP", look.fg).font(Font {
-            weight: iced::font::Weight::Bold,
+            weight: iced::font::Weight::Medium,
             ..Font::DEFAULT
         }),
         Space::new().width(Length::Fill),
         follow_controls(tab, panel, look),
-        nav(
+        flat(
             "cd here",
-            "Type cd to this folder into the terminal",
-            PanelMsg::CdHere,
-            has_path
+            look,
+            has_path.then(|| msg(tab, PanelMsg::CdHere))
         ),
-        flat("×", look, Some(msg(tab, PanelMsg::Close))),
+        button(icon(Icon::Close, 12.0, look.dim))
+            .width(24)
+            .height(24)
+            .padding(0)
+            .style(move |_theme: &Theme, status| controls::flat_button(look, status, false))
+            .on_press(msg(tab, PanelMsg::Close)),
     ]
-    .spacing(4)
+    .spacing(5)
     .align_y(Alignment::Center);
     let toolbar = row![
-        nav("←", "Back", PanelMsg::Back, !panel.back.is_empty()),
-        nav("↑", "Up", PanelMsg::Up, has_path),
-        nav("⌂", "Home", PanelMsg::Home, true),
-        nav("⟳", "Refresh", PanelMsg::Refresh, true),
+        nav(
+            Icon::ArrowLeft,
+            "Back",
+            PanelMsg::Back,
+            !panel.back.is_empty()
+        ),
+        nav(Icon::ArrowUp, "Up", PanelMsg::Up, has_path),
+        nav(Icon::Home, "Home", PanelMsg::Home, true),
+        nav(Icon::Refresh, "Refresh", PanelMsg::Refresh, true),
         text_input("Filter", &panel.listing.filter)
             .id(Id::new(FILTER_INPUT))
             .on_input(move |f| msg(tab, PanelMsg::Filter(f)))
             .size(SIZE)
-            .padding(3)
-            .width(Length::Fill),
+            .padding([3, 7])
+            .width(Length::Fill)
+            .style(move |_theme: &Theme, status| controls::field(look, status)),
         checkbox(panel.listing.show_hidden)
             .label("hidden")
-            .text_size(SIZE)
+            .text_size(11)
             .size(14)
             .style(move |theme: &Theme, status| {
                 let mut style = checkbox::primary(theme, status);
-                style.text_color = Some(look.fg);
+                style.text_color = Some(look.dim);
                 style
             })
             .on_toggle(move |on| msg(tab, PanelMsg::ShowHidden(on))),
     ]
-    .spacing(4)
+    .spacing(3)
     .align_y(Alignment::Center);
     let actions = row![
         flat(
@@ -171,16 +198,20 @@ pub fn view<'a>(tab: TabId, panel: &'a SftpPanelState, colors: &Colors) -> Eleme
         super::list_view::column_headers(tab, panel, look),
         super::list_view::entries(tab, panel, look),
     ]
-    .spacing(4);
+    .spacing(7);
     if !panel.transfers.items.is_empty() {
         body = body.push(super::transfer_view::transfers(tab, panel, look));
     }
-    let bg = look.bg;
-    let content = container(body)
+    let card = container(body)
+        .padding([look.gutter, look.gutter])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_theme: &Theme| controls::panel(look));
+    let content = container(card)
         .padding(6)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(move |_theme: &Theme| container::background(bg));
+        .style(move |_theme: &Theme| container::background(look.base));
     mouse_area(content)
         .on_enter(msg(tab, PanelMsg::Hover(true)))
         .on_exit(msg(tab, PanelMsg::Hover(false)))
@@ -275,10 +306,11 @@ fn breadcrumb(tab: TabId, panel: &SftpPanelState, look: Look) -> Element<'_, Mes
     .width(Length::Fill)
     .padding([1, 2])
     .style(move |_theme: &Theme| container::Style {
+        background: Some(crate::palette::mix(look.panel, look.base, 0.55).into()),
         border: Border {
-            color: Color { a: 0.4, ..dim },
+            color: Color { a: 0.55, ..dim },
             width: 1.0,
-            radius: 3.0.into(),
+            radius: look.radius_small.into(),
         },
         ..container::Style::default()
     });

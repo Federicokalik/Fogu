@@ -35,7 +35,7 @@ pub use profile::{
     strip_defaults,
 };
 pub use quick_connect::{QuickConnect, QuickConnectError};
-pub use scheme::{ColorScheme, RgbColor};
+pub use scheme::{ColorScheme, RgbColor, SchemeCatalog, SchemeWarning, THEMES_DIR};
 pub use secret_key::SecretKey;
 pub use size::Size;
 pub use split::{Divider, Node, NodePath, Orientation, Rect, Side, SplitTree};

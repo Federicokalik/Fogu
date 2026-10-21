@@ -9,7 +9,7 @@ use iced::widget::{
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
 
 use super::listing::{self, SortKey, kind_icon, shown_name};
-use super::panel::{LIST_ID, Look, ROW_H, SIZE, flat, label, msg, px_rows, rows_px};
+use super::panel::{LIST_ID, Look, ROW_H, SIZE, label, msg, px_rows, rows_px};
 use super::{PanelMsg, SftpPanelState};
 use crate::message::Message;
 use crate::tab::TabId;
@@ -32,15 +32,24 @@ pub(super) fn column_headers<'a>(
     let l = &panel.listing;
     let head = |name: &str, key: SortKey| {
         let arrow = match (l.sort == key, l.descending) {
-            (true, false) => " ▲",
-            (true, true) => " ▼",
+            (true, false) => " ↑",
+            (true, true) => " ↓",
             (false, _) => "",
         };
-        flat(
-            format!("{name}{arrow}"),
-            look,
-            Some(msg(tab, PanelMsg::Sort(key))),
+        let color = if l.sort == key { look.fg } else { look.dim };
+        iced::widget::button(
+            text(format!("{}{arrow}", name.to_uppercase()))
+                .size(10)
+                .color(color)
+                .wrapping(text::Wrapping::None),
         )
+        .padding([3, 2])
+        .style(move |_theme: &Theme, status| {
+            let mut style = crate::controls::flat_button(look, status, false);
+            style.text_color = color;
+            style
+        })
+        .on_press(msg(tab, PanelMsg::Sort(key)))
     };
     row![
         container(head("Name", SortKey::Name)).width(Length::Fill),
@@ -59,7 +68,7 @@ pub(super) fn entries(tab: TabId, panel: &SftpPanelState, look: Look) -> Element
         Some(edit) => {
             let field = row![
                 label("\u{25aa}", look.dim).width(16),
-                name_field(tab, &edit.value, "New folder name, Enter to create"),
+                name_field(tab, &edit.value, "New folder name, Enter to create", look),
             ]
             .spacing(4)
             .align_y(Alignment::Center);
@@ -72,7 +81,7 @@ pub(super) fn entries(tab: TabId, panel: &SftpPanelState, look: Look) -> Element
 }
 
 /// The inline name field (Enter submits, Esc cancels).
-fn name_field<'a>(tab: TabId, value: &str, placeholder: &str) -> Element<'a, Message> {
+fn name_field<'a>(tab: TabId, value: &str, placeholder: &str, look: Look) -> Element<'a, Message> {
     text_input(placeholder, value)
         .id(Id::new(EDIT_INPUT))
         .on_input(move |v| msg(tab, PanelMsg::NameInput(v)))
@@ -80,6 +89,7 @@ fn name_field<'a>(tab: TabId, value: &str, placeholder: &str) -> Element<'a, Mes
         .size(SIZE)
         .padding([1, 3])
         .width(Length::Fill)
+        .style(move |_theme: &Theme, status| crate::controls::field(look, status))
         .into()
 }
 
@@ -170,7 +180,7 @@ fn entry_row<'a>(
         .as_ref()
         .filter(|e| e.old.as_deref() == Some(entry.name.as_str()));
     let name = match renaming {
-        Some(edit) => name_field(tab, &edit.value, "New name, Enter to rename"),
+        Some(edit) => name_field(tab, &edit.value, "New name, Enter to rename", look),
         None => name_cell(entry, name_color),
     };
     let cells = row![
@@ -192,15 +202,15 @@ fn entry_row<'a>(
         .padding([0, 4])
         .align_y(Alignment::Center)
         .style(move |_theme: &Theme| container::Style {
-            background: selected.then_some(Background::Color(Color { a: 0.28, ..accent })),
+            background: selected.then_some(Background::Color(Color { a: 0.16, ..accent })),
             border: Border {
                 color: if cursor {
-                    Color { a: 0.5, ..fg }
+                    Color { a: 0.45, ..fg }
                 } else {
                     Color::TRANSPARENT
                 },
                 width: 1.0,
-                radius: 2.0.into(),
+                radius: look.radius_small.into(),
             },
             ..container::Style::default()
         });

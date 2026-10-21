@@ -10,11 +10,12 @@ pub mod ssh_opts;
 mod validate;
 
 pub use edit::{
-    ProfileEdit, edit_profiles, slug, unique_group_id, unique_profile_id, unique_profile_name,
+    ProfileEdit, edit_profiles, set_appearance_scheme, set_appearance_ui, slug, unique_group_id,
+    unique_profile_id, unique_profile_name,
 };
 pub use io::{ConfigError, config_dir, load, set_profile_background};
 pub use sftp::SftpCfg;
-pub use validate::{ConfigIssue, validate};
+pub use validate::{ConfigIssue, validate, validate_with_catalog};
 
 use serde::{Deserialize, Serialize};
 

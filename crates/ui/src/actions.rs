@@ -217,6 +217,10 @@ impl App {
     }
 
     /// Handles a keymap / menu action.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive action dispatch; splitting obscures which action does what"
+    )]
     pub(crate) fn on_action(&mut self, action: Action) -> Task<Message> {
         self.menu = None;
         match action {
@@ -259,12 +263,21 @@ impl App {
             Action::ScrollBottom => return self.update(Message::Scroll(Scroll::Bottom)),
             Action::ToggleFullscreen => {
                 self.fullscreen = !self.fullscreen;
-                let mode = if self.fullscreen {
-                    window::Mode::Fullscreen
-                } else {
-                    window::Mode::Windowed
-                };
-                return window::oldest().and_then(move |id| window::set_mode(id, mode));
+                // winit's exclusive fullscreen leaves a custom-decorated window blank on some
+                // Windows drivers; borderless maximize keeps the chrome usable and reversible.
+                #[cfg(target_os = "windows")]
+                {
+                    return window::oldest().and_then(window::toggle_maximize);
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let mode = if self.fullscreen {
+                        window::Mode::Fullscreen
+                    } else {
+                        window::Mode::Windowed
+                    };
+                    return window::oldest().and_then(move |id| window::set_mode(id, mode));
+                }
             }
             Action::SplitRight => return self.split_focused(Side::Right),
             Action::SplitDown => return self.split_focused(Side::Bottom),

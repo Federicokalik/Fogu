@@ -8,7 +8,7 @@ use super::Config;
 use crate::action::Action;
 use crate::keychord::KeyChord;
 use crate::profile::{Profile, ProfileId, ProfileKind};
-use crate::scheme::ColorScheme;
+use crate::scheme::SchemeCatalog;
 
 /// One semantic problem found by [`validate`]. Syntax errors never reach this point (they fail
 /// at [`load`](super::load) time instead).
@@ -66,7 +66,7 @@ pub enum ConfigIssue {
         /// The group id it references.
         group: String,
     },
-    /// `appearance.color_scheme` does not match a built-in scheme.
+    /// `appearance.color_scheme` does not match any built-in or custom scheme.
     #[error("unknown colour scheme {0:?}")]
     UnknownColorScheme(String),
     /// The same chord is bound to more than one action.
@@ -103,6 +103,12 @@ impl ConfigIssue {
 /// found (never panics, never fails to load the config).
 #[must_use]
 pub fn validate(config: &Config) -> Vec<ConfigIssue> {
+    validate_with_catalog(config, &SchemeCatalog::builtins())
+}
+
+/// [`validate`] against the schemes actually available to this run, including custom themes.
+#[must_use]
+pub fn validate_with_catalog(config: &Config, schemes: &SchemeCatalog) -> Vec<ConfigIssue> {
     let mut issues = Vec::new();
 
     let mut seen_ids = HashSet::new();
@@ -158,7 +164,7 @@ pub fn validate(config: &Config) -> Vec<ConfigIssue> {
         }
     }
 
-    if ColorScheme::by_name(&config.appearance.color_scheme).is_none() {
+    if schemes.by_name(&config.appearance.color_scheme).is_none() {
         issues.push(ConfigIssue::UnknownColorScheme(
             config.appearance.color_scheme.clone(),
         ));

@@ -11,8 +11,10 @@ use iced::{Alignment, Color, Element, Length, mouse};
 
 use super::handlers::{Launch, ProfilesMsg};
 use super::{Line, ProfilesView, QUICK_INPUT, SEARCH_INPUT, entries, lines, now_secs, rows};
+use crate::controls;
 use crate::drag::{DragMsg, Payload};
 use crate::fuzzy_list::{self, RowEvents, RowLook};
+use crate::icons::{Icon, fixed, icon};
 use crate::message::Message;
 use crate::palette::Look;
 
@@ -35,11 +37,15 @@ pub(crate) fn with_sidebar<'a>(
         return body;
     }
     let edge = look.border;
+    let line = container(space())
+        .width(1)
+        .height(Length::Fill)
+        .style(move |_theme: &iced::Theme| container::background(edge));
     let handle = mouse_area(
-        container(space())
+        container(line)
             .width(HANDLE_W)
             .height(Length::Fill)
-            .style(move |_theme: &iced::Theme| container::background(edge)),
+            .align_x(Alignment::Center),
     )
     .interaction(mouse::Interaction::ResizingHorizontally)
     .on_press(msg(ProfilesMsg::ResizeStart));
@@ -53,23 +59,40 @@ pub(crate) fn with_sidebar<'a>(
         .into()
 }
 
-/// "Profiles", then "+" (New ▸) and "×" (close the sidebar).
+/// "PROFILES", then "+" (New ▸) and "×" (close the sidebar).
 fn title_row<'a>(look: Look) -> Element<'a, Message> {
-    let icon = |label: &str, on_press: Message| {
-        button(text(label.to_owned()).size(14).color(look.fg))
-            .padding([0, 6])
-            .style(button::text)
+    let action = |glyph: Icon, on_press: Message| {
+        button(icon(glyph, 14.0, look.fg))
+            .width(26)
+            .height(24)
+            .padding(0)
+            .style(move |_theme: &iced::Theme, status| controls::flat_button(look, status, false))
             .on_press(on_press)
     };
+    let dot =
+        container(space().width(6).height(6)).style(move |_theme: &iced::Theme| container::Style {
+            background: Some(look.accent.into()),
+            border: iced::Border::default().rounded(3),
+            ..container::Style::default()
+        });
     row![
-        text("Profiles").size(14).color(look.fg).width(Length::Fill),
-        icon("+", msg(ProfilesMsg::NewMenu)),
-        icon("×", Message::Action(Action::ToggleProfiles)),
+        dot,
+        text("PROFILES")
+            .size(11)
+            .color(look.dim)
+            .width(Length::Fill),
+        action(Icon::Plus, msg(ProfilesMsg::NewMenu)),
+        action(Icon::Close, Message::Action(Action::ToggleProfiles)),
     ]
+    .spacing(6)
     .align_y(Alignment::Center)
     .into()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sidebar layout; its sections share the same scroll and spacing state"
+)]
 fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'a, Message> {
     let all = entries(
         config,
@@ -83,7 +106,7 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
         fg: look.fg,
         dim: look.dim,
         selected: Color {
-            a: 0.35,
+            a: 0.18,
             ..look.accent
         },
     };
@@ -97,15 +120,30 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
                 count,
                 collapsed,
             } => {
-                let arrow = if collapsed { "▸" } else { "▾" };
+                let arrow = if collapsed {
+                    Icon::ChevronRight
+                } else {
+                    Icon::ChevronDown
+                };
                 let header = button(
-                    text(format!("{arrow} {label} ({count})"))
-                        .size(12)
-                        .color(look.dim),
+                    row![
+                        fixed(arrow, 11.0, look.dim),
+                        text(label.to_uppercase()).size(10).color(look.dim),
+                        text(format!("{count}")).size(10).color(look.dim),
+                        space().width(Length::Fill),
+                    ]
+                    .spacing(5)
+                    .align_y(Alignment::Center),
                 )
                 .width(Length::Fill)
-                .padding([4, 4])
-                .style(button::text)
+                .padding([5, 2])
+                .style(move |_theme: &iced::Theme, status| {
+                    let mut style = button::Style::default();
+                    if matches!(status, button::Status::Hovered) {
+                        style.text_color = look.fg;
+                    }
+                    style
+                })
                 .on_press(msg(ProfilesMsg::Toggle(section)));
                 list = list.push(header);
             }
@@ -137,19 +175,27 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
         list = list.push(text("No matching profile").size(12).color(look.dim));
     }
     let title = title_row(look);
-    let search = text_input("Search profiles", &view.query)
-        .id(Id::new(SEARCH_INPUT))
-        .on_input(|q| msg(ProfilesMsg::Query(q)))
-        .on_submit(msg(ProfilesMsg::Submit))
-        .size(13)
-        .padding(5);
+    let search = row![
+        fixed(Icon::Search, 13.0, look.dim),
+        text_input("Search profiles", &view.query)
+            .id(Id::new(SEARCH_INPUT))
+            .on_input(|q| msg(ProfilesMsg::Query(q)))
+            .on_submit(msg(ProfilesMsg::Submit))
+            .size(13)
+            .padding([5, 8])
+            .width(Length::Fill)
+            .style(move |_theme: &iced::Theme, status| controls::field(look, status)),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
     let quick = text_input("Quick connect: user@host:port", &view.quick)
         .id(Id::new(QUICK_INPUT))
         .on_input(|q| msg(ProfilesMsg::Quick(q)))
         .on_submit(msg(ProfilesMsg::QuickSubmit))
         .size(13)
-        .padding(5);
-    let mut top = column![title, search, quick].spacing(6);
+        .padding([5, 8])
+        .style(move |_theme: &iced::Theme, status| controls::field(look, status));
+    let mut top = column![title, search, quick].spacing(7);
     if let Some(err) = &view.quick_error {
         top = top.push(text(err.clone()).size(11).color(look.danger));
     }
@@ -157,8 +203,8 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
     let list = scrollable(list)
         .direction(Direction::Vertical(scroller))
         .height(Length::Fill);
-    let body = column![top, list].spacing(8).padding(8);
-    let bg = look.bg;
+    let body = column![top, list].spacing(10).padding(look.gutter);
+    let bg = look.panel;
     let panel = container(body)
         .width(view.width)
         .height(Length::Fill)

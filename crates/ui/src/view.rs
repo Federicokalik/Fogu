@@ -34,10 +34,11 @@ impl App {
         if let Some(editor) = &tab.editor {
             let look = self.look;
             let page = crate::profile_editor::page(tab.id, editor, &self.config, look);
-            return self.chrome(page, None, None);
+            return self.chrome(page, None, None, None);
         }
         let search = self.search_in(tab);
-        let typing_elsewhere = self.renaming.is_some()
+        let typing_elsewhere = self.settings.is_some()
+            || self.renaming.is_some()
             || search.is_some()
             || self.menu.is_some()
             || self.picker.is_some()
@@ -114,18 +115,27 @@ impl App {
         if let Some(color) = border {
             split = split.border(tab.focused, color);
         }
-        if let Some(panel) = sftp_panel {
-            split = split.side(sftp::panel::view(tab.id, panel, &self.colors), panel.width);
-        }
         let sftp = tab
             .panes
             .values()
             .any(|p| p.sftp.is_some())
             .then_some(sftp_panel.is_some());
+        // SFTP opens as a large modal over the workspace; it can become a dock later.
+        let look = self.look;
+        let sftp_modal = sftp_panel.map(|panel| {
+            let width = (self.window_size.width * 0.88).clamp(640.0, 1180.0);
+            let height = (self.window_size.height * 0.84).clamp(420.0, 860.0);
+            container(sftp::panel::view(tab.id, panel, look))
+                .width(width)
+                .height(height)
+                .style(move |_theme: &iced::Theme| crate::controls::floating(look))
+                .into()
+        });
         let dialog = sftp_panel.and_then(|p| sftp::dialog(tab.id, p));
         self.chrome(
             crate::search::over(split.into(), search, self.look),
             sftp,
+            sftp_modal,
             dialog,
         )
     }
@@ -145,6 +155,7 @@ impl App {
         &'a self,
         body: Element<'a, Message>,
         sftp: Option<bool>,
+        sftp_modal: Option<Element<'a, Message>>,
         dialog: Option<Element<'a, Message>>,
     ) -> Element<'a, Message> {
         let bar = TabBar {
@@ -174,13 +185,14 @@ impl App {
             .unwrap_or_else(|| iced::widget::space().into());
         let panes = iced::widget::stack![body, toasts].into();
         let panes = profiles::view::with_sidebar(panes, &self.profiles, &self.config, self.look);
-        self.overlays(column![bar, panes].into(), dialog)
+        self.overlays(column![bar, panes].into(), sftp_modal, dialog)
     }
 
     /// Modals, the SFTP dialog, the picker and the context menu over `base`.
     fn overlays<'a>(
         &'a self,
         base: Element<'a, Message>,
+        sftp_modal: Option<Element<'a, Message>>,
         sftp_dialog: Option<Element<'a, Message>>,
     ) -> Element<'a, Message> {
         let modal = self
@@ -189,6 +201,10 @@ impl App {
             .or_else(|| self.delete_modal())
             .or_else(|| self.clear_sessions_modal())
             .or_else(|| self.discard_modal());
+        let base = match sftp_modal {
+            Some(panel) => modal::over(base, panel),
+            None => base,
+        };
         let base = overlay(base, modal);
         let dialog = self
             .secret_dialog
@@ -222,6 +238,21 @@ impl App {
                     .width(iced::Length::Fill)
                     .height(iced::Length::Fill);
                 iced::widget::stack![base, placed].into()
+            }
+            None => base,
+        };
+        let base = match &self.settings {
+            Some(page) => {
+                let width = (self.window_size.width * 0.9).clamp(860.0, 1200.0);
+                let height = (self.window_size.height * 0.86).clamp(600.0, 900.0);
+                let look = self.look;
+                let page =
+                    crate::settings::view(*page, &self.colors, look, &self.config, &self.schemes);
+                let card = container(page)
+                    .width(width)
+                    .height(height)
+                    .style(move |_theme: &iced::Theme| crate::controls::floating(look));
+                modal::over(base, card.into())
             }
             None => base,
         };

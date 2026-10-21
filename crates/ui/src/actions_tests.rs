@@ -469,3 +469,12 @@ fn find_opens_the_search_bar_and_escape_closes_it() {
     send(&mut app, Message::Search(crate::search::SearchMsg::Close));
     assert!(app.search.is_none());
 }
+
+#[test]
+fn settings_open_and_close() {
+    let mut app = headless();
+    send(&mut app, Message::OpenSettings);
+    assert!(app.settings.is_some());
+    send(&mut app, Message::CloseSettings);
+    assert!(app.settings.is_none());
+}

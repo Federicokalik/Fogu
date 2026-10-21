@@ -331,6 +331,9 @@ impl App {
     /// pane's prompt (declined), menu, the sidebar's search (then its keyboard focus), inline
     /// rename.
     pub(crate) fn on_escape(&mut self) {
+        if self.settings.take().is_some() {
+            return;
+        }
         if self.secret_dialog.take().is_some()
             || self.search.take().is_some()
             || self.picker.take().is_some()

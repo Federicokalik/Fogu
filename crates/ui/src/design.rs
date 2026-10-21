@@ -99,16 +99,6 @@ impl UiTheme {
             Self::Retro => 8.0,
         }
     }
-
-    /// Letter spacing hint for small caps labels (implemented by the widgets that use it).
-    #[must_use]
-    pub(crate) const fn label_tracking(self) -> f32 {
-        match self {
-            Self::Retro => 1.0,
-            Self::Minimal => 0.4,
-            Self::Fogu | Self::Fluent => 0.0,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -117,7 +107,12 @@ mod tests {
 
     #[test]
     fn names_round_trip_and_unknown_falls_back() {
-        for theme in [UiTheme::Fogu, UiTheme::Fluent, UiTheme::Minimal, UiTheme::Retro] {
+        for theme in [
+            UiTheme::Fogu,
+            UiTheme::Fluent,
+            UiTheme::Minimal,
+            UiTheme::Retro,
+        ] {
             assert_eq!(UiTheme::resolve(theme.as_str()).0, theme);
         }
         let (theme, note) = UiTheme::resolve("nope");
