@@ -1,7 +1,7 @@
 //! Local mouse gestures of the terminal widget: selection (simple / word / line / block), wheel
 //! scrollback and auto-scroll while drag-selecting past an edge — plus mouse reporting to the
 //! application: every mouse event first goes through `mouse_disposition` (Shift → local; the
-//! right button is always local).
+//! right button, and the middle one while it pastes, are always local).
 
 use std::time::{Duration, Instant};
 
@@ -297,7 +297,9 @@ impl MouseState {
                     return false;
                 };
                 let action = MouseAction::Press(button);
-                if mouse_disposition(action, mods, grid.mode) != Disposition::Report {
+                // Middle-click paste works in every program, like elsewhere on the desktop.
+                let pastes = button == input::Button::Middle && grid.config.paste_on_middle_click;
+                if pastes || mouse_disposition(action, mods, grid.mode) != Disposition::Report {
                     return false;
                 }
                 self.report_held = Some(button);

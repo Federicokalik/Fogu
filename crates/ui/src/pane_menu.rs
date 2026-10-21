@@ -52,7 +52,10 @@ pub(crate) fn pane_items(pane: &Pane, links: Vec<MenuItem>) -> Vec<MenuItem> {
         None => "Current process: shell".to_owned(),
     };
     let mut items = links;
-    let copy = run("Copy", Action::Copy).enabled_if(has_selection, "Select text first");
+    let copy = run("Copy", Action::Copy).enabled_if(
+        has_selection,
+        "Select text first (Shift+drag in programs that use the mouse, such as Claude Code)",
+    );
     let copy = if items.is_empty() {
         copy
     } else {

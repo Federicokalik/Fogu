@@ -50,6 +50,12 @@ pub(crate) fn describe(err: &SessionError) -> String {
 
 fn write_clipboard(request: ClipboardRequest) -> Task<Message> {
     match request.target {
+        // Also the primary selection (Linux), so a middle click pastes what a program such as
+        // Claude Code or tmux copied, as with a selection made in Fogu.
+        ClipboardType::Clipboard if !cfg!(target_os = "macos") => Task::batch([
+            clipboard::write(request.payload.clone()),
+            clipboard::write_primary(request.payload),
+        ]),
         ClipboardType::Clipboard => clipboard::write(request.payload),
         ClipboardType::Selection => write_selection(request.payload),
     }
