@@ -1,0 +1,84 @@
+# Built-in UI style "Synthwave". Every key is documented in README.md ("Custom UI styles");
+# a custom file in <config dir>/styles/ can `extends = "synthwave"` and override any of them.
+key = "synthwave"
+name = "Synthwave"
+aliases = ["outrun", "neon"]
+description = "Neon on deep indigo: glowing tabs that share the bar"
+paired_scheme = "Fogu Synthwave"
+
+[color]
+accent = "#ff4fd8"
+secondary = "#3ee6ff"
+danger = "#ff4f7b"
+
+[surface]
+bg = { from = "base", toward = "fg", dark = 0.06, light = 0.04 }
+raised = { from = "base", toward = "black", dark = 0.35, light = 0.06 }
+panel = { from = "bg", toward = "accent", dark = 0.03, light = 0.02 }
+canvas = { from = "raised", toward = "fg", dark = 0.0, light = 0.0 }
+border = { from = "base", toward = "accent", dark = 0.22, light = 0.3 }
+divider = { from = "base", toward = "accent", dark = 0.28, light = 0.35 }
+dim = { from = "fg", toward = "base", dark = 0.4, light = 0.4 }
+soft_dark = 0.18
+soft_light = 0.14
+hover = 0.09
+
+[shape]
+card = 8
+control = 5
+tab_top = 6
+tab_bottom = 6
+dot = 3
+border = 1
+focus = 1.5
+
+[shadow]
+panel = { x = 0, y = 0, blur = 0, alpha = 0, tint = "black", mix = 0 }
+floating = { x = 0, y = 0, blur = 26, alpha = 0.45, tint = "accent", mix = 1 }
+tab = { x = 0, y = 0, blur = 10, alpha = 0.9, tint = "accent", mix = 1 }
+
+[bar]
+placement = "top"
+height = 40
+strip = 28
+fill = "horizontal"
+gradient = 0.22
+rule = true
+
+[tabs]
+style = "glow"
+sizing = "fill"
+width = 200
+min_width = 120
+max_width = 260
+marker = "dot"
+close = "hover"
+separators = false
+inset = 5
+title_size = 13
+indicator = 2
+indicator_length = 0
+indicator_color = "accent"
+
+[layout]
+geometry = "docked"
+margin = 0
+sidebar = "docked"
+density = "regular"
+gutter = 12
+grip = 5
+
+[text]
+chrome = "ui"
+labels = "upper"
+active = "medium"
+
+[interaction]
+hover = "fill"
+button = "filled"
+selection = "fill"
+
+[dialog]
+placement = "center"
+footer = false
+backdrop = 0.55

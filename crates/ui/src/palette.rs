@@ -7,7 +7,14 @@
 use fogu_core::{ColorScheme, RgbColor};
 use fogu_term::{Color, NamedColor, Palette, Rgb, default_palette, dim};
 
-use crate::design::UiTheme;
+use fogu_core::StyleDef;
+use fogu_core::style::{
+    BarSpec, ChromeFont, DialogSpec, InteractionSpec, LabelCase, LayoutSpec, Mix, Role, ShadowSpec,
+    ShadowTint, TabSpec, Weight,
+};
+
+use crate::contrast;
+use crate::design::{Env, Shadows, Shape, Type};
 
 /// The resolved colour table of one scheme.
 #[derive(Clone, Debug)]
@@ -103,105 +110,219 @@ fn set(table: &mut Palette, index: usize, value: Rgb) {
     }
 }
 
-/// The window chrome's colours (menus, panels, title bar), derived from the terminal scheme so
-/// dark and light schemes both work.
+/// The window chrome's colours and tokens (menus, panels, title bar), derived from the UI style
+/// over the terminal scheme so dark and light schemes both work.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Look {
-    /// Panels, menus, the picker, the sidebar.
+    /// Menus, dialogs, the picker.
     pub(crate) bg: iced::Color,
     pub(crate) fg: iced::Color,
     /// Muted text.
     pub(crate) dim: iced::Color,
-    /// Links, selection, active toggles. Preset default, overridable in config.
+    /// Links, selection, active toggles. Style default, overridable in config.
     pub(crate) accent: iced::Color,
     /// Tinted accent for selected rows and focus rings.
     pub(crate) accent_soft: iced::Color,
+    /// Text on an accent fill.
+    pub(crate) on_accent: iced::Color,
+    /// The accent as a text colour, readable on panels and menus.
+    pub(crate) accent_text: iced::Color,
+    /// Focus rings: the secondary accent when the style has one, else the accent.
+    pub(crate) focus: iced::Color,
     /// The terminal background (the active tab).
     pub(crate) base: iced::Color,
     /// The title / tab bar.
     pub(crate) raised: iced::Color,
-    /// Layered panel surface (Fluent), otherwise the same as `bg`.
+    /// Docked panel surface.
     pub(crate) panel: iced::Color,
+    /// Behind islands.
+    pub(crate) canvas: iced::Color,
     /// 1 px borders and the sidebar handle.
     pub(crate) border: iced::Color,
+    /// Split dividers between panes.
+    pub(crate) divider: iced::Color,
     /// Hovered rows and buttons.
     pub(crate) hover: iced::Color,
     /// Close-button hover, errors.
     pub(crate) danger: iced::Color,
-    /// Active UI shape preset.
-    pub(crate) preset: UiTheme,
-    /// Card/dialog radius.
-    pub(crate) radius: f32,
-    /// Row/input radius.
-    pub(crate) radius_small: f32,
-    /// Panel header and row gutters.
-    pub(crate) gutter: f32,
-    /// Whether elevated panels should look raised.
-    pub(crate) elevated: bool,
+    /// The second accent (gradient ends), the accent when the style has none.
+    pub(crate) secondary: iced::Color,
+    /// The scheme is dark.
+    pub(crate) dark: bool,
+    /// Radii and strokes.
+    pub(crate) shape: Shape,
+    /// Shadows.
+    pub(crate) shadow: Shadows,
+    /// Fonts and letter case.
+    pub(crate) text: Type,
+    /// The tab bar.
+    pub(crate) bar: BarSpec,
+    /// Tab headers.
+    pub(crate) tabs: TabSpec,
+    /// Layout and density.
+    pub(crate) layout: LayoutSpec,
+    /// Interaction language.
+    pub(crate) interaction: InteractionSpec,
+    /// Small dialogs.
+    pub(crate) dialog: DialogSpec,
 }
 
 impl Look {
-    pub(crate) fn new(colors: &Colors, preset: UiTheme, accent: Option<RgbColor>) -> Self {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one assignment per token; splitting it would scatter the recipe order"
+    )]
+    pub(crate) fn new(
+        colors: &Colors,
+        style: &StyleDef,
+        accent: Option<RgbColor>,
+        env: Env,
+    ) -> Self {
         let base = to_iced(colors.background());
         let fg = to_iced(colors.foreground());
         let dark = base.r * 0.299 + base.g * 0.587 + base.b * 0.114 < 0.5;
-        let accent = accent.map_or_else(
-            || {
-                let (r, g, b) = preset.accent_rgb();
-                iced::Color::from_rgb8(r, g, b)
-            },
-            |c: RgbColor| iced::Color::from_rgb8(c.r, c.g, c.b),
+        let rgb = |c: RgbColor| iced::Color::from_rgb8(c.r, c.g, c.b);
+        // Accents fill indicators and selections: at least 3:1 against the terminal colour.
+        let accent = contrast::ensure(
+            rgb(accent.unwrap_or(style.color.accent)),
+            base,
+            contrast::UI,
         );
-        let bg = match preset {
-            UiTheme::Minimal => mix(base, fg, if dark { 0.02 } else { 0.03 }),
-            UiTheme::Retro => mix(base, iced::Color::BLACK, if dark { 0.15 } else { 0.02 }),
-            UiTheme::Fogu | UiTheme::Fluent => mix(base, fg, if dark { 0.06 } else { 0.04 }),
+        let secondary = style.color.secondary.map_or(accent, rgb);
+        let surface = &style.surface;
+        let mut known = Known {
+            base,
+            fg,
+            accent,
+            bg: None,
+            raised: None,
+            panel: None,
         };
-        let raised = match preset {
-            UiTheme::Fluent => mix(bg, fg, if dark { 0.07 } else { 0.05 }),
-            UiTheme::Minimal => bg,
-            UiTheme::Retro => mix(base, iced::Color::BLACK, if dark { 0.45 } else { 0.08 }),
-            UiTheme::Fogu => mix(base, iced::Color::BLACK, if dark { 0.3 } else { 0.06 }),
+        let bg = known.mix(surface.bg, dark);
+        known.bg = Some(bg);
+        let raised = known.mix(surface.raised, dark);
+        known.raised = Some(raised);
+        let panel = known.mix(surface.panel, dark);
+        known.panel = Some(panel);
+        let canvas = known.mix(surface.canvas, dark);
+        let border = known.mix(surface.border, dark);
+        let divider = known.mix(surface.divider, dark);
+        // Muted text still reads as text on every chrome surface.
+        let dim = contrast::ensure(
+            contrast::ensure(known.mix(surface.dim, dark), panel, contrast::TEXT),
+            bg,
+            contrast::TEXT,
+        );
+        // Chrome text: the scheme's foreground, nudged where a low-contrast scheme (Solarized)
+        // would fall under 4.5:1 on a chrome surface. The terminal keeps the scheme's own.
+        let fg = [bg, raised, panel].into_iter().fold(fg, |fg, surface| {
+            contrast::ensure(fg, surface, contrast::TEXT)
+        });
+        let shadow = |spec: ShadowSpec| {
+            let tint = match spec.tint {
+                ShadowTint::Black => iced::Color::BLACK,
+                ShadowTint::Accent => mix(iced::Color::BLACK, accent, spec.mix),
+                ShadowTint::Secondary => mix(iced::Color::BLACK, secondary, spec.mix),
+            };
+            let blur = if env.software {
+                spec.blur.min(SOFTWARE_BLUR)
+            } else {
+                spec.blur
+            };
+            iced::Shadow {
+                color: iced::Color {
+                    a: spec.alpha,
+                    ..tint
+                },
+                offset: iced::Vector::new(spec.x, spec.y),
+                blur_radius: blur,
+            }
         };
-        let panel = if preset == UiTheme::Fluent {
-            mix(bg, fg, if dark { 0.03 } else { 0.02 })
-        } else {
-            bg
+        let chrome = match style.text.chrome {
+            ChromeFont::Ui => crate::UI_FONT,
+            ChromeFont::Mono => env.mono,
         };
-        let border = match preset {
-            UiTheme::Retro => mix(base, accent, 0.28),
-            UiTheme::Minimal => mix(base, fg, 0.12),
-            _ => mix(base, fg, 0.18),
+        let strong = iced::Font {
+            weight: iced::font::Weight::Medium,
+            ..chrome
         };
+        let shape = &style.shape;
+        let on_accent =
+            contrast::best_on(accent, &[base, fg, iced::Color::BLACK, iced::Color::WHITE]);
+        let accent_text = contrast::ensure(
+            contrast::ensure(accent, panel, contrast::TEXT),
+            bg,
+            contrast::TEXT,
+        );
         Self {
             bg,
             fg,
-            dim: mix(
-                fg,
-                base,
-                if preset == UiTheme::Minimal {
-                    0.38
-                } else {
-                    0.45
-                },
-            ),
+            dim,
             accent,
             accent_soft: iced::Color {
-                a: if dark { 0.16 } else { 0.12 },
+                a: if dark {
+                    surface.soft_dark
+                } else {
+                    surface.soft_light
+                },
                 ..accent
             },
+            on_accent,
+            accent_text,
+            focus: secondary,
             base,
             raised,
             panel,
+            canvas,
             border,
-            hover: iced::Color { a: 0.10, ..fg },
-            danger: iced::Color::from_rgb8(0xE5, 0x48, 0x4D),
-            preset,
-            radius: preset.radius(),
-            radius_small: preset.radius_small(),
-            gutter: preset.gutter(),
-            elevated: preset.elevated(),
+            divider,
+            hover: iced::Color {
+                a: surface.hover,
+                ..fg
+            },
+            danger: rgb(style.color.danger),
+            secondary,
+            dark,
+            shape: Shape {
+                card: shape.card,
+                control: shape.control,
+                tab: iced::border::Radius {
+                    top_left: shape.tab_top,
+                    top_right: shape.tab_top,
+                    bottom_right: shape.tab_bottom,
+                    bottom_left: shape.tab_bottom,
+                },
+                dot: shape.dot,
+                border: shape.border,
+                focus: shape.focus,
+            },
+            shadow: Shadows {
+                panel: shadow(style.shadow.panel),
+                floating: shadow(style.shadow.floating),
+                tab: shadow(style.shadow.tab),
+            },
+            text: Type {
+                chrome,
+                strong,
+                active: match style.text.active {
+                    Weight::Regular => chrome,
+                    Weight::Medium => strong,
+                },
+                mono: env.mono,
+                upper: style.text.labels == LabelCase::Upper,
+                mono_chrome: style.text.chrome == ChromeFont::Mono,
+            },
+            bar: style.bar,
+            tabs: style.tabs,
+            layout: style.layout,
+            interaction: style.interaction,
+            dialog: style.dialog,
         }
+    }
+
+    /// List row height from the style's density.
+    pub(crate) fn row_h(&self) -> f32 {
+        self.layout.density.row_height()
     }
 
     /// The iced theme for stock widgets (text fields, sliders, scrollbars, tooltips), so none
@@ -219,6 +340,39 @@ impl Look {
                 danger: self.danger,
             },
         )
+    }
+}
+
+/// Largest shadow blur under software rendering.
+const SOFTWARE_BLUR: f32 = 6.0;
+
+/// Colours a [`Mix`] can refer to; roles not resolved yet stand for the base.
+struct Known {
+    base: iced::Color,
+    fg: iced::Color,
+    accent: iced::Color,
+    bg: Option<iced::Color>,
+    raised: Option<iced::Color>,
+    panel: Option<iced::Color>,
+}
+
+impl Known {
+    fn role(&self, role: Role) -> iced::Color {
+        match role {
+            Role::Base => self.base,
+            Role::Fg => self.fg,
+            Role::Accent => self.accent,
+            Role::Bg => self.bg.unwrap_or(self.base),
+            Role::Raised => self.raised.unwrap_or(self.base),
+            Role::Panel => self.panel.unwrap_or(self.base),
+            Role::Black => iced::Color::BLACK,
+            Role::White => iced::Color::WHITE,
+        }
+    }
+
+    fn mix(&self, recipe: Mix, dark: bool) -> iced::Color {
+        let t = if dark { recipe.dark } else { recipe.light };
+        mix(self.role(recipe.from), self.role(recipe.toward), t)
     }
 }
 
@@ -293,6 +447,109 @@ mod tests {
             rgb(0xaa_403c)
         );
         assert_eq!(colors.palette().len(), 269);
+    }
+
+    fn color(c: iced::Color) -> String {
+        format!("{:.4} {:.4} {:.4} {:.4}", c.r, c.g, c.b, c.a)
+    }
+
+    fn shadow(s: iced::Shadow) -> String {
+        format!(
+            "{} @ {:.1},{:.1} blur {:.1}",
+            color(s.color),
+            s.offset.x,
+            s.offset.y,
+            s.blur_radius
+        )
+    }
+
+    /// Every chrome colour and shape token of every preset over every built-in scheme, so a
+    /// refactor of how they are derived shows up as a snapshot diff.
+    #[test]
+    fn look_tokens_snapshot() {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        for scheme in ColorScheme::builtins() {
+            let colors = Colors::new(scheme);
+            for style in fogu_core::StyleCatalog::builtins().styles() {
+                let look = Look::new(&colors, style, None, Env::default());
+                let _ = writeln!(out, "## {} / {}", scheme.name, style.key);
+                for (name, value) in [
+                    ("bg", look.bg),
+                    ("fg", look.fg),
+                    ("dim", look.dim),
+                    ("accent", look.accent),
+                    ("accent_soft", look.accent_soft),
+                    ("base", look.base),
+                    ("raised", look.raised),
+                    ("panel", look.panel),
+                    ("border", look.border),
+                    ("hover", look.hover),
+                    ("danger", look.danger),
+                ] {
+                    let _ = writeln!(out, "{name}: {}", color(value));
+                }
+                let _ = writeln!(
+                    out,
+                    "radius: {} small: {} gutter: {}",
+                    look.shape.card, look.shape.control, look.layout.gutter
+                );
+                let _ = writeln!(
+                    out,
+                    "panel shadow: {}",
+                    shadow(crate::controls::panel(look).shadow)
+                );
+                let _ = writeln!(
+                    out,
+                    "floating shadow: {}",
+                    shadow(crate::controls::floating(look).shadow)
+                );
+            }
+        }
+        insta::assert_snapshot!(out);
+    }
+
+    /// Every built-in style stays readable over its paired palette and the classic ones.
+    #[test]
+    fn styles_keep_contrast_over_every_palette() {
+        use crate::contrast::{TEXT, UI, ratio};
+        let styles = fogu_core::StyleCatalog::builtins();
+        for style in styles.styles() {
+            let mut names = vec!["Fogu Dark", "Fogu Light", "Solarized Dark", "Dracula"];
+            names.extend(style.paired_scheme.as_deref());
+            for name in names {
+                let scheme = ColorScheme::by_name(name).unwrap_or_default();
+                let look = Look::new(&Colors::new(&scheme), style, None, Env::default());
+                let at = format!("{} over {name}", style.key);
+                for (surface, color) in [
+                    ("bg", look.bg),
+                    ("raised", look.raised),
+                    ("panel", look.panel),
+                ] {
+                    assert!(ratio(look.fg, color) >= TEXT, "{at}: fg on {surface}");
+                }
+                assert!(ratio(look.dim, look.panel) >= TEXT, "{at}: dim on panel");
+                assert!(ratio(look.dim, look.bg) >= TEXT, "{at}: dim on bg");
+                assert!(ratio(look.accent, look.base) >= UI, "{at}: accent on base");
+                assert!(
+                    ratio(look.accent_text, look.panel) >= TEXT,
+                    "{at}: accent text"
+                );
+                assert!(
+                    ratio(look.on_accent, look.accent) >= TEXT,
+                    "{at}: text on accent"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn look_stays_small_enough_to_copy() {
+        assert!(
+            std::mem::size_of::<Look>() <= 768,
+            "{}",
+            std::mem::size_of::<Look>()
+        );
     }
 
     #[test]

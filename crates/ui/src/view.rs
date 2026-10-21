@@ -22,9 +22,6 @@ use crate::subscription::{session_events, sftp_events};
 use crate::tab_bar::TabBar;
 use crate::terminal_view::TerminalView;
 
-/// Height of the drag strip above each pane of a split tab.
-const GRIP_H: f32 = 6.0;
-
 impl App {
     /// Tab bar above the active tab's split container, plus modal / menu overlays.
     #[expect(
@@ -38,7 +35,7 @@ impl App {
         if let Some(editor) = &tab.editor {
             let look = self.look;
             let page = crate::profile_editor::page(tab.id, editor, &self.config, look);
-            return self.chrome(page, None, None, None);
+            return self.chrome(page, None, None);
         }
         let search = self.search_in(tab);
         let typing_elsewhere = self.settings.is_some()
@@ -93,13 +90,15 @@ impl App {
                 };
                 // A prompt is modal over the pane that asked, not over the whole window.
                 match &pane.prompt {
-                    Some(state) => (id, modal::over(view, prompt::view(id, state))),
+                    Some(state) => (
+                        id,
+                        modal::over(view, prompt::view(id, state, self.look), self.look),
+                    ),
                     None => (id, view),
                 }
             })
             .collect();
-        let mut divider = to_iced(self.colors.foreground());
-        divider.a = 0.3;
+        let divider = self.look.divider;
         let mut split = SplitContainer::new(
             tab.id,
             layout,
@@ -119,11 +118,6 @@ impl App {
         if let Some(color) = border {
             split = split.border(tab.focused, color);
         }
-        let sftp = tab
-            .panes
-            .values()
-            .any(|p| p.sftp.is_some())
-            .then_some(sftp_panel.is_some());
         // SFTP opens as a large modal over the workspace; it can become a dock later.
         let look = self.look;
         let sftp_modal = sftp_panel.map(|panel| {
@@ -135,10 +129,9 @@ impl App {
                 .style(move |_theme: &iced::Theme| crate::controls::floating(look))
                 .into()
         });
-        let dialog = sftp_panel.and_then(|p| sftp::dialog(tab.id, p));
+        let dialog = sftp_panel.and_then(|p| sftp::dialog(tab.id, p, look));
         self.chrome(
             crate::search::over(split.into(), search, self.look),
-            sftp,
             sftp_modal,
             dialog,
         )
@@ -158,10 +151,12 @@ impl App {
     fn chrome<'a>(
         &'a self,
         body: Element<'a, Message>,
-        sftp: Option<bool>,
         sftp_modal: Option<Element<'a, Message>>,
         dialog: Option<Element<'a, Message>>,
     ) -> Element<'a, Message> {
+        let (sftp, forwards) = self.bar_flags();
+        let widths = self.tab_widths();
+        let margin = self.island_margin();
         let bar = TabBar {
             tabs: &self.tabs,
             active: self.active,
@@ -169,14 +164,12 @@ impl App {
             renaming: self.renaming.as_ref(),
             look: self.look,
             sftp,
-            forwards: self.active_tab().and_then(|tab| {
-                tab.panes
-                    .values()
-                    .any(crate::tab::Pane::is_ssh)
-                    .then(|| crate::forwards_dialog::listening(tab.panes.values()))
-            }),
+            forwards,
             profiles: self.profiles.open,
             inset: self.bar_inset(),
+            widths,
+            window: self.window_size,
+            margin,
         }
         .view();
         // Toasts are layered over the panes only, never over the tab bar. The stack is always
@@ -187,9 +180,47 @@ impl App {
             .toasts
             .view(self.metrics.cell_h, self.look)
             .unwrap_or_else(|| iced::widget::space().into());
-        let panes = iced::widget::stack![body, toasts].into();
-        let panes = profiles::view::with_sidebar(panes, &self.profiles, &self.config, self.look);
-        self.overlays(column![bar, panes].into(), sftp_modal, dialog)
+        let panes: Element<'a, Message> = iced::widget::stack![body, toasts].into();
+        let look = self.look;
+        let islands = margin > 0.0;
+        // Islands: the terminal is a rounded card, inset enough that its square cells never
+        // cross the rounded corners; it never gets a shadow (it repaints on every keystroke).
+        let panes = if islands {
+            let inner = (look.shape.card * 0.3).ceil();
+            container(panes)
+                .padding(inner)
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill)
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(look.base.into()),
+                    border: iced::Border {
+                        color: look.border,
+                        width: 1.0,
+                        radius: look.shape.card.into(),
+                    },
+                    ..container::Style::default()
+                })
+                .into()
+        } else {
+            panes
+        };
+        let panes = profiles::view::with_sidebar(panes, &self.profiles, &self.config, look);
+        let gap = if islands { margin } else { 0.0 };
+        let mut main = column![bar.top, panes].spacing(gap);
+        if let Some(bottom) = bar.bottom {
+            main = main.push(bottom);
+        }
+        let main: Element<'a, Message> = if islands {
+            container(main)
+                .padding(margin)
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill)
+                .style(move |_theme: &iced::Theme| container::background(look.canvas))
+                .into()
+        } else {
+            main.into()
+        };
+        self.overlays(main, sftp_modal, dialog)
     }
 
     /// Modals, the SFTP dialog, the picker and the context menu over `base`.
@@ -206,18 +237,18 @@ impl App {
             .or_else(|| self.clear_sessions_modal())
             .or_else(|| self.discard_modal());
         let base = match sftp_modal {
-            Some(panel) => modal::over(base, panel),
+            Some(panel) => modal::center(base, panel, self.look),
             None => base,
         };
-        let base = overlay(base, modal);
+        let base = overlay(base, modal, self.look);
         let dialog = self
             .secret_dialog
             .as_ref()
-            .map(crate::secret_dialog::view)
+            .map(|dialog| crate::secret_dialog::view(dialog, self.look))
             .or(sftp_dialog)
             .or_else(|| self.forwards_view());
         let base = match dialog {
-            Some(dialog) => modal::over(base, dialog),
+            Some(dialog) => modal::over(base, dialog, self.look),
             None => base,
         };
         let picker_rows = self
@@ -250,13 +281,18 @@ impl App {
                 let width = (self.window_size.width * 0.9).clamp(860.0, 1200.0);
                 let height = (self.window_size.height * 0.86).clamp(600.0, 900.0);
                 let look = self.look;
-                let page =
-                    crate::settings::view(*page, &self.colors, look, &self.config, &self.schemes);
+                let page = crate::settings::view(
+                    page,
+                    look,
+                    &self.config,
+                    (&self.schemes, &self.styles),
+                    self.env,
+                );
                 let card = container(page)
                     .width(width)
                     .height(height)
                     .style(move |_theme: &iced::Theme| crate::controls::floating(look));
-                modal::over(base, card.into())
+                modal::center(base, card.into(), look)
             }
             None => base,
         };
@@ -272,7 +308,7 @@ impl App {
         let look = self.look;
         let strip = container(iced::widget::space())
             .width(iced::Length::Fill)
-            .height(GRIP_H)
+            .height(look.layout.grip)
             .style(move |_theme: &iced::Theme| container::background(look.raised));
         iced::widget::mouse_area(strip)
             .interaction(iced::mouse::Interaction::Grab)

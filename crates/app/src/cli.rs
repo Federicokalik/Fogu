@@ -28,6 +28,11 @@ pub struct Cli {
     pub no_recovery: bool,
 }
 
+/// Whether iced will draw with tiny-skia (CPU) in this process.
+pub fn software_backend() -> bool {
+    std::env::var_os(BACKEND_ENV).is_some_and(|v| v == "tiny-skia")
+}
+
 /// `--software-render` must reach iced as `ICED_BACKEND=tiny-skia` before it starts. Setting an
 /// environment variable in-process is `unsafe` (and the workspace forbids `unsafe`), so the
 /// process re-executes itself once with the variable set. Returns only if no re-exec was needed

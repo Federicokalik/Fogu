@@ -15,6 +15,7 @@ image.workspace = true
 fogu-core = { path = "../core" }
 fogu-term = { path = "../term" }
 secrecy.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 rfd.workspace = true
@@ -22,6 +23,9 @@ open.workspace = true
 dirs.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
 
 [features]
 default = ["ssh"]

@@ -71,6 +71,9 @@ second and stays out of your way.
 - Clickable links: OSC 8 hyperlinks plus detected URLs and paths, behind a scheme allow-list
 - Context menus everywhere, configurable right-click behaviour
 - Tab recovery: layout and recent scrollback come back after a restart (opt-out)
+- Six UI styles that change the window's structure, not just its colours (tab bar placement and
+  shape, docked panels or floating islands, density, buttons and dialogs), each with a paired
+  palette; custom styles and colour schemes in TOML
 - Colour schemes, fonts, cursor and every key binding configurable
 
 ### SSH manager
@@ -157,7 +160,8 @@ Fogu works with no configuration. To customise it, edit `~/.config/fogu/config.t
 
 ```toml
 [appearance]
-color_scheme = "Dracula"   # built in: Fogu Dark, Fogu Light, Solarized Dark, Dracula
+ui_theme = "glass"          # fogu (Ember), fluent (Mica), minimal (Ink), retro (Phosphor), synthwave, glass
+color_scheme = "Dracula"    # see "Colour schemes" below
 
 [[profiles]]
 id = "home-server"
@@ -168,6 +172,85 @@ user = "me"
 ```
 
 Hosts from `~/.ssh/config` appear in the sidebar automatically.
+
+### UI styles
+
+A UI style sets the window's structure and form; the terminal colours come from the colour
+scheme. Pick one in Settings → Appearance (it applies live) or set `appearance.ui_theme`:
+
+| Style | `ui_theme` (aliases) | What it does |
+|---|---|---|
+| Ember | `fogu` (`ember`) | Warm graphite title bar, compact pill tabs with an ember line under the active one |
+| Mica | `fluent` (`mica`, `windows`) | 48 px layered title bar, folder tabs whose active tab merges into the terminal, dialogs with a footer bar |
+| Ink | `minimal` (`ink`, `paper`, `swiss`) | Full-bleed 34 px bar, underlined tabs sized to their titles, hairlines only, outlined buttons, dialogs as top sheets |
+| Phosphor | `retro` (`phosphor`, `crt`, `terminal`) | Tabs at the bottom as a status line with index numbers and inverse video, monospace chrome, command-line dialogs, hard shadows |
+| Synthwave | `synthwave` (`outrun`, `neon`) | Neon gradient bar, glowing tabs that share the bar's width |
+| Glass | `glass` (`frost`) | Floating islands: a pill tab bar, a rounded terminal card and a detached sidebar over a canvas |
+
+Every style has a paired palette (Fogu Dark, Fogu Mica, Fogu Ink Paper, Fogu Phosphor,
+Fogu Synthwave, Fogu Glass). Switching style also switches the palette while the current one is
+the default or another style's pair; a palette you picked yourself stays, and Settings offers
+"Use matching palette". `appearance.accent` overrides the style's accent. Accents and muted text
+are nudged when a palette would make them unreadable (text 4.5:1, accents 3:1).
+
+### Custom UI styles
+
+Put a TOML file in `styles/` under the Fogu config directory (next to `themes/`), then select it
+by its `name`. It `extends` a built-in style (by key, name or alias; default `fogu`) and
+overrides any key of any section:
+
+```toml
+name = "Night Glass"
+extends = "glass"
+paired_scheme = "Midnight Ocean"
+
+[color]
+accent = "#ffb454"
+
+[tabs]
+style = "underline"   # pill, folder, underline, inverse, glow
+sizing = "fill"       # fixed, fill, fit
+marker = "index"      # dot, index, none
+
+[shadow.floating]
+blur = 36
+
+[layout]
+geometry = "islands"  # docked, islands
+margin = 10
+```
+
+Sections and keys (the built-in files in `assets/styles/` list every one):
+
+- `[color]`: `accent`, `secondary` (focus rings, gradient ends), `danger`
+- `[surface]`: `bg`, `raised`, `panel`, `canvas`, `border`, `divider`, `dim` as mix recipes
+  `{ from = "base", toward = "fg", dark = 0.06, light = 0.04 }` (roles: `base`, `fg`, `bg`,
+  `raised`, `panel`, `accent`, `black`, `white`), plus `soft_dark`, `soft_light`, `hover`
+- `[shape]`: `card`, `control`, `tab_top`, `tab_bottom`, `dot`, `border`, `focus`
+- `[shadow.panel]`, `[shadow.floating]`, `[shadow.tab]`: `x`, `y`, `blur`, `alpha`,
+  `tint` (`black`, `accent`, `secondary`), `mix`
+- `[bar]`: `placement` (`top`, `bottom`), `height`, `strip`, `fill` (`solid`, `base`, `vertical`,
+  `horizontal`), `gradient`, `rule`
+- `[tabs]`: `style`, `sizing`, `width`, `min_width`, `max_width`, `marker`, `close` (`always`,
+  `hover`, `never`), `separators`, `inset`, `title_size`, `indicator`, `indicator_length`,
+  `indicator_color` (`accent`, `fg`)
+- `[layout]`: `geometry`, `margin`, `sidebar` (`docked`, `floating`), `density` (`compact`,
+  `regular`, `comfy`), `gutter`, `grip`
+- `[text]`: `chrome` (`ui`, `mono`), `labels` (`upper`, `sentence`), `active` (`regular`,
+  `medium`)
+- `[interaction]`: `hover` (`fill`, `inverse`, `outline`), `button` (`filled`, `outline`,
+  `text`, `inverse`), `selection` (`fill`, `inverse`)
+- `[dialog]`: `placement` (`center`, `top-sheet`, `command-bar`), `footer`, `backdrop`
+
+Out-of-range numbers are clamped and reported; unknown keys, a name that a built-in style
+already answers to, or a name already taken by an earlier file skip the file with a warning,
+never stopping Fogu. Press **Reload styles and palettes** in Settings → Appearance after editing.
+
+You can also write one without leaving Fogu: in Settings → Appearance, **New style from code**
+(or **New palette from code**) opens an editor prefilled from the active style or palette. The
+file is checked as you type (syntax, unknown keys, name clashes, clamped values) and previewed
+live; **Save and apply** writes it to `styles/` (or `themes/`) and switches to it. Custom styles
+and palettes get an **Edit** button that reopens their file.
 
 ### Custom terminal colour schemes
 
@@ -187,7 +270,8 @@ cursor = "#88c0d0"
 ```
 
 `extends` must name one of the built-in schemes (`Fogu Dark`, `Fogu Light`, `Solarized Dark`,
-`Dracula`); every colour you omit is inherited. A file without `extends` must provide all fields:
+`Dracula`, `Fogu Mica`, `Fogu Ink Paper`, `Fogu Phosphor`, `Fogu Synthwave`, `Fogu Glass`);
+every colour you omit is inherited. A file without `extends` must provide all fields:
 
 ```toml
 name = "Midnight Ocean"
@@ -208,7 +292,7 @@ ansi = [
 Files are loaded at startup, sorted by file name. Invalid files are skipped with a warning.
 Custom schemes cannot reuse a built-in name; the first custom file claiming a name wins.
 
-You can also select a palette and press **Reload themes** in Settings → Appearance, without
+You can also select a palette and press **Reload styles and palettes** in Settings → Appearance, without
 restarting. If you edit the TOML on disk, press Reload themes to pick up the changes.
 
 ### Default keys

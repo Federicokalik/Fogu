@@ -126,13 +126,34 @@ pub struct RowEvents {
     pub right: Option<Message>,
 }
 
-/// Colours a row is drawn with.
+/// Colours and metrics a row is drawn with.
 #[derive(Clone, Copy, Debug)]
 pub struct RowLook {
     pub fg: Color,
     pub dim: Color,
     /// Background of the selected row.
     pub selected: Color,
+    /// Text on the selected row (inverse selection swaps it).
+    pub selected_fg: Color,
+    /// Row height from the style's density.
+    pub height: f32,
+    /// Chrome font.
+    pub font: iced::Font,
+}
+
+impl RowLook {
+    /// The UI style's rows.
+    pub(crate) fn new(look: crate::palette::Look) -> Self {
+        let (selected, selected_fg) = crate::controls::row_colors(look, true, false);
+        Self {
+            fg: look.fg,
+            dim: look.dim,
+            selected: selected.unwrap_or(look.hover),
+            selected_fg,
+            height: look.row_h(),
+            font: look.text.chrome,
+        }
+    }
 }
 
 /// One row: chip, icon, title over subtitle, detail on the right.
@@ -145,28 +166,41 @@ pub fn row_view<'a>(
     let chip = item.chip.unwrap_or(Color::TRANSPARENT);
     let chip = container(space())
         .width(4)
-        .height(30)
+        .height(look.height)
         .style(move |_theme: &iced::Theme| container::background(chip));
+    let (fg, dim) = if selected {
+        (
+            look.selected_fg,
+            crate::palette::mix(look.selected_fg, look.selected, 0.3),
+        )
+    } else {
+        (look.fg, look.dim)
+    };
     let mut title = row![].spacing(6).align_y(Alignment::Center);
     if let Some(icon) = &item.icon {
-        title = title.push(text(icon.clone()).size(14).color(look.fg));
+        title = title.push(text(icon.clone()).size(14).color(fg));
     }
     title = title.push(
         text(item.title.clone())
             .size(13)
-            .color(look.fg)
+            .font(look.font)
+            .color(fg)
             .wrapping(text::Wrapping::None),
     );
     let label = column![
         title,
         text(item.subtitle.clone())
             .size(11)
-            .color(look.dim)
+            .font(look.font)
+            .color(dim)
             .wrapping(text::Wrapping::None),
     ]
     .width(Length::Fill)
     .clip(true);
-    let detail = text(item.detail.clone()).size(11).color(look.dim);
+    let detail = text(item.detail.clone())
+        .size(11)
+        .font(look.font)
+        .color(dim);
     let body = row![chip, label, detail]
         .spacing(8)
         .padding([2, 6])

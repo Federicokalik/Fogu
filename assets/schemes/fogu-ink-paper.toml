@@ -1,0 +1,14 @@
+# "Fogu Ink Paper": built-in palette paired with a UI style. Paper white with ink, for Ink.
+name = "Fogu Ink Paper"
+fg = "#1c1c1e"
+bg = "#fafafa"
+cursor = "#1f5cc8"
+cursor_text = "#fafafa"
+selection_bg = "#d6e2fb"
+selection_fg = "#1c1c1e"
+ansi = [
+    "#1c1c1e", "#b42318", "#1f7a3a", "#8a6100",
+    "#1f5cc8", "#8e2fa3", "#0f6e7a", "#5c5c62",
+    "#4a4a50", "#d92d20", "#1d7a37", "#8f6400",
+    "#2a64d8", "#a33bba", "#127f8c", "#6a6a70",
+]

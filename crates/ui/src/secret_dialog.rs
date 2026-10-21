@@ -5,13 +5,15 @@
 
 use fogu_core::SecretKey;
 use fogu_session::sanitize_remote;
-use iced::widget::{Id, button, column, row, text, text_input};
+use iced::widget::{Id, column, row, text, text_input};
 use iced::{Element, Length, Task};
 use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::app::App;
+use crate::controls::{self, ButtonKind};
 use crate::message::Message;
 use crate::modal;
+use crate::palette::Look;
 use crate::prompt::PromptText;
 use crate::tab::TabId;
 
@@ -95,33 +97,41 @@ impl App {
 }
 
 /// The dialog box.
-pub(crate) fn view(dialog: &SecretDialog) -> Element<'_, Message> {
+pub(crate) fn view(dialog: &SecretDialog, look: Look) -> Element<'_, Message> {
     let input = text_input("", dialog.value.expose_secret())
         .id(field_id())
         .secure(true)
         .on_input(|typed| Message::SecretDialog(SecretMsg::Input(PromptText::new(typed))))
         .on_submit(Message::SecretDialog(SecretMsg::Save))
-        .padding(6);
+        .padding(6)
+        .style(move |_theme: &iced::Theme, status| controls::field(look, status));
     let content = column![
-        text("Stored secret").size(18),
+        modal::title("Stored secret", look),
         text(format!(
             "Set the {}. It is kept in your desktop's Secret Service, never in config.toml.",
             dialog.what
-        )),
+        ))
+        .font(look.text.chrome),
         input,
-        row![
-            button(text("Save"))
-                .style(button::primary)
-                .on_press(Message::SecretDialog(SecretMsg::Save)),
-            button(text("Cancel"))
-                .style(button::secondary)
-                .on_press(Message::SecretDialog(SecretMsg::Cancel)),
-        ]
-        .spacing(8),
     ]
     .spacing(12)
     .width(Length::Fill);
-    modal::frame(content.into(), DIALOG_W)
+    let actions = row![
+        controls::action(
+            "Save",
+            ButtonKind::Primary,
+            look,
+            Some(Message::SecretDialog(SecretMsg::Save))
+        ),
+        controls::action(
+            "Cancel",
+            ButtonKind::Secondary,
+            look,
+            Some(Message::SecretDialog(SecretMsg::Cancel))
+        ),
+    ]
+    .spacing(8);
+    modal::frame(content.into(), Some(actions.into()), DIALOG_W, look)
 }
 
 #[cfg(test)]

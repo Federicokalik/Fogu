@@ -8,6 +8,8 @@ use std::sync::LazyLock;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::catalog::{CatalogWarning, read_toml_dir, write_custom};
+
 /// An sRGB colour, 8 bits per channel (`Profile.color`); (de)serialises as a `"#RRGGBB"` TOML
 /// string.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -94,21 +96,29 @@ pub struct ColorScheme {
     pub ansi: [RgbColor; 16],
 }
 
-/// The 4 built-in schemes, parsed once from the embedded TOML assets.
-static BUILTINS: LazyLock<[ColorScheme; 4]> = LazyLock::new(load_builtins);
+/// How many schemes are built in.
+pub const BUILTIN_COUNT: usize = 9;
+
+/// The built-in schemes, parsed once from the embedded TOML assets.
+static BUILTINS: LazyLock<[ColorScheme; BUILTIN_COUNT]> = LazyLock::new(load_builtins);
 
 #[expect(
     clippy::expect_used,
     reason = "the asset strings are compile-time-embedded and fixed; a typo in one is a build-\
-              time bug caught immediately by `four_builtins_with_distinct_names` and every other \
+              time bug caught immediately by `builtins_have_distinct_names` and every other \
               test in this module, never a runtime failure mode for users"
 )]
-fn load_builtins() -> [ColorScheme; 4] {
-    const SOURCES: [&str; 4] = [
+fn load_builtins() -> [ColorScheme; BUILTIN_COUNT] {
+    const SOURCES: [&str; BUILTIN_COUNT] = [
         include_str!("../../../assets/schemes/fogu-dark.toml"),
         include_str!("../../../assets/schemes/fogu-light.toml"),
         include_str!("../../../assets/schemes/solarized-dark.toml"),
         include_str!("../../../assets/schemes/dracula.toml"),
+        include_str!("../../../assets/schemes/fogu-mica.toml"),
+        include_str!("../../../assets/schemes/fogu-ink-paper.toml"),
+        include_str!("../../../assets/schemes/fogu-phosphor.toml"),
+        include_str!("../../../assets/schemes/fogu-synthwave.toml"),
+        include_str!("../../../assets/schemes/fogu-glass.toml"),
     ];
     SOURCES.map(|src| toml::from_str(src).expect("builtin colour scheme asset"))
 }
@@ -132,23 +142,9 @@ impl ColorScheme {
 
 /// Directory under the Fogu config directory that holds custom scheme files.
 pub const THEMES_DIR: &str = "themes";
-/// Largest custom scheme file accepted, so one bad file cannot stall startup.
-const MAX_SCHEME_BYTES: u64 = 256 * 1024;
 
 /// A custom scheme file that was skipped; loading continues with the other schemes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SchemeWarning {
-    /// The file (or themes directory) that caused the warning.
-    pub path: PathBuf,
-    /// Why it was skipped.
-    pub message: String,
-}
-
-impl fmt::Display for SchemeWarning {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.path.display(), self.message)
-    }
-}
+pub type SchemeWarning = CatalogWarning;
 
 /// Built-in schemes plus every valid TOML file in `<config dir>/themes/`.
 ///
@@ -159,6 +155,8 @@ impl fmt::Display for SchemeWarning {
 pub struct SchemeCatalog {
     schemes: Vec<ColorScheme>,
     warnings: Vec<SchemeWarning>,
+    /// The file each custom scheme came from, by name.
+    sources: Vec<(String, PathBuf)>,
 }
 
 impl Default for SchemeCatalog {
@@ -168,12 +166,13 @@ impl Default for SchemeCatalog {
 }
 
 impl SchemeCatalog {
-    /// Only the four embedded schemes.
+    /// Only the embedded schemes.
     #[must_use]
     pub fn builtins() -> Self {
         Self {
             schemes: BUILTINS.to_vec(),
             warnings: Vec::new(),
+            sources: Vec::new(),
         }
     }
 
@@ -184,33 +183,15 @@ impl SchemeCatalog {
     #[must_use]
     pub fn load(dir: &Path) -> Self {
         let mut catalog = Self::builtins();
-        let themes = dir.join(THEMES_DIR);
-        let entries = match std::fs::read_dir(&themes) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return catalog,
-            Err(err) => {
-                catalog.warnings.push(SchemeWarning {
-                    path: themes,
-                    message: format!("cannot read themes directory: {err}"),
-                });
-                return catalog;
-            }
-        };
-        let mut files: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
-            })
-            .collect();
-        files.sort();
-        for path in files {
-            match Self::parse_file(&path) {
+        let (files, warnings) = read_toml_dir(&dir.join(THEMES_DIR));
+        catalog.warnings = warnings;
+        for (path, text) in files {
+            match parse_custom(&text) {
                 Ok(scheme) => {
-                    if let Err(message) = catalog.install(scheme) {
-                        catalog.warnings.push(SchemeWarning { path, message });
+                    let name = scheme.name.clone();
+                    match catalog.install(scheme) {
+                        Ok(()) => catalog.sources.push((name, path)),
+                        Err(message) => catalog.warnings.push(SchemeWarning { path, message }),
                     }
                 }
                 Err(message) => catalog.warnings.push(SchemeWarning { path, message }),
@@ -237,6 +218,48 @@ impl SchemeCatalog {
         &self.warnings
     }
 
+    /// The file custom scheme `name` was loaded from.
+    #[must_use]
+    pub fn source(&self, name: &str) -> Option<&Path> {
+        self.sources
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, path)| path.as_path())
+    }
+
+    /// Checks custom scheme `text` as [`load`](Self::load) would: it parses, its name is not a
+    /// built-in's, and no other custom file claims it (`editing` is the file being replaced).
+    pub fn check(&self, text: &str, editing: Option<&Path>) -> Result<ColorScheme, String> {
+        let scheme = parse_custom(text)?;
+        if ColorScheme::by_name(&scheme.name).is_some() {
+            return Err(format!(
+                "the name {:?} is reserved by a built-in scheme",
+                scheme.name
+            ));
+        }
+        let taken = self.by_name(&scheme.name).is_some()
+            && self
+                .source(&scheme.name)
+                .is_none_or(|path| Some(path) != editing);
+        if taken {
+            return Err(format!("another scheme is already named {:?}", scheme.name));
+        }
+        Ok(scheme)
+    }
+
+    /// Validates `text` with [`check`](Self::check) and writes it to `dir/themes/` (over
+    /// `editing` when given). Returns the scheme's name and the file written.
+    pub fn save(
+        &self,
+        dir: &Path,
+        text: &str,
+        editing: Option<&Path>,
+    ) -> Result<(String, PathBuf), String> {
+        let scheme = self.check(text, editing)?;
+        let path = write_custom(&dir.join(THEMES_DIR), &scheme.name, text, editing)?;
+        Ok((scheme.name, path))
+    }
+
     fn install(&mut self, scheme: ColorScheme) -> Result<(), String> {
         if ColorScheme::by_name(&scheme.name).is_some() {
             return Err(format!(
@@ -250,70 +273,62 @@ impl SchemeCatalog {
         self.schemes.push(scheme);
         Ok(())
     }
+}
 
-    fn parse_file(path: &Path) -> Result<ColorScheme, String> {
-        let size = std::fs::metadata(path)
-            .map_err(|err| format!("cannot inspect file: {err}"))?
-            .len();
-        if size > MAX_SCHEME_BYTES {
-            return Err(format!(
-                "file is {size} bytes, over the {MAX_SCHEME_BYTES} byte limit"
-            ));
-        }
-        let text =
-            std::fs::read_to_string(path).map_err(|err| format!("cannot read file: {err}"))?;
-        let file: SchemeFile = toml::from_str(&text).map_err(|err| err.to_string())?;
-        let name = file.name.trim();
-        if name.is_empty() {
-            return Err("the name is empty".to_owned());
-        }
-        let base = file
-            .extends
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(|name| {
-                ColorScheme::by_name(name)
-                    .ok_or_else(|| format!("extends unknown built-in scheme {name:?}"))
-            })
-            .transpose()?;
-        let mut scheme = match base {
-            Some(base) => base,
-            None => ColorScheme {
-                name: name.to_owned(),
-                fg: require(file.fg, "fg")?,
-                bg: require(file.bg, "bg")?,
-                cursor: require(file.cursor, "cursor")?,
-                cursor_text: require(file.cursor_text, "cursor_text")?,
-                selection_bg: require(file.selection_bg, "selection_bg")?,
-                selection_fg: require(file.selection_fg, "selection_fg")?,
-                ansi: require(file.ansi, "ansi")?,
-            },
-        };
-        name.clone_into(&mut scheme.name);
-        if let Some(value) = file.fg {
-            scheme.fg = value;
-        }
-        if let Some(value) = file.bg {
-            scheme.bg = value;
-        }
-        if let Some(value) = file.cursor {
-            scheme.cursor = value;
-        }
-        if let Some(value) = file.cursor_text {
-            scheme.cursor_text = value;
-        }
-        if let Some(value) = file.selection_bg {
-            scheme.selection_bg = value;
-        }
-        if let Some(value) = file.selection_fg {
-            scheme.selection_fg = value;
-        }
-        if let Some(value) = file.ansi {
-            scheme.ansi = value;
-        }
-        Ok(scheme)
+/// Parses a custom scheme file (with `extends` resolved against the built-ins). Does not check
+/// the name against other schemes; [`SchemeCatalog::check`] does.
+pub fn parse_custom(text: &str) -> Result<ColorScheme, String> {
+    let file: SchemeFile = toml::from_str(text).map_err(|err| err.to_string())?;
+    let name = file.name.trim();
+    if name.is_empty() {
+        return Err("the name is empty".to_owned());
     }
+    let base = file
+        .extends
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| {
+            ColorScheme::by_name(name)
+                .ok_or_else(|| format!("extends unknown built-in scheme {name:?}"))
+        })
+        .transpose()?;
+    let mut scheme = match base {
+        Some(base) => base,
+        None => ColorScheme {
+            name: name.to_owned(),
+            fg: require(file.fg, "fg")?,
+            bg: require(file.bg, "bg")?,
+            cursor: require(file.cursor, "cursor")?,
+            cursor_text: require(file.cursor_text, "cursor_text")?,
+            selection_bg: require(file.selection_bg, "selection_bg")?,
+            selection_fg: require(file.selection_fg, "selection_fg")?,
+            ansi: require(file.ansi, "ansi")?,
+        },
+    };
+    name.clone_into(&mut scheme.name);
+    if let Some(value) = file.fg {
+        scheme.fg = value;
+    }
+    if let Some(value) = file.bg {
+        scheme.bg = value;
+    }
+    if let Some(value) = file.cursor {
+        scheme.cursor = value;
+    }
+    if let Some(value) = file.cursor_text {
+        scheme.cursor_text = value;
+    }
+    if let Some(value) = file.selection_bg {
+        scheme.selection_bg = value;
+    }
+    if let Some(value) = file.selection_fg {
+        scheme.selection_fg = value;
+    }
+    if let Some(value) = file.ansi {
+        scheme.ansi = value;
+    }
+    Ok(scheme)
 }
 
 fn require<T>(value: Option<T>, field: &str) -> Result<T, String> {
@@ -369,6 +384,8 @@ impl Default for ColorScheme {
 mod tests {
     #![expect(clippy::unwrap_used, reason = "tests")]
 
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -408,16 +425,44 @@ mod tests {
     }
 
     #[test]
-    fn four_builtins_with_distinct_names() {
+    fn builtins_have_distinct_names() {
         let builtins = ColorScheme::builtins();
-        assert_eq!(builtins.len(), 4);
+        assert_eq!(builtins.len(), BUILTIN_COUNT);
         let names: Vec<&str> = builtins.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(
             names.iter().collect::<std::collections::HashSet<_>>().len(),
-            4
+            BUILTIN_COUNT
         );
         assert!(ColorScheme::by_name("Dracula").is_some());
         assert!(ColorScheme::by_name("nonexistent scheme").is_none());
+    }
+
+    #[test]
+    fn paired_palettes_are_readable() {
+        use crate::contrast::ratio;
+        for scheme in ColorScheme::builtins().iter().filter(|s| {
+            s.name.starts_with("Fogu ") && s.name != "Fogu Dark" && s.name != "Fogu Light"
+        }) {
+            let name = &scheme.name;
+            assert!(ratio(scheme.fg, scheme.bg) >= 7.0, "{name}: fg/bg");
+            assert!(
+                ratio(scheme.selection_fg, scheme.selection_bg) >= 4.5,
+                "{name}: selection"
+            );
+            assert!(
+                ratio(scheme.cursor_text, scheme.cursor) >= 4.5,
+                "{name}: cursor"
+            );
+            // The eight normal colours and their bright variants read on the background
+            // (black is the background's own shade).
+            for (i, color) in scheme.ansi.iter().enumerate().skip(1) {
+                if i == 8 {
+                    assert!(ratio(*color, scheme.bg) >= 3.0, "{name}: bright black");
+                } else {
+                    assert!(ratio(*color, scheme.bg) >= 4.5, "{name}: ansi {i}");
+                }
+            }
+        }
     }
 
     struct Tmp(PathBuf);
@@ -462,7 +507,7 @@ ansi = [
         write(&t, "full.toml", FULL);
         let catalog = SchemeCatalog::load(&t.0);
         assert!(catalog.warnings().is_empty(), "{:?}", catalog.warnings());
-        assert_eq!(catalog.schemes().len(), 5);
+        assert_eq!(catalog.schemes().len(), BUILTIN_COUNT + 1);
         let scheme = catalog.by_name("Test Full").unwrap();
         assert_eq!(scheme.bg, RgbColor::from_hex(0x22_2222));
         assert_eq!(scheme.ansi[15], RgbColor::from_hex(0x0f_0f0f));
@@ -506,7 +551,7 @@ cursor = "#070809"
         );
         write(&t, "missing.toml", "name = \"No Colours\"\n");
         let catalog = SchemeCatalog::load(&t.0);
-        assert_eq!(catalog.schemes().len(), 4);
+        assert_eq!(catalog.schemes().len(), BUILTIN_COUNT);
         assert_eq!(catalog.warnings().len(), 3);
         let messages: Vec<&str> = catalog
             .warnings()
@@ -537,7 +582,7 @@ cursor = "#070809"
             "name = \"Same\"\nextends = \"Fogu Dark\"\nbg = \"#020202\"\n",
         );
         let catalog = SchemeCatalog::load(&t.0);
-        assert_eq!(catalog.schemes().len(), 5);
+        assert_eq!(catalog.schemes().len(), BUILTIN_COUNT + 1);
         assert_eq!(catalog.warnings().len(), 1);
         assert!(
             catalog
@@ -554,6 +599,33 @@ cursor = "#070809"
     }
 
     #[test]
+    fn check_and_save_custom_palettes() {
+        let t = tmp();
+        let catalog = SchemeCatalog::load(&t.0);
+        let text = "name = \"Made Here\"
+extends = \"Dracula\"
+bg = \"#101010\"
+";
+        let (name, path) = catalog.save(&t.0, text, None).unwrap();
+        assert_eq!(name, "Made Here");
+        let catalog = SchemeCatalog::load(&t.0);
+        assert_eq!(catalog.source("Made Here"), Some(path.as_path()));
+        assert!(catalog.save(&t.0, text, None).is_err());
+        catalog.save(&t.0, text, Some(&path)).unwrap();
+        assert!(
+            catalog
+                .check(
+                    "name = \"Dracula\"
+extends = \"Dracula\"
+",
+                    None
+                )
+                .unwrap_err()
+                .contains("reserved")
+        );
+    }
+
+    #[test]
     fn unknown_extends_is_rejected() {
         let t = tmp();
         write(
@@ -562,7 +634,7 @@ cursor = "#070809"
             "name = \"Orphan\"\nextends = \"No Such Base\"\n",
         );
         let catalog = SchemeCatalog::load(&t.0);
-        assert_eq!(catalog.schemes().len(), 4);
+        assert_eq!(catalog.schemes().len(), BUILTIN_COUNT);
         assert!(
             catalog
                 .warnings()

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use iced::keyboard;
 use std::time::{Duration, Instant};
 
-use fogu_core::{Config, SchemeCatalog};
+use fogu_core::{Config, SchemeCatalog, StyleCatalog};
 use fogu_session::SessionRuntime;
 use fogu_term::input;
 use iced::{Point, Task, clipboard, window};
@@ -17,7 +17,7 @@ use crate::appearance::resolve_scheme;
 use crate::background;
 use crate::blink::{self, Blink};
 use crate::context_menu::ContextMenu;
-use crate::design::UiTheme;
+use crate::design::{Env, resolve_style};
 use crate::lifecycle::PendingClipboard;
 use crate::message::{Message, PasteSource, SelectEvent, WindowCmd};
 use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
@@ -74,6 +74,10 @@ pub struct App {
     pub(crate) colors: Colors,
     /// Built-in plus custom terminal colour schemes, reloadable from Settings.
     pub(crate) schemes: SchemeCatalog,
+    /// Built-in plus custom UI styles, reloadable from Settings.
+    pub(crate) styles: StyleCatalog,
+    /// What the UI style needs besides the scheme (terminal font, software rendering).
+    pub(crate) env: Env,
     /// Chrome colours and the matching iced theme, both from `colors`.
     pub(crate) look: Look,
     pub(crate) theme: iced::Theme,
@@ -145,15 +149,24 @@ impl App {
         config: Arc<Config>,
         resolved: ResolvedFont,
     ) -> Self {
-        Self::with_schemes(runtime, config, resolved, SchemeCatalog::builtins())
+        Self::with_catalogs(
+            runtime,
+            config,
+            resolved,
+            SchemeCatalog::builtins(),
+            StyleCatalog::builtins(),
+            false,
+        )
     }
 
-    /// [`new`](Self::new) with the custom terminal schemes found at startup.
-    pub(crate) fn with_schemes(
+    /// [`new`](Self::new) with the custom terminal schemes and UI styles found at startup.
+    pub(crate) fn with_catalogs(
         runtime: Arc<SessionRuntime>,
         config: Arc<Config>,
         resolved: ResolvedFont,
         schemes: SchemeCatalog,
+        styles: StyleCatalog,
+        software: bool,
     ) -> Self {
         let font = FontSpec {
             family: config.appearance.font_family.clone(),
@@ -162,8 +175,12 @@ impl App {
         let metrics = CellMetrics::new(resolved.units, font.size_px(), 1.0);
         let (scheme, scheme_note) = resolve_scheme(&config.appearance.color_scheme, &schemes);
         let colors = Colors::new(&scheme);
-        let (preset, preset_note) = UiTheme::resolve(&config.appearance.ui_theme);
-        let look = Look::new(&colors, preset, config.appearance.accent);
+        let env = Env {
+            mono: resolved.font,
+            software,
+        };
+        let (style, preset_note) = resolve_style(&config.appearance.ui_theme, &styles);
+        let look = Look::new(&colors, style, config.appearance.accent, env);
         let mut toasts = Toasts::default();
         if let Some(note) = scheme_note {
             toasts.push(note);
@@ -195,6 +212,8 @@ impl App {
             theme: look.theme(&colors),
             colors,
             schemes,
+            styles,
+            env,
             focused: true,
             pending_paste: None,
             toasts,
@@ -239,7 +258,14 @@ impl App {
             &config.appearance.font_family,
             &config.appearance.fallback_fonts,
         );
-        let mut app = Self::with_schemes(runtime, config, resolved, options.schemes);
+        let mut app = Self::with_catalogs(
+            runtime,
+            config,
+            resolved,
+            options.schemes,
+            options.styles,
+            options.software_render,
+        );
         app.exit_after_first_frame = options.exit_after_first_frame;
         app.config_dir = options.config_dir;
         let mut tasks = vec![app.refresh_ssh_hosts()];
@@ -295,8 +321,8 @@ impl App {
 
     /// Recomputes the chrome look and stock-widget theme after an appearance change.
     fn refresh_look(&mut self) {
-        let (preset, _) = UiTheme::resolve(&self.config.appearance.ui_theme);
-        self.look = Look::new(&self.colors, preset, self.config.appearance.accent);
+        let (style, _) = resolve_style(&self.config.appearance.ui_theme, &self.styles);
+        self.look = Look::new(&self.colors, style, self.config.appearance.accent, self.env);
         self.theme = self.look.theme(&self.colors);
     }
 
@@ -321,18 +347,185 @@ impl App {
             })
     }
 
+    /// Applies and saves UI style `key`. The palette follows the style while it is the default
+    /// or another style's pair; a palette the user picked stays.
+    fn switch_style(&mut self, key: &str) -> Option<Task<Message>> {
+        let follow = self.styles.resolve(key).and_then(|style| {
+            crate::design::suggested_scheme(
+                &self.config.appearance.color_scheme,
+                style,
+                &self.styles,
+                &self.schemes,
+            )
+        });
+        let appearance = &mut Arc::make_mut(&mut self.config).appearance;
+        key.clone_into(&mut appearance.ui_theme);
+        let mut notes = Vec::new();
+        if let Some(scheme) = &follow {
+            appearance.color_scheme.clone_from(scheme);
+            notes.extend(self.apply_scheme());
+        } else {
+            self.refresh_look();
+        }
+        let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
+        let appearance = &self.config.appearance;
+        if let Err(err) = fogu_core::config::set_appearance(
+            &dir,
+            &appearance.ui_theme,
+            appearance.accent,
+            follow.as_deref(),
+        ) {
+            notes.push(
+                Notification::new(Level::Error, "Settings not saved").detail(err.to_string()),
+            );
+        }
+        let tasks: Vec<Task<Message>> = notes.into_iter().map(|note| self.notify(note)).collect();
+        (!tasks.is_empty()).then(|| Task::batch(tasks))
+    }
+
+    /// Re-reads `styles/` and `themes/` and re-applies the configured style and scheme; returns
+    /// what to report (skipped files, a style or scheme that is gone).
+    fn reload_catalogs(&mut self) -> Vec<Notification> {
+        let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
+        self.schemes = SchemeCatalog::load(&dir);
+        self.styles = StyleCatalog::load(&dir);
+        let mut notes: Vec<Notification> = self
+            .schemes
+            .warnings()
+            .iter()
+            .map(|w| Notification::new(Level::Warn, "Colour scheme skipped").detail(w.to_string()))
+            .chain(
+                self.styles.warnings().iter().map(|w| {
+                    Notification::new(Level::Warn, "UI style skipped").detail(w.to_string())
+                }),
+            )
+            .collect();
+        notes.extend(self.apply_scheme());
+        if let (_, Some(note)) = resolve_style(&self.config.appearance.ui_theme, &self.styles) {
+            notes.push(note);
+        }
+        notes
+    }
+
+    /// Opens the settings code editor: on the file of custom style (key) or palette (name)
+    /// `name`, or on a new file based on the active style or palette.
+    fn open_code(
+        &mut self,
+        kind: crate::style_code::CodeKind,
+        name: Option<&str>,
+    ) -> Option<Notification> {
+        use crate::style_code::{CodeEditor, CodeKind, palette_template, style_template};
+        let (text, editing) = if let Some(name) = name {
+            let path = match kind {
+                CodeKind::Style => self.styles.source(name),
+                CodeKind::Palette => self.schemes.source(name),
+            }?
+            .to_path_buf();
+            match std::fs::read_to_string(&path) {
+                Ok(text) => (text, Some(path)),
+                Err(err) => {
+                    return Some(
+                        Notification::new(Level::Error, "Cannot open the file")
+                            .detail(format!("{}: {err}", path.display())),
+                    );
+                }
+            }
+        } else {
+            let text = match kind {
+                CodeKind::Style => {
+                    let (style, _) = resolve_style(&self.config.appearance.ui_theme, &self.styles);
+                    style_template(style, &self.styles)
+                }
+                CodeKind::Palette => {
+                    let (scheme, _) = crate::appearance::resolve_scheme(
+                        &self.config.appearance.color_scheme,
+                        &self.schemes,
+                    );
+                    palette_template(&scheme, &self.schemes)
+                }
+            };
+            (text, None)
+        };
+        let editor = CodeEditor::new(kind, &text, editing, (&self.styles, &self.schemes));
+        self.settings.get_or_insert_with(Default::default).editor = Some(editor);
+        None
+    }
+
+    /// Writes the code editor's file, reloads the catalogs and applies what was saved. A failed
+    /// write stays in the editor with the reason.
+    fn save_code(&mut self) -> Vec<Task<Message>> {
+        use crate::style_code::CodeKind;
+        let Some(editor) = self.settings.as_mut().and_then(|p| p.editor.as_mut()) else {
+            return Vec::new();
+        };
+        let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
+        let text = editor.content.text();
+        let kind = editor.kind;
+        let saved = match kind {
+            CodeKind::Style => self.styles.save(&dir, &text, editor.editing.as_deref()),
+            CodeKind::Palette => self.schemes.save(&dir, &text, editor.editing.as_deref()),
+        };
+        let (name, path) = match saved {
+            Ok(saved) => saved,
+            Err(why) => {
+                editor.error = Some(why);
+                return Vec::new();
+            }
+        };
+        if let Some(page) = &mut self.settings {
+            page.editor = None;
+        }
+        let mut notes = self.reload_catalogs();
+        notes.push(Notification::new(Level::Info, "Saved").detail(path.display().to_string()));
+        let mut tasks: Vec<Task<Message>> = notes.into_iter().map(|n| self.notify(n)).collect();
+        let apply = match kind {
+            CodeKind::Style => crate::settings::SettingsMsg::Style(name),
+            CodeKind::Palette => crate::settings::SettingsMsg::Scheme(name),
+        };
+        tasks.push(self.on_settings(apply));
+        tasks
+    }
+
     /// Applies and persists one settings choice.
     fn on_settings(&mut self, message: crate::settings::SettingsMsg) -> Task<Message> {
         use crate::settings::SettingsMsg;
         let mut tasks = Vec::new();
         match message {
-            SettingsMsg::Theme(theme) => {
-                let saved = &mut Arc::make_mut(&mut self.config).appearance.ui_theme;
-                saved.clear();
-                saved.push_str(theme.as_str());
-                self.refresh_look();
-                if let Some(note) = self.save_ui() {
+            SettingsMsg::Style(key) => {
+                if let Some(task) = self.switch_style(&key) {
+                    tasks.push(task);
+                }
+            }
+            SettingsMsg::NewCode(kind) => {
+                if let Some(note) = self.open_code(kind, None) {
                     tasks.push(self.notify(note));
+                }
+            }
+            SettingsMsg::EditCode(kind, name) => {
+                if let Some(note) = self.open_code(kind, Some(&name)) {
+                    tasks.push(self.notify(note));
+                }
+            }
+            SettingsMsg::Code(action) => {
+                let (styles, schemes) = (&self.styles, &self.schemes);
+                if let Some(editor) = self.settings.as_mut().and_then(|p| p.editor.as_mut()) {
+                    let edit = action.is_edit();
+                    editor.content.perform(action);
+                    if edit {
+                        editor.recheck(styles, schemes);
+                    }
+                }
+            }
+            SettingsMsg::SaveCode => tasks.extend(self.save_code()),
+            SettingsMsg::CloseCode => {
+                if let Some(page) = &mut self.settings {
+                    page.editor = None;
+                }
+            }
+            SettingsMsg::UseMatchingPalette => {
+                let (style, _) = resolve_style(&self.config.appearance.ui_theme, &self.styles);
+                if let Some(paired) = style.paired_scheme.clone() {
+                    return self.on_settings(SettingsMsg::Scheme(paired));
                 }
             }
             SettingsMsg::Accent(accent) => {
@@ -360,20 +553,9 @@ impl App {
                     );
                 }
             }
-            SettingsMsg::ReloadSchemes => {
-                let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
-                self.schemes = SchemeCatalog::load(&dir);
-                let warnings: Vec<fogu_core::SchemeWarning> = self.schemes.warnings().to_vec();
-                if let Some(note) = self.apply_scheme() {
+            SettingsMsg::Reload => {
+                for note in self.reload_catalogs() {
                     tasks.push(self.notify(note));
-                }
-                for warning in warnings {
-                    tasks.push(
-                        self.notify(
-                            Notification::new(Level::Warn, "Colour scheme skipped")
-                                .detail(warning.to_string()),
-                        ),
-                    );
                 }
             }
         }
@@ -459,7 +641,7 @@ impl App {
             Message::Picker(message) => self.on_picker(message),
             Message::Profiles(message) => self.on_profiles(message),
             Message::OpenSettings => {
-                self.settings = Some(crate::settings::SettingsPage);
+                self.settings = Some(crate::settings::SettingsPage::default());
                 Task::none()
             }
             Message::CloseSettings => {

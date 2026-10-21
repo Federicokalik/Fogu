@@ -4,15 +4,17 @@
 use fogu_session::SftpRequest;
 use fogu_session::sftp::TransferId;
 use iced::Element;
-use iced::widget::{button, checkbox, column, row, text};
+use iced::widget::{checkbox, column, row, text};
 use tokio::sync::mpsc::Sender;
 
 use super::panel::msg;
 use super::transfers::{self, Conflict, ConflictChoice, Direction, Origin, conflict_text};
 use super::{PanelMsg, SftpPanelState, transfer_label};
+use crate::controls::{self, ButtonKind};
 use crate::message::Message;
 use crate::modal;
 use crate::notifications::{Level, Notification};
+use crate::palette::Look;
 use crate::tab::TabId;
 
 impl SftpPanelState {
@@ -76,15 +78,25 @@ impl SftpPanelState {
 }
 
 /// The "file exists" dialog for the panel's first queued conflict.
-pub fn conflict_dialog(tab: TabId, panel: &SftpPanelState) -> Option<Element<'_, Message>> {
+pub fn conflict_dialog(
+    tab: TabId,
+    panel: &SftpPanelState,
+    look: Look,
+) -> Option<Element<'_, Message>> {
     let conflict = panel.conflicts.current()?;
     let direction = panel
         .transfers
         .get(conflict.transfer)
         .map_or(Direction::Download, |t| t.direction);
     let more = panel.conflicts.queue.len() - 1;
+    // No default button: each answer is a deliberate choice.
     let choose = |label: &'static str, choice| {
-        button(text(label)).on_press(msg(tab, PanelMsg::Conflict(choice)))
+        controls::action(
+            label,
+            ButtonKind::Secondary,
+            look,
+            Some(msg(tab, PanelMsg::Conflict(choice))),
+        )
     };
     let mut buttons = row![].spacing(8);
     if conflict.resumable {
@@ -95,8 +107,8 @@ pub fn conflict_dialog(tab: TabId, panel: &SftpPanelState) -> Option<Element<'_,
         .push(choose("Keep both", ConflictChoice::KeepBoth))
         .push(choose("Skip", ConflictChoice::Skip));
     let mut content = column![
-        text("File exists").size(18),
-        text(conflict_text(conflict, direction)),
+        modal::title("File exists", look),
+        text(conflict_text(conflict, direction)).font(look.text.chrome),
     ]
     .spacing(12);
     if conflict.resumable {
@@ -111,6 +123,10 @@ pub fn conflict_dialog(tab: TabId, panel: &SftpPanelState) -> Option<Element<'_,
                 .on_toggle(move |on| msg(tab, PanelMsg::ConflictApplyAll(on))),
         );
     }
-    content = content.push(buttons);
-    Some(modal::frame(content.into(), 460.0))
+    Some(modal::frame(
+        content.into(),
+        Some(buttons.into()),
+        460.0,
+        look,
+    ))
 }

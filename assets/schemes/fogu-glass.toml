@@ -1,0 +1,14 @@
+# "Fogu Glass": built-in palette paired with a UI style. Deep blue-black with a teal accent, for Glass.
+name = "Fogu Glass"
+fg = "#e8ecf4"
+bg = "#101521"
+cursor = "#5eead4"
+cursor_text = "#101521"
+selection_bg = "#23344a"
+selection_fg = "#f5f8fc"
+ansi = [
+    "#1a2132", "#ff7a8a", "#7ee0a4", "#f4d58d",
+    "#7ab8ff", "#c7a2ff", "#5eead4", "#cbd3e1",
+    "#6a768d", "#ff9eaa", "#a3edc0", "#f8e3af",
+    "#a3ceff", "#dac2ff", "#92f2e3", "#f5f8fc",
+]

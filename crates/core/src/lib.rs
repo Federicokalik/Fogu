@@ -1,12 +1,15 @@
 //! `fogu-core`: pure config/model crate (config schema, profiles, `SplitTree`, colour
-//! schemes, keymap parsing, `Action` enum, recovery-state model). No tokio, no GUI, no I/O
-//! (except [`config::load`], the in-place `config.toml` edits, [`builtin`]'s `/etc/shells`
-//! read, [`recent`]'s state file and the read-only [`ssh_config`] import; plain `std::fs`).
+//! schemes, UI styles, keymap parsing, `Action` enum, recovery-state model). No tokio, no GUI,
+//! no I/O (except [`config::load`], the in-place `config.toml` edits, the `themes/` and
+//! `styles/` catalogs, [`builtin`]'s `/etc/shells` read, [`recent`]'s state file and the
+//! read-only [`ssh_config`] import; plain `std::fs`).
 
 mod action;
 mod background;
 pub mod builtin;
+mod catalog;
 pub mod config;
+pub mod contrast;
 pub mod fsutil;
 mod keychord;
 pub mod platform;
@@ -20,9 +23,11 @@ pub mod shellquote;
 mod size;
 mod split;
 pub mod ssh_config;
+pub mod style;
 
 pub use action::{Action, Dir, Hotkeys};
 pub use background::{Background, EffectiveBackground, Fit, TabBackground, effective_background};
+pub use catalog::CatalogWarning;
 pub use config::Config;
 pub use config::route::{Jump, MAX_JUMP_HOPS, resolve_jumps};
 pub use config::ssh_opts::{
@@ -39,3 +44,4 @@ pub use scheme::{ColorScheme, RgbColor, SchemeCatalog, SchemeWarning, THEMES_DIR
 pub use secret_key::SecretKey;
 pub use size::Size;
 pub use split::{Divider, Node, NodePath, Orientation, Rect, Side, SplitTree};
+pub use style::{STYLES_DIR, StyleCatalog, StyleDef, StyleWarning};

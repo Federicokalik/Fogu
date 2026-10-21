@@ -1,0 +1,14 @@
+# "Fogu Phosphor": built-in palette paired with a UI style. Green phosphor on black, for Phosphor.
+name = "Fogu Phosphor"
+fg = "#8cffa5"
+bg = "#0b110c"
+cursor = "#8cffa5"
+cursor_text = "#0b110c"
+selection_bg = "#1f4a2a"
+selection_fg = "#cfffd9"
+ansi = [
+    "#0b110c", "#ff6e5a", "#5dff7e", "#e8ff6a",
+    "#5fc4ff", "#d78bff", "#5cffe0", "#b8ffc8",
+    "#5f8768", "#ff9585", "#9bffb0", "#f3ffa6",
+    "#9ad9ff", "#e7b5ff", "#a3fff0", "#e8ffee",
+]

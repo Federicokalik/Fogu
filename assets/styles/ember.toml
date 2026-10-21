@@ -1,0 +1,83 @@
+# Built-in UI style "Ember". Every key is documented in README.md ("Custom UI styles");
+# a custom file in <config dir>/styles/ can `extends = "fogu"` and override any of them.
+key = "fogu"
+name = "Ember"
+aliases = ["ember"]
+description = "Warm graphite, compact pills, an ember line under the active tab"
+paired_scheme = "Fogu Dark"
+
+[color]
+accent = "#ff6b35"
+danger = "#e5484d"
+
+[surface]
+bg = { from = "base", toward = "fg", dark = 0.07, light = 0.04 }
+raised = { from = "base", toward = "black", dark = 0.32, light = 0.06 }
+panel = { from = "bg", toward = "fg", dark = 0.0, light = 0.0 }
+canvas = { from = "raised", toward = "fg", dark = 0.0, light = 0.0 }
+border = { from = "base", toward = "fg", dark = 0.14, light = 0.16 }
+divider = { from = "base", toward = "fg", dark = 0.22, light = 0.25 }
+dim = { from = "fg", toward = "base", dark = 0.45, light = 0.45 }
+soft_dark = 0.16
+soft_light = 0.12
+hover = 0.09
+
+[shape]
+card = 10
+control = 6
+tab_top = 7
+tab_bottom = 7
+dot = 3
+border = 1
+focus = 1.5
+
+[shadow]
+panel = { x = 0, y = 0, blur = 0, alpha = 0, tint = "black", mix = 0 }
+floating = { x = 0, y = 10, blur = 28, alpha = 0.5, tint = "accent", mix = 0.18 }
+tab = { x = 0, y = 2, blur = 10, alpha = 0.35, tint = "accent", mix = 0.5 }
+
+[bar]
+placement = "top"
+height = 40
+strip = 28
+fill = "solid"
+gradient = 0
+rule = true
+
+[tabs]
+style = "pill"
+sizing = "fixed"
+width = 196
+min_width = 120
+max_width = 240
+marker = "dot"
+close = "hover"
+separators = false
+inset = 5
+title_size = 13
+indicator = 2
+indicator_length = 18
+indicator_color = "accent"
+
+[layout]
+geometry = "docked"
+margin = 0
+sidebar = "docked"
+density = "compact"
+gutter = 12
+grip = 5
+
+[text]
+chrome = "ui"
+labels = "upper"
+active = "regular"
+
+[interaction]
+hover = "fill"
+button = "filled"
+selection = "fill"
+
+[dialog]
+placement = "center"
+footer = false
+backdrop = 0.55

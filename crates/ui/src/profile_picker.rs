@@ -11,7 +11,7 @@ use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
     Id, column, container, mouse_area, opaque, operation, row, scrollable, space, stack, text_input,
 };
-use iced::{Alignment, Color, Element, Length, Task};
+use iced::{Alignment, Element, Length, Task};
 
 /// Id of the filter field.
 pub const PICKER_INPUT: &str = "fogu-picker-input";
@@ -106,14 +106,7 @@ fn entry_row(
     look: Look,
 ) -> Element<'static, Message> {
     let open = |split| Message::Picker(PickerMsg::Open { index, split });
-    let row_look = RowLook {
-        fg: look.fg,
-        dim: look.dim,
-        selected: Color {
-            a: 0.35,
-            ..look.accent
-        },
-    };
+    let row_look = RowLook::new(look);
     let events = RowEvents {
         press: Some(open(false)),
         double: None,
@@ -149,7 +142,9 @@ pub(crate) fn overlay<'a>(
         .on_input(|f| Message::Picker(PickerMsg::Filter(f)))
         .on_submit(Message::Picker(PickerMsg::Submit))
         .size(14)
-        .padding(8);
+        .font(look.text.chrome)
+        .padding(8)
+        .style(move |_theme: &iced::Theme, status| crate::controls::field(look, status));
     let scroller = Scrollbar::new().width(6).scroller_width(6);
     // Room for the scrollbar right of the "Split" buttons.
     let list = scrollable(list.padding(iced::Padding::ZERO.right(10)))
@@ -160,10 +155,7 @@ pub(crate) fn overlay<'a>(
         .width(PANEL_W)
         .max_height(480)
         .style(move |_theme: &iced::Theme| crate::context_menu::panel_style(look));
-    let dim = Color {
-        a: 0.35,
-        ..Color::BLACK
-    };
+    let dim = crate::controls::scrim(look);
     let click_away = mouse_area(
         container(space())
             .width(Length::Fill)

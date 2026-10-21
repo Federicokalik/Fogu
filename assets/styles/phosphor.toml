@@ -1,0 +1,83 @@
+# Built-in UI style "Phosphor". Every key is documented in README.md ("Custom UI styles");
+# a custom file in <config dir>/styles/ can `extends = "retro"` and override any of them.
+key = "retro"
+name = "Phosphor"
+aliases = ["phosphor", "crt", "terminal"]
+description = "CRT status line: tabs at the bottom, inverse video, monospace chrome"
+paired_scheme = "Fogu Phosphor"
+
+[color]
+accent = "#63ff8a"
+danger = "#ff5c5c"
+
+[surface]
+bg = { from = "base", toward = "black", dark = 0.25, light = 0.03 }
+raised = { from = "base", toward = "black", dark = 0.55, light = 0.08 }
+panel = { from = "bg", toward = "fg", dark = 0.0, light = 0.0 }
+canvas = { from = "raised", toward = "fg", dark = 0.0, light = 0.0 }
+border = { from = "base", toward = "accent", dark = 0.35, light = 0.45 }
+divider = { from = "base", toward = "accent", dark = 0.35, light = 0.5 }
+dim = { from = "fg", toward = "base", dark = 0.4, light = 0.4 }
+soft_dark = 0.2
+soft_light = 0.15
+hover = 0.1
+
+[shape]
+card = 0
+control = 0
+tab_top = 0
+tab_bottom = 0
+dot = 0
+border = 1
+focus = 1
+
+[shadow]
+panel = { x = 0, y = 0, blur = 0, alpha = 0, tint = "black", mix = 0 }
+floating = { x = 5, y = 5, blur = 0, alpha = 0.55, tint = "accent", mix = 0.45 }
+tab = { x = 0, y = 0, blur = 0, alpha = 0, tint = "black", mix = 0 }
+
+[bar]
+placement = "bottom"
+height = 26
+strip = 28
+fill = "solid"
+gradient = 0
+rule = true
+
+[tabs]
+style = "inverse"
+sizing = "fit"
+width = 160
+min_width = 80
+max_width = 260
+marker = "index"
+close = "never"
+separators = true
+inset = 3
+title_size = 12
+indicator = 0
+indicator_length = 0
+indicator_color = "accent"
+
+[layout]
+geometry = "docked"
+margin = 0
+sidebar = "docked"
+density = "compact"
+gutter = 10
+grip = 4
+
+[text]
+chrome = "mono"
+labels = "upper"
+active = "regular"
+
+[interaction]
+hover = "inverse"
+button = "inverse"
+selection = "inverse"
+
+[dialog]
+placement = "command-bar"
+footer = false
+backdrop = 0.35

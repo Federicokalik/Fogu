@@ -8,7 +8,7 @@ use iced::widget::{
     Id, Space, button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
     tooltip,
 };
-use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
+use iced::{Alignment, Border, Color, Element, Length, Theme};
 
 use super::breadcrumb::segments;
 use super::{PanelMsg, SftpMsg, SftpPanelState};
@@ -58,25 +58,14 @@ pub(crate) fn flat<'a>(
     look: Look,
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
-    let fg = look.fg;
-    button(text(label.into()).size(SIZE))
+    button(text(label.into()).size(SIZE).font(look.text.chrome))
         .padding([2, 6])
         .style(move |_theme: &Theme, status| {
-            let hover = Color { a: 0.14, ..fg };
-            button::Style {
-                background: match status {
-                    button::Status::Hovered | button::Status::Pressed => {
-                        Some(Background::Color(hover))
-                    }
-                    _ => None,
-                },
-                text_color: match status {
-                    button::Status::Disabled => Color { a: 0.35, ..fg },
-                    _ => fg,
-                },
-                border: Border::default().rounded(look.radius_small),
-                ..button::Style::default()
+            let mut style = controls::flat_button(look, status, false);
+            if matches!(status, button::Status::Disabled) {
+                style.text_color = Color { a: 0.35, ..look.fg };
             }
+            style
         })
         .on_press_maybe(on_press)
         .into()
@@ -98,31 +87,22 @@ pub fn view<'a>(tab: TabId, panel: &'a SftpPanelState, look: Look) -> Element<'a
     let has_path = panel.path.is_some();
     let nav = |glyph: Icon, tip: &'a str, m: PanelMsg, enabled: bool| {
         let color = if enabled { look.fg } else { look.dim };
-        tooltip(
+        controls::tip(
             button(icon(glyph, 13.0, color))
                 .width(24)
                 .height(24)
                 .padding(0)
                 .style(move |_theme: &Theme, status| controls::flat_button(look, status, false))
                 .on_press_maybe(enabled.then(|| msg(tab, m))),
-            container(text(tip).size(12))
-                .padding(4)
-                .style(container::rounded_box),
+            tip,
             tooltip::Position::Bottom,
+            look,
         )
     };
-    let dot =
-        container(Space::new().width(6).height(6)).style(move |_theme: &Theme| container::Style {
-            background: Some(look.accent.into()),
-            border: Border::default().rounded(3),
-            ..container::Style::default()
-        });
+    let dot = controls::dot(look, look.accent, 6.0);
     let header = row![
         dot,
-        label("SFTP", look.fg).font(Font {
-            weight: iced::font::Weight::Medium,
-            ..Font::DEFAULT
-        }),
+        label(look.text.label("SFTP"), look.fg).font(look.text.strong),
         Space::new().width(Length::Fill),
         follow_controls(tab, panel, look),
         flat(
@@ -203,7 +183,7 @@ pub fn view<'a>(tab: TabId, panel: &'a SftpPanelState, look: Look) -> Element<'a
         body = body.push(super::transfer_view::transfers(tab, panel, look));
     }
     let card = container(body)
-        .padding([look.gutter, look.gutter])
+        .padding([look.layout.gutter, look.layout.gutter])
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_theme: &Theme| controls::panel(look));
@@ -310,7 +290,7 @@ fn breadcrumb(tab: TabId, panel: &SftpPanelState, look: Look) -> Element<'_, Mes
         border: Border {
             color: Color { a: 0.55, ..dim },
             width: 1.0,
-            radius: look.radius_small.into(),
+            radius: look.shape.control.into(),
         },
         ..container::Style::default()
     });

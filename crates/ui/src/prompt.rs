@@ -21,15 +21,17 @@ use fogu_session::{
     Remember, SessionInput, sanitize_remote,
 };
 use iced::widget::{
-    Id, button, checkbox, column, container, operation, row, scrollable, space, text, text_input,
+    Id, checkbox, column, container, operation, row, scrollable, space, text, text_input,
 };
 use iced::{Color, Element, Font, Length, Task};
 use secrecy::zeroize::Zeroize;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::app::App;
+use crate::controls::{self, ButtonKind};
 use crate::message::Message;
 use crate::modal;
+use crate::palette::Look;
 use crate::tab::PaneId;
 
 /// Widest the dialog gets (fingerprints fit on one line).
@@ -331,7 +333,11 @@ impl App {
     /// pane's prompt (declined), menu, the sidebar's search (then its keyboard focus), inline
     /// rename.
     pub(crate) fn on_escape(&mut self) {
-        if self.settings.take().is_some() {
+        // The settings page's code editor first, then the page itself.
+        if let Some(page) = &mut self.settings {
+            if page.editor.take().is_none() {
+                self.settings = None;
+            }
             return;
         }
         if self.secret_dialog.take().is_some()
@@ -373,30 +379,60 @@ fn mono<'a>(value: String) -> Element<'a, Message> {
 }
 
 /// `label` above a monospace `value`.
-fn labelled(label: &str, value: String) -> Element<'_, Message> {
-    column![text(label).size(12), mono(value)].spacing(2).into()
+fn labelled(label: &str, value: String, look: Look) -> Element<'_, Message> {
+    column![
+        text(label).size(12).font(look.text.chrome).color(look.dim),
+        mono(value)
+    ]
+    .spacing(2)
+    .into()
 }
 
-fn choose_button(label: &str, pane: PaneId, choice: Choice) -> button::Button<'_, Message> {
-    button(text(label)).on_press(Message::Prompt(PromptMsg::Choose(pane, choice)))
+fn choose_button<'a>(
+    label: &str,
+    pane: PaneId,
+    choice: Choice,
+    role: ButtonKind,
+    look: Look,
+) -> Element<'a, Message> {
+    controls::action(
+        label,
+        role,
+        look,
+        Some(Message::Prompt(PromptMsg::Choose(pane, choice))),
+    )
+    .into()
 }
 
-fn field(pane: PaneId, idx: usize, value: &SecretString, secret: bool) -> Element<'_, Message> {
+fn field(
+    pane: PaneId,
+    idx: usize,
+    value: &SecretString,
+    secret: bool,
+    look: Look,
+) -> Element<'_, Message> {
     text_input("", value.expose_secret())
         .id(field_id(pane, idx))
         .secure(secret)
         .on_input(move |typed| Message::Prompt(PromptMsg::Input(pane, idx, PromptText::new(typed))))
         .on_submit(Message::Prompt(PromptMsg::FieldEnter(pane, idx)))
         .padding(6)
+        .style(move |_theme: &iced::Theme, status| controls::field(look, status))
         .into()
 }
 
 /// The "Remember" part of a secret prompt: a checkbox when the Secret Service takes it (it
 /// replaces a rejected stored secret, with a Forget button beside the note), else why not.
-fn remember<'a>(pane: PaneId, state: &PromptState, what: &'static str) -> Element<'a, Message> {
+fn remember<'a>(
+    pane: PaneId,
+    state: &PromptState,
+    what: &'static str,
+    look: Look,
+) -> Element<'a, Message> {
     let tick = |label: String| {
         checkbox(state.remember)
             .label(label)
+            .font(look.text.chrome)
             .on_toggle(move |on| Message::Prompt(PromptMsg::Remember(pane, on)))
     };
     match remember_of(&state.kind) {
@@ -406,7 +442,13 @@ fn remember<'a>(pane: PaneId, state: &PromptState, what: &'static str) -> Elemen
             row![
                 tick(format!("Replace the stored {what}")),
                 space().width(Length::Fill),
-                choose_button("Forget it", pane, Choice::Forget).style(button::secondary),
+                choose_button(
+                    "Forget it",
+                    pane,
+                    Choice::Forget,
+                    ButtonKind::Secondary,
+                    look
+                ),
             ]
             .align_y(iced::Alignment::Center),
         ]
@@ -420,65 +462,92 @@ fn remember<'a>(pane: PaneId, state: &PromptState, what: &'static str) -> Elemen
 }
 
 /// `[primary] [Cancel]` for a secret prompt.
-fn submit_row(pane: PaneId, label: &str) -> Element<'_, Message> {
+fn submit_row<'a>(pane: PaneId, label: &str, look: Look) -> Element<'a, Message> {
     row![
-        button(text(label))
-            .style(button::primary)
-            .on_press(Message::Prompt(PromptMsg::Submit(pane))),
-        choose_button("Cancel", pane, Choice::Cancel).style(button::secondary),
+        controls::action(
+            label,
+            ButtonKind::Primary,
+            look,
+            Some(Message::Prompt(PromptMsg::Submit(pane)))
+        ),
+        choose_button("Cancel", pane, Choice::Cancel, ButtonKind::Secondary, look),
     ]
     .spacing(8)
     .into()
 }
 
 /// The dialog for pane `pane`'s open prompt.
-pub(crate) fn view(pane: PaneId, state: &PromptState) -> Element<'_, Message> {
-    let title = |t: &'static str| text(t).size(18);
-    let content: Element<'_, Message> = match &state.kind {
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per prompt kind; each keeps its content and actions side by side"
+)]
+pub(crate) fn view(pane: PaneId, state: &PromptState, look: Look) -> Element<'_, Message> {
+    let title = |t: &str| modal::title(t, look);
+    let body = |t: String| text(t).font(look.text.chrome);
+    let (content, actions): (Element<'_, Message>, Element<'_, Message>) = match &state.kind {
         PromptKind::HostKeyUnknown {
             host,
             port,
             key_type,
             fingerprint,
-        } => column![
-            title("Unknown host key"),
-            text(format!(
-                "The authenticity of {}:{port} can't be established. Compare the fingerprint \
-                 with the server's (ssh-keygen -lf) before trusting it.",
-                safe(host)
-            )),
-            labelled("Key type", safe(key_type)),
-            labelled("Fingerprint", safe(fingerprint)),
-            row![
-                choose_button("Accept once", pane, Choice::AcceptOnce).style(button::secondary),
-                choose_button("Accept and save", pane, Choice::AcceptAndSave),
-                space().width(Length::Fill),
-                choose_button("Cancel", pane, Choice::Cancel).style(button::secondary),
+        } => (
+            column![
+                title("Unknown host key"),
+                body(format!(
+                    "The authenticity of {}:{port} can't be established. Compare the \
+                     fingerprint with the server's (ssh-keygen -lf) before trusting it.",
+                    safe(host)
+                )),
+                labelled("Key type", safe(key_type), look),
+                labelled("Fingerprint", safe(fingerprint), look),
             ]
-            .spacing(8),
-        ]
-        .spacing(12)
-        .into(),
-        PromptKind::HostKeyChanged { .. } => changed_view(pane, state),
-        PromptKind::Password { user, host, .. } => column![
-            title("Password"),
-            text(format!("Password for {}@{}", safe(user), safe(host))),
-            first_field(pane, state),
-            remember(pane, state, "password"),
-            submit_row(pane, "Log in"),
-        ]
-        .spacing(12)
-        .into(),
-        PromptKind::KeyPassphrase { path, .. } => column![
-            title("Key passphrase"),
-            text("Passphrase for the private key"),
-            mono(safe(&path.display().to_string())),
-            first_field(pane, state),
-            remember(pane, state, "passphrase"),
-            submit_row(pane, "Unlock"),
-        ]
-        .spacing(12)
-        .into(),
+            .spacing(12)
+            .into(),
+            row![
+                choose_button(
+                    "Accept once",
+                    pane,
+                    Choice::AcceptOnce,
+                    ButtonKind::Secondary,
+                    look
+                ),
+                choose_button(
+                    "Accept and save",
+                    pane,
+                    Choice::AcceptAndSave,
+                    ButtonKind::Primary,
+                    look
+                ),
+                space().width(24),
+                choose_button("Cancel", pane, Choice::Cancel, ButtonKind::Secondary, look),
+            ]
+            .spacing(8)
+            .into(),
+        ),
+        PromptKind::HostKeyChanged { .. } => changed_view(pane, state, look),
+        PromptKind::Password { user, host, .. } => (
+            column![
+                title("Password"),
+                body(format!("Password for {}@{}", safe(user), safe(host))),
+                first_field(pane, state, look),
+                remember(pane, state, "password", look),
+            ]
+            .spacing(12)
+            .into(),
+            submit_row(pane, "Log in", look),
+        ),
+        PromptKind::KeyPassphrase { path, .. } => (
+            column![
+                title("Key passphrase"),
+                body("Passphrase for the private key".to_owned()),
+                mono(safe(&path.display().to_string())),
+                first_field(pane, state, look),
+                remember(pane, state, "passphrase", look),
+            ]
+            .spacing(12)
+            .into(),
+            submit_row(pane, "Unlock", look),
+        ),
         PromptKind::KeyboardInteractive {
             name,
             instructions,
@@ -489,9 +558,9 @@ pub(crate) fn view(pane: PaneId, state: &PromptState) -> Element<'_, Message> {
             } else {
                 safe(name)
             };
-            let mut col = column![text(heading).size(18)].spacing(12);
+            let mut col = column![title(&heading)].spacing(12);
             if !instructions.is_empty() {
-                col = col.push(text(sanitize_remote(
+                col = col.push(body(sanitize_remote(
                     instructions,
                     PROMPT_INSTRUCTIONS_MAX_CHARS,
                     true,
@@ -500,13 +569,13 @@ pub(crate) fn view(pane: PaneId, state: &PromptState) -> Element<'_, Message> {
             for (idx, (prompt, answer)) in prompts.iter().zip(&state.answers).enumerate() {
                 col = col.push(
                     column![
-                        text(safe(&prompt.text)),
-                        field(pane, idx, answer, !prompt.echo)
+                        body(safe(&prompt.text)),
+                        field(pane, idx, answer, !prompt.echo, look)
                     ]
                     .spacing(4),
                 );
             }
-            col.push(submit_row(pane, "Submit")).into()
+            (col.into(), submit_row(pane, "Submit", look))
         }
     };
     // A jump host's prompt says so above everything else (its host differs from the tab's).
@@ -516,26 +585,32 @@ pub(crate) fn view(pane: PaneId, state: &PromptState) -> Element<'_, Message> {
                 "Jump host {} (on the way to this tab's host)",
                 safe(via)
             ))
-            .size(13),
+            .size(13)
+            .font(look.text.chrome)
+            .color(look.dim),
             content
         ]
         .spacing(8)
         .into(),
         None => content,
     };
-    modal::frame(scrollable(content).into(), DIALOG_W)
+    modal::frame(scrollable(content).into(), Some(actions), DIALOG_W, look)
 }
 
 /// The masked field of a password / passphrase prompt.
-fn first_field(pane: PaneId, state: &PromptState) -> Element<'_, Message> {
-    state
-        .answers
-        .first()
-        .map_or_else(|| column![].into(), |answer| field(pane, 0, answer, true))
+fn first_field(pane: PaneId, state: &PromptState, look: Look) -> Element<'_, Message> {
+    state.answers.first().map_or_else(
+        || column![].into(),
+        |answer| field(pane, 0, answer, true, look),
+    )
 }
 
 /// The red "HOST KEY CHANGED" screen: `Cancel` is the default; replacing takes two clicks.
-fn changed_view(pane: PaneId, state: &PromptState) -> Element<'_, Message> {
+fn changed_view(
+    pane: PaneId,
+    state: &PromptState,
+    look: Look,
+) -> (Element<'_, Message>, Element<'_, Message>) {
     let PromptKind::HostKeyChanged {
         host,
         port,
@@ -546,43 +621,63 @@ fn changed_view(pane: PaneId, state: &PromptState) -> Element<'_, Message> {
         line,
     } = &state.kind
     else {
-        return column![].into();
+        return (column![].into(), column![].into());
     };
-    let header = container(text("HOST KEY CHANGED").size(18).color(Color::WHITE))
-        .padding([6, 10])
-        .width(Length::Fill)
-        .style(|_theme: &iced::Theme| container::background(DANGER));
+    let header = container(
+        text("HOST KEY CHANGED")
+            .size(18)
+            .font(look.text.strong)
+            .color(Color::WHITE),
+    )
+    .padding([6, 10])
+    .width(Length::Fill)
+    .style(|_theme: &iced::Theme| container::background(DANGER));
     let replace = if state.replace_armed {
-        choose_button("Are you sure? Replace and connect", pane, Choice::Replace)
+        choose_button(
+            "Are you sure? Replace and connect",
+            pane,
+            Choice::Replace,
+            ButtonKind::Danger,
+            look,
+        )
     } else {
-        choose_button("Replace and connect", pane, Choice::ArmReplace)
+        choose_button(
+            "Replace and connect",
+            pane,
+            Choice::ArmReplace,
+            ButtonKind::Danger,
+            look,
+        )
     };
-    column![
+    let content = column![
         header,
         text(format!(
             "The host key of {}:{port} does not match the recorded one. Someone may be \
              intercepting the connection (man-in-the-middle attack), or the server's key was \
              replaced. Do not continue unless you know why it changed.",
             safe(host)
-        )),
-        labelled("Recorded fingerprint", safe(old_fingerprint)),
+        ))
+        .font(look.text.chrome),
+        labelled("Recorded fingerprint", safe(old_fingerprint), look),
         labelled(
             "Offered fingerprint",
-            format!("{} {}", safe(key_type), safe(fingerprint))
+            format!("{} {}", safe(key_type), safe(fingerprint)),
+            look
         ),
         labelled(
             "Stale entry",
-            format!("{}:{line}", safe(&known_hosts_path.display().to_string()))
+            format!("{}:{line}", safe(&known_hosts_path.display().to_string())),
+            look
         ),
-        row![
-            choose_button("Cancel", pane, Choice::Cancel).style(button::primary),
-            space().width(Length::Fill),
-            replace.style(button::danger),
-        ]
-        .spacing(8),
     ]
-    .spacing(12)
-    .into()
+    .spacing(12);
+    let actions = row![
+        choose_button("Cancel", pane, Choice::Cancel, ButtonKind::Primary, look),
+        space().width(32),
+        replace,
+    ]
+    .spacing(8);
+    (content.into(), actions.into())
 }
 
 #[cfg(test)]

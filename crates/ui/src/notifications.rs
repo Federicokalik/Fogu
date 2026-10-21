@@ -191,12 +191,17 @@ fn toast_view(note: &Notification, look: Look) -> Element<'_, Message> {
     let mut body = column![
         text(&note.title)
             .size(14)
-            .font(crate::UI_MEDIUM)
+            .font(look.text.strong)
             .color(look.fg)
     ]
     .spacing(4);
     if !note.detail.is_empty() {
-        body = body.push(text(&note.detail).size(13).color(look.dim));
+        body = body.push(
+            text(&note.detail)
+                .size(13)
+                .font(look.text.chrome)
+                .color(look.dim),
+        );
     }
     match &note.action {
         Some(ToastAction::ClipboardWrite) => {
@@ -234,7 +239,7 @@ fn toast_view(note: &Notification, look: Look) -> Element<'_, Message> {
     .style(move |_theme: &Theme, status| button::Style {
         background: matches!(status, button::Status::Hovered | button::Status::Pressed)
             .then_some(look.hover.into()),
-        border: iced::Border::default().rounded(4),
+        border: iced::Border::default().rounded(look.shape.control.min(10.0)),
         ..button::Style::default()
     })
     .on_press(Message::DismissToast(id));
@@ -243,14 +248,7 @@ fn toast_view(note: &Notification, look: Look) -> Element<'_, Message> {
         Level::Warn => Color::from_rgb8(0xf5, 0xa6, 0x24),
         Level::Error => look.danger,
     };
-    let dot = container(iced::widget::space().width(8).height(8))
-        .padding(iced::Padding::ZERO)
-        .style(move |_theme: &Theme| container::Style {
-            background: Some(level.into()),
-            border: iced::Border::default().rounded(4),
-            ..container::Style::default()
-        });
-    let dot = container(dot).padding(Padding::ZERO.top(6));
+    let dot = container(crate::controls::dot(look, level, 8.0)).padding(Padding::ZERO.top(6));
     container(
         row![dot, body.width(Length::Fill), close]
             .spacing(10)
@@ -259,11 +257,7 @@ fn toast_view(note: &Notification, look: Look) -> Element<'_, Message> {
     .padding([12, 14])
     // Fixed width: a Fill child would stretch the column and defeat the right alignment.
     .width(TOAST_W)
-    .style(move |_theme: &Theme| {
-        let mut style = crate::context_menu::panel_style(look);
-        style.border.radius = 8.0.into();
-        style
-    })
+    .style(move |_theme: &Theme| crate::context_menu::panel_style(look))
     .into()
 }
 

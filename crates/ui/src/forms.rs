@@ -111,12 +111,19 @@ fn with_menu<'a, Id: Copy + 'a>(
     .into()
 }
 
-fn small_button<'a, M: Clone + 'a>(label: &str, on_press: Option<M>) -> Element<'a, M> {
-    button(text(label.to_owned()).size(LABEL_SIZE))
-        .padding([2, 8])
-        .style(button::secondary)
-        .on_press_maybe(on_press)
-        .into()
+fn small_button<'a, M: Clone + 'a>(look: Look, label: &str, on_press: Option<M>) -> Element<'a, M> {
+    button(
+        text(crate::controls::button_label(look, label))
+            .size(LABEL_SIZE)
+            .font(look.text.chrome),
+    )
+    .padding([2, 8])
+    .style(crate::controls::kind(
+        look,
+        crate::controls::ButtonKind::Secondary,
+    ))
+    .on_press_maybe(on_press)
+    .into()
 }
 
 /// A one-line text field; `placeholder` shows the inherited value.
@@ -204,13 +211,14 @@ pub fn color<'a, Id: Copy + 'a>(
                 ..button::Style::default()
             })
             .on_press(Field(id, FieldValue::Color(Some(rgb))));
-        swatches = swatches.push(tooltip(
+        swatches = swatches.push(crate::controls::tip(
             swatch,
-            container(text(name).size(NOTE_SIZE)).padding(4),
+            name,
             tooltip::Position::Top,
+            look,
         ));
     }
-    let none = small_button("None", Some(Field(id, FieldValue::Color(None))));
+    let none = small_button(look, "None", Some(Field(id, FieldValue::Color(None))));
     let field = with_menu(id, hex, input(id, hex, "#rrggbb").width(100));
     let picker = color_picker(value, 260.0, move |c| Field(id, FieldValue::Color(Some(c))));
     labeled(
@@ -237,7 +245,7 @@ pub fn path<'a, Id: Copy + 'a>(
     picker: Result<(), &'static str>,
 ) -> Element<'a, Field<Id>> {
     let field = with_menu(id, value, input(id, value, placeholder).width(Length::Fill));
-    let browse = browse_button(id, picker);
+    let browse = browse_button(look, id, picker);
     labeled(
         look,
         label,
@@ -249,21 +257,18 @@ pub fn path<'a, Id: Copy + 'a>(
 }
 
 fn browse_button<'a, Id: Copy + 'a>(
+    look: Look,
     id: Id,
     picker: Result<(), &'static str>,
 ) -> Element<'a, Field<Id>> {
     let button = small_button(
+        look,
         "Browse…",
         picker.is_ok().then_some(Field(id, FieldValue::Browse)),
     );
     match picker {
         Ok(()) => button,
-        Err(why) => tooltip(
-            button,
-            container(text(why).size(NOTE_SIZE)).padding(4),
-            tooltip::Position::Top,
-        )
-        .into(),
+        Err(why) => crate::controls::tip(button, why, tooltip::Position::Top, look),
     }
 }
 
@@ -283,23 +288,29 @@ pub fn list<'a, Id: Copy + 'a>(
             .on_input(move |s| Field(id, FieldValue::Item(i, s)))
             .size(INPUT_SIZE)
             .padding(4);
-        rows = rows.push(list_row(id, i, field.into()));
+        rows = rows.push(list_row(look, id, i, field.into()));
     }
-    let mut add = row![small_button("+ Add", Some(Field(id, FieldValue::Add)))].spacing(6);
+    let mut add = row![small_button(
+        look,
+        "+ Add",
+        Some(Field(id, FieldValue::Add))
+    )]
+    .spacing(6);
     if let Some(picker) = browse {
-        add = add.push(browse_button(id, picker));
+        add = add.push(browse_button(look, id, picker));
     }
     labeled(look, label, rows.push(add).into())
 }
 
 /// `content` followed by "↑" and "×" for list row `i`.
 pub fn list_row<'a, Id: Copy + 'a>(
+    look: Look,
     id: Id,
     i: usize,
     content: Element<'a, Field<Id>>,
 ) -> Element<'a, Field<Id>> {
-    let up = small_button("↑", (i > 0).then_some(Field(id, FieldValue::Up(i))));
-    let remove = small_button("×", Some(Field(id, FieldValue::Remove(i))));
+    let up = small_button(look, "↑", (i > 0).then_some(Field(id, FieldValue::Up(i))));
+    let remove = small_button(look, "×", Some(Field(id, FieldValue::Remove(i))));
     row![container(content).width(Length::Fill), up, remove]
         .spacing(4)
         .align_y(Alignment::Center)
@@ -328,9 +339,9 @@ pub fn kv_list<'a, Id: Copy + 'a>(
         let pair = row![key, text("=").color(look.dim), value]
             .spacing(4)
             .align_y(Alignment::Center);
-        rows = rows.push(list_row(id, i, pair.into()));
+        rows = rows.push(list_row(look, id, i, pair.into()));
     }
-    let add = small_button("+ Add", Some(Field(id, FieldValue::Add)));
+    let add = small_button(look, "+ Add", Some(Field(id, FieldValue::Add)));
     labeled(look, label, rows.push(add).into())
 }
 
@@ -368,17 +379,12 @@ pub fn secret_hint<'a, Id: Copy + 'a>(
 ) -> Element<'a, Field<Id>> {
     let on = |value| disabled.is_none().then_some(Field(id, value));
     let buttons = row![
-        small_button("Set…", on(FieldValue::SetSecret)),
-        small_button("Clear", on(FieldValue::ClearSecret)),
+        small_button(look, "Set…", on(FieldValue::SetSecret)),
+        small_button(look, "Clear", on(FieldValue::ClearSecret)),
     ]
     .spacing(6);
     let buttons: Element<'a, Field<Id>> = match disabled {
-        Some(why) => tooltip(
-            buttons,
-            container(text(why).size(NOTE_SIZE)).padding(4),
-            tooltip::Position::Top,
-        )
-        .into(),
+        Some(why) => crate::controls::tip(buttons, why, tooltip::Position::Top, look),
         None => buttons.into(),
     };
     let row = row![

@@ -2,6 +2,7 @@
 //! items at an anchor point, closed on click-away / Esc. Items map to an [`Action`] (same enum as
 //! hotkeys) or to a UI-only [`Message`]. Later menus add builders, not a new widget.
 
+use fogu_core::style::SelectionMode;
 use fogu_core::{Action, RgbColor};
 use iced::widget::{
     Id, button, column, container, mouse_area, opaque, row, rule, slider, space, stack, text,
@@ -356,7 +357,12 @@ fn item_view(item: &MenuItem, selected: bool, look: Look) -> Element<'_, Message
         Some(name) => (name, true),
         None => (item.label.as_str(), false),
     };
-    label = label.push(text(name).size(13).width(Length::Fill));
+    label = label.push(
+        text(name)
+            .size(13)
+            .font(look.text.chrome)
+            .width(Length::Fill),
+    );
     if submenu {
         label = label.push(text("›").size(15).color(look.dim));
     }
@@ -366,27 +372,26 @@ fn item_view(item: &MenuItem, selected: bool, look: Look) -> Element<'_, Message
         .padding([5, 12])
         .style(move |_theme: &iced::Theme, status| {
             let hot = enabled && (selected || matches!(status, button::Status::Hovered));
+            // A hot row speaks the style's selection language (fill or inverse video).
+            let (background, fg) = if hot && look.interaction.selection == SelectionMode::Inverse {
+                (Some(look.accent), look.on_accent)
+            } else {
+                (hot.then_some(look.hover), look.fg)
+            };
             button::Style {
-                background: hot.then_some(look.hover.into()),
+                background: background.map(Into::into),
                 text_color: if enabled {
-                    look.fg
+                    fg
                 } else {
                     Color { a: 0.4, ..look.fg }
                 },
-                border: Border::default().rounded(4),
+                border: Border::default().rounded(look.shape.control.min(6.0)),
                 ..button::Style::default()
             }
         })
         .on_press_maybe(enabled.then(|| item.action.message()));
     match item.tooltip {
-        Some(hint) => tooltip(
-            button,
-            container(text(hint).size(12))
-                .padding(6)
-                .style(container::rounded_box),
-            tooltip::Position::Bottom,
-        )
-        .into(),
+        Some(hint) => crate::controls::tip(button, hint, tooltip::Position::Bottom, look),
         None => button.into(),
     }
 }
@@ -428,7 +433,8 @@ fn menu_box(menu: &ContextMenu, look: Look) -> Element<'_, Message> {
                 .on_input(Message::MenuInput)
                 .on_submit(Message::MenuSubmit)
                 .size(13)
-                .padding(6),
+                .padding(6)
+                .style(move |_theme: &iced::Theme, status| crate::controls::field(look, status)),
         );
         if matches!(input.submit, MenuSubmit::Color(_)) {
             if input.invalid {
@@ -438,9 +444,12 @@ fn menu_box(menu: &ContextMenu, look: Look) -> Element<'_, Message> {
             let sliders = crate::color_picker::color_picker(typed, MENU_W - 32.0, |c| {
                 Message::MenuInput(c.to_string())
             });
-            let apply = button(text("Apply").size(13))
-                .padding([4, 10])
-                .on_press_maybe(typed.map(|_| Message::MenuSubmit));
+            let apply = crate::controls::action(
+                "Apply",
+                crate::controls::ButtonKind::Primary,
+                look,
+                typed.map(|_| Message::MenuSubmit),
+            );
             col = col.push(
                 column![
                     iced::Element::from(sliders),

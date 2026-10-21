@@ -1,3 +1,7 @@
 too-many-lines-threshold = 100
 cognitive-complexity-threshold = 25
 msrv = "1.99.0"
+# `ui::palette::Look` (the UI style's colours and tokens, ~600 bytes) is `Copy` on purpose: every
+# widget style closure captures it by value. Passing it by reference would only move the copy
+# into each closure.
+pass-by-value-size-limit = 1024

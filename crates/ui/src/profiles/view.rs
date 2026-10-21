@@ -2,6 +2,7 @@
 //! title, search, quick connect, then the sections and rows from [`lines`].
 
 use fogu_core::config::ProfileClick;
+use fogu_core::style::SidebarMode;
 use fogu_core::{Action, Config};
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
@@ -36,14 +37,25 @@ pub(crate) fn with_sidebar<'a>(
     if !view.open {
         return body;
     }
-    let edge = look.border;
+    let floating = look.layout.sidebar == SidebarMode::Floating;
+    // Docked: a 1 px line in the handle. Floating: the gap between the cards is the handle.
+    let edge = if floating {
+        Color::TRANSPARENT
+    } else {
+        look.border
+    };
     let line = container(space())
         .width(1)
         .height(Length::Fill)
         .style(move |_theme: &iced::Theme| container::background(edge));
+    let handle_w = if floating {
+        look.layout.margin.max(HANDLE_W)
+    } else {
+        HANDLE_W
+    };
     let handle = mouse_area(
         container(line)
-            .width(HANDLE_W)
+            .width(handle_w)
             .height(Length::Fill)
             .align_x(Alignment::Center),
     )
@@ -69,18 +81,9 @@ fn title_row<'a>(look: Look) -> Element<'a, Message> {
             .style(move |_theme: &iced::Theme, status| controls::flat_button(look, status, false))
             .on_press(on_press)
     };
-    let dot =
-        container(space().width(6).height(6)).style(move |_theme: &iced::Theme| container::Style {
-            background: Some(look.accent.into()),
-            border: iced::Border::default().rounded(3),
-            ..container::Style::default()
-        });
     row![
-        dot,
-        text("PROFILES")
-            .size(11)
-            .color(look.dim)
-            .width(Length::Fill),
+        controls::dot(look, look.accent, 6.0),
+        container(controls::section_label(look, "Profiles")).width(Length::Fill),
         action(Icon::Plus, msg(ProfilesMsg::NewMenu)),
         action(Icon::Close, Message::Action(Action::ToggleProfiles)),
     ]
@@ -102,14 +105,7 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
     );
     let rows = rows(&all, config, &view.recent, now_secs());
     let lines = lines(view, config, &all, &rows);
-    let row_look = RowLook {
-        fg: look.fg,
-        dim: look.dim,
-        selected: Color {
-            a: 0.18,
-            ..look.accent
-        },
-    };
+    let row_look = RowLook::new(look);
     let mut list = column![].spacing(1);
     let mut pos = 0;
     for line in lines {
@@ -128,8 +124,14 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
                 let header = button(
                     row![
                         fixed(arrow, 11.0, look.dim),
-                        text(label.to_uppercase()).size(10).color(look.dim),
-                        text(format!("{count}")).size(10).color(look.dim),
+                        text(look.text.label(&label))
+                            .size(10)
+                            .font(look.text.chrome)
+                            .color(look.dim),
+                        text(format!("{count}"))
+                            .size(10)
+                            .font(look.text.chrome)
+                            .color(look.dim),
                         space().width(Length::Fill),
                     ]
                     .spacing(5)
@@ -203,12 +205,18 @@ fn sidebar<'a>(view: &'a ProfilesView, config: &Config, look: Look) -> Element<'
     let list = scrollable(list)
         .direction(Direction::Vertical(scroller))
         .height(Length::Fill);
-    let body = column![top, list].spacing(10).padding(look.gutter);
-    let bg = look.panel;
+    let body = column![top, list].spacing(10).padding(look.layout.gutter);
+    let floating = look.layout.sidebar == SidebarMode::Floating;
     let panel = container(body)
         .width(view.width)
         .height(Length::Fill)
-        .style(move |_theme: &iced::Theme| container::background(bg));
+        .style(move |_theme: &iced::Theme| {
+            if floating {
+                controls::panel(look)
+            } else {
+                container::background(look.panel)
+            }
+        });
     mouse_area(panel)
         .on_enter(msg(ProfilesMsg::Hover(true)))
         .on_exit(msg(ProfilesMsg::Hover(false)))

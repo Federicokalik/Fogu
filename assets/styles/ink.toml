@@ -1,0 +1,83 @@
+# Built-in UI style "Ink". Every key is documented in README.md ("Custom UI styles");
+# a custom file in <config dir>/styles/ can `extends = "minimal"` and override any of them.
+key = "minimal"
+name = "Ink"
+aliases = ["ink", "paper", "swiss"]
+description = "Swiss and typographic: hairlines, underlines, no shadows"
+paired_scheme = "Fogu Ink Paper"
+
+[color]
+accent = "#2f6fed"
+danger = "#d92d20"
+
+[surface]
+bg = { from = "base", toward = "fg", dark = 0.03, light = 0.025 }
+raised = { from = "base", toward = "fg", dark = 0.0, light = 0.0 }
+panel = { from = "base", toward = "fg", dark = 0.02, light = 0.015 }
+canvas = { from = "raised", toward = "fg", dark = 0.0, light = 0.0 }
+border = { from = "base", toward = "fg", dark = 0.14, light = 0.16 }
+divider = { from = "base", toward = "fg", dark = 0.14, light = 0.16 }
+dim = { from = "fg", toward = "base", dark = 0.42, light = 0.42 }
+soft_dark = 0.14
+soft_light = 0.1
+hover = 0.06
+
+[shape]
+card = 2
+control = 2
+tab_top = 0
+tab_bottom = 0
+dot = 0
+border = 1
+focus = 1
+
+[shadow]
+panel = { x = 0, y = 0, blur = 0, alpha = 0, tint = "black", mix = 0 }
+floating = { x = 0, y = 0, blur = 0, alpha = 0, tint = "black", mix = 0 }
+tab = { x = 0, y = 0, blur = 0, alpha = 0, tint = "black", mix = 0 }
+
+[bar]
+placement = "top"
+height = 34
+strip = 26
+fill = "base"
+gradient = 0
+rule = true
+
+[tabs]
+style = "underline"
+sizing = "fit"
+width = 160
+min_width = 72
+max_width = 240
+marker = "none"
+close = "hover"
+separators = false
+inset = 0
+title_size = 12.5
+indicator = 2
+indicator_length = 0
+indicator_color = "fg"
+
+[layout]
+geometry = "docked"
+margin = 0
+sidebar = "docked"
+density = "comfy"
+gutter = 14
+grip = 4
+
+[text]
+chrome = "ui"
+labels = "sentence"
+active = "medium"
+
+[interaction]
+hover = "outline"
+button = "outline"
+selection = "fill"
+
+[dialog]
+placement = "top-sheet"
+footer = false
+backdrop = 0.18

@@ -1,0 +1,14 @@
+# "Fogu Synthwave": built-in palette paired with a UI style. Neon on deep indigo, for Synthwave.
+name = "Fogu Synthwave"
+fg = "#ede3ff"
+bg = "#140b24"
+cursor = "#ff4fd8"
+cursor_text = "#140b24"
+selection_bg = "#3b1f63"
+selection_fg = "#ffffff"
+ansi = [
+    "#1e1233", "#ff4f7b", "#72f1b8", "#fede5d",
+    "#4fa8ff", "#ff4fd8", "#3ee6ff", "#e2d6f7",
+    "#7a6a9c", "#ff7fa0", "#9df7cf", "#ffea8f",
+    "#84c2ff", "#ff85e6", "#85f0ff", "#ffffff",
+]

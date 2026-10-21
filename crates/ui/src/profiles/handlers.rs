@@ -130,6 +130,8 @@ impl App {
     }
 
     pub(crate) fn on_profiles(&mut self, message: ProfilesMsg) -> Task<Message> {
+        // Where the sidebar sits in the window (its pointer moves are sidebar-local).
+        let (margin, top) = (self.island_margin(), self.top_chrome_h());
         let view = &mut self.profiles;
         match message {
             ProfilesMsg::Query(query) => {
@@ -176,8 +178,8 @@ impl App {
             ProfilesMsg::Hover(over) => view.hovered = over,
             // Sidebar-local → window: it sits at the right edge, under the tab bar.
             ProfilesMsg::Cursor(at) => {
-                let left = self.window_size.width - view.width;
-                view.cursor = iced::Point::new(at.x + left, at.y + crate::tab_bar::BAR_H);
+                let left = self.window_size.width - margin - view.width;
+                view.cursor = iced::Point::new(at.x + left, at.y + top - margin);
             }
             ProfilesMsg::ResizeStart => view.resizing = true,
             ProfilesMsg::ResizeTo(x) => {

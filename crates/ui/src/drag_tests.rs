@@ -26,16 +26,6 @@ fn drop_zones_are_the_nearest_quarter_edge_else_the_centre() {
     }
 }
 
-#[test]
-fn insertion_index_picks_the_nearest_gap() {
-    let s = TAB_STRIDE;
-    assert_eq!(insertion_index(-30.0, 3), 0);
-    assert_eq!(insertion_index(s * 0.4, 3), 0);
-    assert_eq!(insertion_index(s * 0.6, 3), 1);
-    assert_eq!(insertion_index(s * 2.5 + 1.0, 3), 3);
-    assert_eq!(insertion_index(s * 10.0, 3), 3);
-}
-
 fn app() -> App {
     let runtime = Arc::new(SessionRuntime::new().unwrap());
     let resolved = ResolvedFont {
@@ -140,8 +130,13 @@ fn a_short_press_is_not_a_drag_and_tabs_reorder_in_the_bar() {
     // Dragged past the third header: last.
     let _ = app.update(Message::Drag(DragMsg::Start(Payload::Tab(first))));
     let _ = app.update(Message::Drag(DragMsg::Move(Point::new(50.0, 10.0))));
+    let past_last: f32 = app
+        .tab_widths()
+        .iter()
+        .map(|w| w + crate::tab_layout::GAP)
+        .sum();
     let _ = app.update(Message::Drag(DragMsg::Move(Point::new(
-        TAB_STRIDE * 3.0,
+        app.strip_left() + past_last,
         10.0,
     ))));
     let _ = app.update(Message::Drag(DragMsg::Release));

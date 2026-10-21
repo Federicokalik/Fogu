@@ -1,0 +1,14 @@
+# "Fogu Mica": built-in palette paired with a UI style. Slate blue, for Mica.
+name = "Fogu Mica"
+fg = "#e3e7ee"
+bg = "#1c2028"
+cursor = "#4cc2ff"
+cursor_text = "#1c2028"
+selection_bg = "#3a4a63"
+selection_fg = "#f2f5fa"
+ansi = [
+    "#2a2f3a", "#f2777a", "#8fd694", "#f5cf7a",
+    "#6cb6ff", "#c79bf2", "#5fd7e8", "#d4d9e2",
+    "#7a8396", "#ff9a9c", "#a9e8ae", "#ffe09a",
+    "#94ccff", "#dab8ff", "#8be7f2", "#f4f7fb",
+]

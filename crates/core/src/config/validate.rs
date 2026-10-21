@@ -9,6 +9,7 @@ use crate::action::Action;
 use crate::keychord::KeyChord;
 use crate::profile::{Profile, ProfileId, ProfileKind};
 use crate::scheme::SchemeCatalog;
+use crate::style::StyleCatalog;
 
 /// One semantic problem found by [`validate`]. Syntax errors never reach this point (they fail
 /// at [`load`](super::load) time instead).
@@ -69,6 +70,9 @@ pub enum ConfigIssue {
     /// `appearance.color_scheme` does not match any built-in or custom scheme.
     #[error("unknown colour scheme {0:?}")]
     UnknownColorScheme(String),
+    /// `appearance.ui_theme` does not match any built-in or custom UI style.
+    #[error("unknown UI style {0:?}")]
+    UnknownUiStyle(String),
     /// The same chord is bound to more than one action.
     #[error("{chord} is bound to more than one action: {actions:?}")]
     AmbiguousChord {
@@ -92,23 +96,34 @@ impl ConfigIssue {
             | Self::DuplicateProfileName { profile: id, .. }
             | Self::JumpHostCycle { profile: id, .. }
             | Self::UnknownGroup { profile: id, .. } => Some(id),
-            Self::UnknownColorScheme(_) | Self::AmbiguousChord { .. } => None,
+            Self::UnknownColorScheme(_) | Self::UnknownUiStyle(_) | Self::AmbiguousChord { .. } => {
+                None
+            }
         }
     }
 }
 
 /// Checks `config` for problems that successful deserialisation cannot catch: duplicate ids and
 /// names, empty names, SSH profiles without a host, jump-host loops, dangling group references,
-/// an unknown colour scheme name, and chords bound to more than one action. Returns every issue
+/// an unknown colour scheme or UI style name, and chords bound to more than one action. Returns every issue
 /// found (never panics, never fails to load the config).
 #[must_use]
 pub fn validate(config: &Config) -> Vec<ConfigIssue> {
-    validate_with_catalog(config, &SchemeCatalog::builtins())
+    validate_with_catalog(
+        config,
+        &SchemeCatalog::builtins(),
+        &StyleCatalog::builtins(),
+    )
 }
 
-/// [`validate`] against the schemes actually available to this run, including custom themes.
+/// [`validate`] against the schemes and UI styles actually available to this run, including
+/// custom files.
 #[must_use]
-pub fn validate_with_catalog(config: &Config, schemes: &SchemeCatalog) -> Vec<ConfigIssue> {
+pub fn validate_with_catalog(
+    config: &Config,
+    schemes: &SchemeCatalog,
+    styles: &StyleCatalog,
+) -> Vec<ConfigIssue> {
     let mut issues = Vec::new();
 
     let mut seen_ids = HashSet::new();
@@ -168,6 +183,10 @@ pub fn validate_with_catalog(config: &Config, schemes: &SchemeCatalog) -> Vec<Co
         issues.push(ConfigIssue::UnknownColorScheme(
             config.appearance.color_scheme.clone(),
         ));
+    }
+    let ui_theme = config.appearance.ui_theme.trim();
+    if !ui_theme.is_empty() && styles.resolve(ui_theme).is_none() {
+        issues.push(ConfigIssue::UnknownUiStyle(ui_theme.to_owned()));
     }
 
     let mut by_chord: HashMap<KeyChord, Vec<Action>> = HashMap::new();

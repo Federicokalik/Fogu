@@ -9,7 +9,7 @@ use fogu_core::{ForwardKind, PortForward, ProfileKind};
 use fogu_session::{
     ForwardCmd, ForwardId, ForwardState, ForwardStatus, SessionInput, sanitize_remote,
 };
-use iced::widget::{Column, button, column, container, row, scrollable, text};
+use iced::widget::{Column, column, row, scrollable, text};
 use iced::{Alignment, Element, Length, Task};
 
 use crate::app::App;
@@ -258,30 +258,31 @@ pub fn view<'a>(
         list = list.push(forward_row(status, look));
     }
     let content = column![
-        text("Port forwarding").size(18).color(look.fg),
+        crate::modal::title("Port forwarding", look),
         scrollable(list).height(Length::Shrink),
-        text("Add a forward").size(15).color(look.fg),
+        text("Add a forward")
+            .size(15)
+            .font(look.text.strong)
+            .color(look.fg),
         form(d, stored, look),
-        row![
-            button(text("Add")).on_press(Message::Forwards(ForwardsMsg::Add)),
-            button(text("Close"))
-                .style(button::secondary)
-                .on_press(Message::Forwards(ForwardsMsg::Close)),
-        ]
-        .spacing(8),
     ]
     .spacing(12);
-    container(content)
-        .padding(16)
-        .max_width(640)
-        .style(move |_theme: &iced::Theme| {
-            container::background(look.bg).border(iced::Border {
-                color: look.dim,
-                width: 1.0,
-                radius: 6.0.into(),
-            })
-        })
-        .into()
+    let actions = row![
+        crate::controls::action(
+            "Add",
+            crate::controls::ButtonKind::Primary,
+            look,
+            Some(Message::Forwards(ForwardsMsg::Add))
+        ),
+        crate::controls::action(
+            "Close",
+            crate::controls::ButtonKind::Secondary,
+            look,
+            Some(Message::Forwards(ForwardsMsg::Close))
+        ),
+    ]
+    .spacing(8);
+    crate::modal::frame(content.into(), Some(actions.into()), 640.0, look)
 }
 
 fn forward_row(status: &ForwardStatus, look: Look) -> Element<'_, Message> {
@@ -316,9 +317,12 @@ fn forward_row(status: &ForwardStatus, look: Look) -> Element<'_, Message> {
     }
     row![
         details.width(Length::Fill),
-        button(text("Remove").size(13))
-            .style(button::secondary)
-            .on_press(Message::Forwards(ForwardsMsg::Remove(status.id))),
+        crate::controls::action(
+            "Remove",
+            crate::controls::ButtonKind::Secondary,
+            look,
+            Some(Message::Forwards(ForwardsMsg::Remove(status.id)))
+        ),
     ]
     .spacing(8)
     .align_y(Alignment::Center)

@@ -1,0 +1,83 @@
+# Built-in UI style "Glass". Every key is documented in README.md ("Custom UI styles");
+# a custom file in <config dir>/styles/ can `extends = "glass"` and override any of them.
+key = "glass"
+name = "Glass"
+aliases = ["frost"]
+description = "Floating islands: a pill tab bar, a rounded terminal, a detached sidebar"
+paired_scheme = "Fogu Glass"
+
+[color]
+accent = "#5eead4"
+danger = "#ff6b7a"
+
+[surface]
+bg = { from = "base", toward = "fg", dark = 0.08, light = 0.04 }
+raised = { from = "base", toward = "fg", dark = 0.07, light = 0.05 }
+panel = { from = "base", toward = "fg", dark = 0.05, light = 0.03 }
+canvas = { from = "base", toward = "black", dark = 0.4, light = 0.06 }
+border = { from = "base", toward = "fg", dark = 0.16, light = 0.14 }
+divider = { from = "base", toward = "fg", dark = 0.2, light = 0.2 }
+dim = { from = "fg", toward = "base", dark = 0.42, light = 0.42 }
+soft_dark = 0.18
+soft_light = 0.14
+hover = 0.08
+
+[shape]
+card = 14
+control = 10
+tab_top = 15
+tab_bottom = 15
+dot = 4
+border = 1
+focus = 1.5
+
+[shadow]
+panel = { x = 0, y = 10, blur = 30, alpha = 0.35, tint = "black", mix = 0 }
+floating = { x = 0, y = 18, blur = 48, alpha = 0.5, tint = "black", mix = 0 }
+tab = { x = 0, y = 4, blur = 14, alpha = 0.3, tint = "black", mix = 0 }
+
+[bar]
+placement = "top"
+height = 44
+strip = 30
+fill = "solid"
+gradient = 0
+rule = false
+
+[tabs]
+style = "pill"
+sizing = "fit"
+width = 180
+min_width = 96
+max_width = 240
+marker = "dot"
+close = "hover"
+separators = false
+inset = 7
+title_size = 13
+indicator = 0
+indicator_length = 0
+indicator_color = "accent"
+
+[layout]
+geometry = "islands"
+margin = 8
+sidebar = "floating"
+density = "regular"
+gutter = 14
+grip = 6
+
+[text]
+chrome = "ui"
+labels = "sentence"
+active = "medium"
+
+[interaction]
+hover = "fill"
+button = "filled"
+selection = "fill"
+
+[dialog]
+placement = "center"
+footer = false
+backdrop = 0.4

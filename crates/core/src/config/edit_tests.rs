@@ -391,3 +391,22 @@ fn appearance_scheme_is_saved_without_touching_the_rest() {
     assert_eq!(config.appearance.color_scheme, "Midnight Ocean");
     assert_eq!(config.appearance.ui_theme, "fogu");
 }
+
+#[test]
+fn set_appearance_writes_style_accent_and_scheme_at_once() {
+    let dir = std::env::temp_dir().join(format!("fogu-appearance-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config.toml"),
+        "# keep me\n[appearance]\nfont_size = 13.0 # mine\naccent = \"#010203\"\n",
+    )
+    .unwrap();
+    super::set_appearance(&dir, "retro", None, Some("Fogu Phosphor")).unwrap();
+    let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(text.contains("# keep me"), "{text}");
+    assert!(text.contains("font_size = 13.0 # mine"), "{text}");
+    assert!(text.contains("ui_theme = \"retro\""), "{text}");
+    assert!(text.contains("color_scheme = \"Fogu Phosphor\""), "{text}");
+    assert!(!text.contains("accent"), "{text}");
+}

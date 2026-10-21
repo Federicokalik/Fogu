@@ -77,7 +77,7 @@ pub(super) fn forwards<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, look: Look) 
         ]
         .spacing(4)
         .align_y(Alignment::Center);
-        let entry: Row<'a> = forms::list_row(FieldId::Forwards, i, cells.into());
+        let entry: Row<'a> = forms::list_row(look, FieldId::Forwards, i, cells.into());
         // Same widget tree with or without an error, so the port field keeps the keyboard.
         let error = [ForwardCol::Port, ForwardCol::TargetPort]
             .into_iter()
@@ -92,10 +92,17 @@ pub(super) fn forwards<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, look: Look) 
         }
         rows = rows.push(iced::widget::column![entry, line]);
     }
-    let add = iced::widget::button(text("+ Add").size(13))
-        .padding([2, 8])
-        .style(iced::widget::button::secondary)
-        .on_press(Field(FieldId::Forwards, FieldValue::Add));
+    let add = iced::widget::button(
+        text(crate::controls::button_label(look, "+ Add"))
+            .size(13)
+            .font(look.text.chrome),
+    )
+    .padding([2, 8])
+    .style(crate::controls::kind(
+        look,
+        crate::controls::ButtonKind::Secondary,
+    ))
+    .on_press(Field(FieldId::Forwards, FieldValue::Add));
     let table = row![
         text("Port forwards")
             .size(13)
@@ -233,12 +240,19 @@ pub(super) fn scripts<'a>(ed: &'a ProfileEditor, ssh: &'a SshOpts, look: Look) -
         ]
         .spacing(6)
         .align_y(Alignment::Center);
-        rows = rows.push(forms::list_row(FieldId::Scripts, i, cells.into()));
+        rows = rows.push(forms::list_row(look, FieldId::Scripts, i, cells.into()));
     }
-    let add = iced::widget::button(text("+ Add").size(13))
-        .padding([2, 8])
-        .style(iced::widget::button::secondary)
-        .on_press(Field(FieldId::Scripts, FieldValue::Add));
+    let add = iced::widget::button(
+        text(crate::controls::button_label(look, "+ Add"))
+            .size(13)
+            .font(look.text.chrome),
+    )
+    .padding([2, 8])
+    .style(crate::controls::kind(
+        look,
+        crate::controls::ButtonKind::Secondary,
+    ))
+    .on_press(Field(FieldId::Scripts, FieldValue::Add));
     let table = row![
         text("When the output shows…, send…")
             .size(13)

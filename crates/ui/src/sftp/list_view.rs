@@ -145,7 +145,7 @@ fn rows(tab: TabId, panel: &SftpPanelState, look: Look) -> Element<'_, Message> 
 }
 
 /// The name, clipped; a long one gets a tooltip with the whole (sanitized) name.
-fn name_cell<'a>(entry: &Entry, color: Color) -> Element<'a, Message> {
+fn name_cell<'a>(entry: &Entry, color: Color, look: Look) -> Element<'a, Message> {
     let name = shown_name(entry);
     let long = name.chars().count() > LONG_NAME;
     let cell = container(label(name.clone(), color))
@@ -154,11 +154,7 @@ fn name_cell<'a>(entry: &Entry, color: Color) -> Element<'a, Message> {
     if !long {
         return cell.into();
     }
-    let tip = container(text(name).size(12).wrapping(text::Wrapping::WordOrGlyph))
-        .padding(4)
-        .max_width(420)
-        .style(container::rounded_box);
-    tooltip(cell, tip, tooltip::Position::Bottom).into()
+    crate::controls::tip(cell, name, tooltip::Position::Bottom, look)
 }
 
 fn entry_row<'a>(
@@ -181,7 +177,7 @@ fn entry_row<'a>(
         .filter(|e| e.old.as_deref() == Some(entry.name.as_str()));
     let name = match renaming {
         Some(edit) => name_field(tab, &edit.value, "New name, Enter to rename", look),
-        None => name_cell(entry, name_color),
+        None => name_cell(entry, name_color, look),
     };
     let cells = row![
         label(kind_icon(entry), look.dim).width(16),
@@ -210,7 +206,7 @@ fn entry_row<'a>(
                     Color::TRANSPARENT
                 },
                 width: 1.0,
-                radius: look.radius_small.into(),
+                radius: look.shape.control.into(),
             },
             ..container::Style::default()
         });

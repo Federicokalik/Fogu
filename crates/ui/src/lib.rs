@@ -14,6 +14,7 @@ mod background_menu;
 mod blink;
 mod color_picker;
 mod context_menu;
+mod contrast;
 mod controls;
 mod design;
 mod drag;
@@ -46,15 +47,18 @@ mod secret_dialog;
 mod settings;
 mod sftp;
 mod split_container;
+mod style_code;
+mod style_preview;
 mod subscription;
 mod tab;
 mod tab_bar;
+mod tab_layout;
 mod terminal_view;
 mod view;
 
 use std::sync::Arc;
 
-use fogu_core::{Config, SchemeCatalog};
+use fogu_core::{Config, SchemeCatalog, StyleCatalog};
 use fogu_session::SessionRuntime;
 
 // Re-exported so callers of `run()` (the `fogu` binary) don't need their own `iced`
@@ -70,6 +74,10 @@ pub struct RunOptions {
     pub notices: Vec<Notification>,
     /// Built-in plus custom terminal colour schemes for this run.
     pub schemes: SchemeCatalog,
+    /// Built-in plus custom UI styles for this run.
+    pub styles: StyleCatalog,
+    /// iced draws with tiny-skia (`--software-render`): shadows are kept cheap.
+    pub software_render: bool,
     /// Exit right after the first presented frame (benchmarks).
     pub exit_after_first_frame: bool,
     /// `--config-dir`: SSH sessions keep their `known_hosts` there (default:
@@ -86,11 +94,6 @@ pub struct RunOptions {
 const INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 const INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
 pub(crate) const UI_FONT: iced::Font = iced::Font::with_name("Inter");
-/// Titles (toasts, dialogs).
-pub(crate) const UI_MEDIUM: iced::Font = iced::Font {
-    weight: iced::font::Weight::Medium,
-    ..UI_FONT
-};
 
 /// `WM_CLASS` / Wayland app id; matches the `.desktop` file's `StartupWMClass`.
 #[cfg(target_os = "linux")]

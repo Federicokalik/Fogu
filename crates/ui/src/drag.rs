@@ -8,7 +8,7 @@ use iced::{Point, Rectangle, Task};
 use crate::app::App;
 use crate::message::Message;
 use crate::tab::{PaneId, TabId};
-use crate::tab_bar::{BAR_H, TAB_STRIDE};
+use crate::tab_layout;
 
 /// Pixels the pointer moves before a press becomes a drag.
 const THRESHOLD: f32 = 6.0;
@@ -110,28 +110,6 @@ pub fn drop_zone(at: Point, rect: Rectangle) -> Zone {
         .map_or(Zone::Center, |(_, zone)| zone)
 }
 
-/// The gap between tab headers nearest to `x` (0 = before the first, `count` = after the last).
-/// shortcut: ignores the bar's horizontal scroll, fine until a window holds more tabs than fit.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "rounded and clamped to 0..=count first"
-)]
-pub fn insertion_index(x: f32, count: usize) -> usize {
-    let slot = (x / TAB_STRIDE).round().max(0.0) as usize;
-    slot.min(count)
-}
-
-/// The header under `x` (same shortcut as [`insertion_index`]).
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "floored and non-negative"
-)]
-fn header_at(x: f32) -> usize {
-    (x / TAB_STRIDE).floor().max(0.0) as usize
-}
-
 impl App {
     pub(crate) fn on_drag(&mut self, message: DragMsg) -> Task<Message> {
         match message {
@@ -165,14 +143,22 @@ impl App {
         let origin = *drag.origin.get_or_insert(at);
         drag.at = at;
         drag.started |= origin.distance(at) >= THRESHOLD;
-        if !drag.started || at.y >= BAR_H {
+        if !drag.started {
+            return;
+        }
+        let (over_bar, x) = (self.over_tab_bar(at), at.x - self.strip_left());
+        let Some(drag) = &mut self.drag else {
+            return;
+        };
+        if !over_bar {
             return;
         }
         drag.target = None;
         // Over a header: show that tab, so the drop can land on its panes.
+        let widths = self.tab_widths();
         let hovered = self
             .tabs
-            .get(header_at(at.x - self.bar_inset()))
+            .get(tab_layout::header_at(x, &widths))
             .map(|t| t.id);
         if let Some(tab) = hovered.filter(|t| *t != self.active) {
             self.activate(tab);
@@ -189,10 +175,11 @@ impl App {
                 _ => Task::none(),
             };
         }
-        if drag.at.y < BAR_H {
+        if self.over_tab_bar(drag.at) {
             if let Payload::Tab(tab) = drag.payload {
-                let x = drag.at.x - self.bar_inset();
-                self.reorder_tab(tab, insertion_index(x, self.tabs.len()));
+                let x = drag.at.x - self.strip_left();
+                let index = tab_layout::insertion_index(x, &self.tab_widths());
+                self.reorder_tab(tab, index);
             }
             return Task::none();
         }

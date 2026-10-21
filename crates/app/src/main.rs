@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use clap::Parser as _;
 use fogu_core::config::{self, ConfigIssue};
-use fogu_core::{SchemeCatalog, fsutil};
+use fogu_core::{SchemeCatalog, StyleCatalog, fsutil};
 use fogu_ui::{Level, Notification, RunOptions};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -34,10 +34,12 @@ fn main() -> fogu_ui::Result {
     let state_dir = state_dir();
     crash::install(state_dir.as_ref().ok().cloned());
     let _log_guard = init_logging(&state_dir);
-    let (config, schemes, notices) = load_config(&cli);
+    let (config, (schemes, styles), notices) = load_config(&cli);
     let options = RunOptions {
         notices,
         schemes,
+        styles,
+        software_render: cli::software_backend(),
         exit_after_first_frame: cli.exit_after_first_frame,
         config_dir: cli.config_dir.clone(),
         state_dir: state_dir.ok(),
@@ -92,10 +94,17 @@ fn make_undumpable() -> rustix::io::Result<()> {
 /// Loads `config.toml` from `--config-dir` or `$XDG_CONFIG_HOME/fogu`. A missing file is
 /// normal; any other failure (bad TOML, schema mismatch) falls back to `Config::default()`.
 /// Everything the user should know becomes a startup toast as well as a log line.
-fn load_config(cli: &Cli) -> (fogu_core::Config, SchemeCatalog, Vec<Notification>) {
+fn load_config(
+    cli: &Cli,
+) -> (
+    fogu_core::Config,
+    (SchemeCatalog, StyleCatalog),
+    Vec<Notification>,
+) {
     let dir = config::config_dir(cli.config_dir.as_deref());
     let (loaded, err) = config::load(&dir);
     let schemes = SchemeCatalog::load(&dir);
+    let styles = StyleCatalog::load(&dir);
     let mut notices = Vec::new();
     if let Some(err) = err {
         tracing::error!(error = %err, "failed to load config; using defaults");
@@ -110,14 +119,22 @@ fn load_config(cli: &Cli) -> (fogu_core::Config, SchemeCatalog, Vec<Notification
             Notification::new(Level::Warn, "Colour scheme skipped").detail(warning.to_string()),
         );
     }
-    for issue in config::validate_with_catalog(&loaded, &schemes) {
+    for warning in styles.warnings() {
+        tracing::warn!(%warning, "custom UI style skipped");
+        notices
+            .push(Notification::new(Level::Warn, "UI style skipped").detail(warning.to_string()));
+    }
+    for issue in config::validate_with_catalog(&loaded, &schemes, &styles) {
         tracing::warn!(%issue, "config issue");
-        // The UI reports an unknown colour scheme itself, when it falls back.
-        if !matches!(issue, ConfigIssue::UnknownColorScheme(_)) {
+        // The UI reports an unknown colour scheme or style itself, when it falls back.
+        if !matches!(
+            issue,
+            ConfigIssue::UnknownColorScheme(_) | ConfigIssue::UnknownUiStyle(_)
+        ) {
             notices.push(Notification::new(Level::Warn, "Config issue").detail(issue.to_string()));
         }
     }
-    (loaded, schemes, notices)
+    (loaded, (schemes, styles), notices)
 }
 
 /// stderr + non-blocking daily file in `$XDG_STATE_HOME/fogu/`; `log` records are bridged

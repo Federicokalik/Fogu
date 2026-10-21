@@ -1,0 +1,83 @@
+# Built-in UI style "Mica". Every key is documented in README.md ("Custom UI styles");
+# a custom file in <config dir>/styles/ can `extends = "fluent"` and override any of them.
+key = "fluent"
+name = "Mica"
+aliases = ["mica", "windows"]
+description = "Layered surfaces, folder tabs that merge into the terminal"
+paired_scheme = "Fogu Mica"
+
+[color]
+accent = "#4cc2ff"
+danger = "#e5484d"
+
+[surface]
+bg = { from = "base", toward = "fg", dark = 0.06, light = 0.03 }
+raised = { from = "base", toward = "black", dark = 0.35, light = 0.07 }
+panel = { from = "bg", toward = "fg", dark = 0.03, light = 0.02 }
+canvas = { from = "raised", toward = "fg", dark = 0.0, light = 0.0 }
+border = { from = "base", toward = "fg", dark = 0.14, light = 0.15 }
+divider = { from = "base", toward = "fg", dark = 0.2, light = 0.22 }
+dim = { from = "fg", toward = "base", dark = 0.42, light = 0.42 }
+soft_dark = 0.18
+soft_light = 0.14
+hover = 0.08
+
+[shape]
+card = 12
+control = 8
+tab_top = 8
+tab_bottom = 0
+dot = 4
+border = 1
+focus = 2
+
+[shadow]
+panel = { x = 0, y = 4, blur = 16, alpha = 0.24, tint = "black", mix = 0 }
+floating = { x = 0, y = 16, blur = 40, alpha = 0.45, tint = "black", mix = 0 }
+tab = { x = 0, y = 0, blur = 0, alpha = 0, tint = "black", mix = 0 }
+
+[bar]
+placement = "top"
+height = 48
+strip = 30
+fill = "vertical"
+gradient = 0.1
+rule = true
+
+[tabs]
+style = "folder"
+sizing = "fixed"
+width = 220
+min_width = 120
+max_width = 260
+marker = "dot"
+close = "always"
+separators = true
+inset = 8
+title_size = 13
+indicator = 0
+indicator_length = 0
+indicator_color = "accent"
+
+[layout]
+geometry = "docked"
+margin = 0
+sidebar = "docked"
+density = "regular"
+gutter = 14
+grip = 6
+
+[text]
+chrome = "ui"
+labels = "sentence"
+active = "medium"
+
+[interaction]
+hover = "fill"
+button = "filled"
+selection = "fill"
+
+[dialog]
+placement = "center"
+footer = true
+backdrop = 0.45
