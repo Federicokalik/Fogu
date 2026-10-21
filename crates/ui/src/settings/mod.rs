@@ -5,6 +5,8 @@ mod advanced;
 mod appearance;
 mod handlers;
 mod index;
+#[cfg(feature = "ssh")]
+mod keys;
 mod profiles;
 mod render;
 mod reveal;
@@ -91,11 +93,21 @@ pub enum Anchor {
     Groups,
     ProfileDefaults,
     ConfigTools,
+    Secrets,
+    KnownHosts,
+    KeyFiles,
+    Agent,
 }
+
+/// The ids of the Keys page's blocks.
+const SECRETS_ANCHOR: &str = "anchor:secrets";
+const HOSTS_ANCHOR: &str = "anchor:known-hosts";
+const FILES_ANCHOR: &str = "anchor:key-files";
+const AGENT_ANCHOR: &str = "anchor:agent";
 
 impl Anchor {
     /// Every anchor.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 13] = [
         Self::UiStyle,
         Self::Accent,
         Self::Palette,
@@ -105,6 +117,10 @@ impl Anchor {
         Self::Groups,
         Self::ProfileDefaults,
         Self::ConfigTools,
+        Self::Secrets,
+        Self::KnownHosts,
+        Self::KeyFiles,
+        Self::Agent,
     ];
 
     /// Its page.
@@ -115,6 +131,7 @@ impl Anchor {
                 Section::Profiles
             }
             Self::ConfigTools => Section::Advanced,
+            Self::Secrets | Self::KnownHosts | Self::KeyFiles | Self::Agent => Section::Keys,
         }
     }
 
@@ -130,6 +147,10 @@ impl Anchor {
             Self::Groups => "Profile groups",
             Self::ProfileDefaults => "Defaults for every profile",
             Self::ConfigTools => "Config file",
+            Self::Secrets => "Stored passwords and passphrases",
+            Self::KnownHosts => "Known hosts",
+            Self::KeyFiles => "SSH key files",
+            Self::Agent => "SSH agent",
         }
     }
 
@@ -147,6 +168,13 @@ impl Anchor {
                 "inherit user port keepalive agent shell program environment cwd"
             }
             Self::ConfigTools => "config.toml reload edit open folder reset backup",
+            Self::Secrets => {
+                "secrets keychain credential manager password passphrase reveal \
+                              recovery phrase seed"
+            }
+            Self::KnownHosts => "known_hosts host keys fingerprint trust remove",
+            Self::KeyFiles => "private key ed25519 generate new public key id_rsa",
+            Self::Agent => "ssh-agent pageant agent keys",
         }
     }
 
@@ -162,6 +190,10 @@ impl Anchor {
             Self::Groups => profiles::GROUPS_ANCHOR,
             Self::ProfileDefaults => profiles::DEFAULTS_ANCHOR,
             Self::ConfigTools => advanced::TOOLS_ANCHOR,
+            Self::Secrets => SECRETS_ANCHOR,
+            Self::KnownHosts => HOSTS_ANCHOR,
+            Self::KeyFiles => FILES_ANCHOR,
+            Self::Agent => AGENT_ANCHOR,
         })
     }
 }
@@ -238,6 +270,9 @@ pub enum Confirm {
     DeleteGroup(fogu_core::GroupId),
     /// Every setting back to its default.
     ResetSettings,
+    /// A new recovery phrase (older secrets can no longer be revealed).
+    #[cfg(feature = "ssh")]
+    ResetPhrase,
 }
 
 /// A choice in the settings page.
@@ -267,6 +302,9 @@ pub enum SettingsMsg {
     Profiles(ProfilesPageMsg),
     /// A button on the Advanced page.
     Advanced(AdvancedMsg),
+    /// A choice on the Keys page.
+    #[cfg(feature = "ssh")]
+    Keys(keys::KeysMsg),
     /// Switch the UI style by key (applies immediately and is saved); the terminal palette
     /// follows when it was the default or another style's paired palette.
     Style(String),
@@ -289,6 +327,19 @@ pub enum SettingsMsg {
     SaveCode,
     /// Close the code editor without saving.
     CloseCode,
+}
+
+/// What the page needs to know about the running app.
+#[derive(Clone, Copy, Debug)]
+pub struct Flags {
+    /// `RUST_LOG` decides the log filter for this run.
+    pub log_overridden: bool,
+    /// There is a state folder (the recovery phrase lives there).
+    #[cfg_attr(
+        not(feature = "ssh"),
+        expect(dead_code, reason = "read by the Keys page only")
+    )]
+    pub state_dir: bool,
 }
 
 /// The open settings page.
@@ -320,6 +371,9 @@ pub struct SettingsPage {
     pub shortcuts: shortcuts::ShortcutsState,
     /// The Profiles page.
     pub profiles: profiles::ProfilesPage,
+    /// The Keys page.
+    #[cfg(feature = "ssh")]
+    pub keys: keys::KeysPage,
 }
 
 /// The searchable font lists of the Terminal page.
@@ -356,7 +410,7 @@ pub fn view<'a>(
     look: Look,
     config: &Config,
     catalogs: (&SchemeCatalog, &StyleCatalog),
-    (env, entries, log_overridden): (Env, &[crate::profiles::Entry], bool),
+    (env, entries, flags): (Env, &[crate::profiles::Entry], Flags),
 ) -> Element<'a, Message> {
     let header = header(page, look);
     let nav = Section::ALL
@@ -382,7 +436,7 @@ pub fn view<'a>(
         .height(Length::Fill)
         .into()
     } else {
-        let body = section_body(page, look, config, catalogs, (env, entries, log_overridden));
+        let body = section_body(page, look, config, catalogs, (env, entries, flags));
         scrollable(container(body).padding(iced::Padding::ZERO.right(14).bottom(24)))
             .id(Id::new(SCROLL_ID))
             .height(Length::Fill)
@@ -472,7 +526,7 @@ fn section_body<'a>(
     look: Look,
     config: &Config,
     catalogs: (&SchemeCatalog, &StyleCatalog),
-    (env, entries, log_overridden): (Env, &[crate::profiles::Entry], bool),
+    (env, entries, flags): (Env, &[crate::profiles::Entry], Flags),
 ) -> Element<'a, Message> {
     let anchor = match page.highlight {
         Some(Target::Anchor(anchor)) => Some(anchor),
@@ -503,7 +557,7 @@ fn section_body<'a>(
                 config,
                 advanced::AdvKey::ALL.iter().copied().map(SettingId::Adv),
             );
-            advanced::body(rows, log_overridden, look)
+            advanced::body(rows, flags.log_overridden, look)
         }
         Section::Terminal => render::rows(
             page,
@@ -511,13 +565,20 @@ fn section_body<'a>(
             config,
             terminal::TermKey::ALL.iter().copied().map(SettingId::Term),
         ),
+        #[cfg(feature = "ssh")]
+        Section::Keys => keys::body(&page.keys, flags.state_dir, look),
+        #[cfg(not(feature = "ssh"))]
         section @ Section::Keys => placeholder(look, section),
     }
 }
 
-/// A page that is not built yet.
+/// A page this build has no content for.
+#[cfg(not(feature = "ssh"))]
 fn placeholder<'a>(look: Look, section: Section) -> Element<'a, Message> {
-    render::small(look, &format!("{} settings are coming.", section.label()))
+    render::small(
+        look,
+        &format!("{} needs a build with SSH support.", section.label()),
+    )
 }
 
 /// The search results, floating under the search field.

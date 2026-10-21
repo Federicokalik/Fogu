@@ -14,12 +14,15 @@ mod agent;
 #[cfg(windows)]
 #[path = "agent_windows.rs"]
 mod agent;
+pub mod agent_status;
 pub mod algorithms;
 mod auth;
 pub use auth::key_fingerprint;
+pub use hostkeys::{KnownHost, list_known_hosts, remove_known_host};
 mod connect;
 mod forward;
 mod hostkeys;
+pub mod keyfiles;
 pub(crate) mod pool;
 mod proxy;
 pub(crate) mod sftp;

@@ -6,6 +6,8 @@ mod env;
 mod local;
 mod pipeline;
 mod prompt;
+#[cfg(feature = "ssh")]
+pub mod reveal;
 #[cfg(all(feature = "ssh", unix))]
 mod secrets;
 #[cfg(all(feature = "ssh", windows))]
@@ -39,6 +41,8 @@ pub use prompt::{
 pub use secrets::{SecretError, SecretStore, Secrets};
 pub use sftp::{SftpCmd, SftpEvent, SftpHandle, SftpRequest, display_name, validate_name};
 #[cfg(feature = "ssh")]
+pub use ssh::agent_status::{AgentKey, AgentStatus, agent_status};
+#[cfg(feature = "ssh")]
 pub use ssh::algorithms::{
     Supported as SupportedAlgorithms, non_default as non_default_algorithms,
     supported as supported_algorithms,
@@ -46,7 +50,11 @@ pub use ssh::algorithms::{
 #[cfg(feature = "ssh")]
 pub use ssh::key_fingerprint;
 #[cfg(feature = "ssh")]
+pub use ssh::keyfiles::{KeyFile, KeyGen, KeyGenError, generate_ed25519, scan_key_dir};
+#[cfg(feature = "ssh")]
 pub use ssh::pool::ConnectionPool;
+#[cfg(feature = "ssh")]
+pub use ssh::{KnownHost, list_known_hosts, remove_known_host};
 #[cfg(feature = "ssh")]
 pub use ssh::{PROMPT_TIMEOUT, SshPaths};
 pub use supervise::supervise;

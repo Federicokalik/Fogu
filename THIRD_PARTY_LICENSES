@@ -23,3 +23,10 @@ its own licence. Rust crate dependencies are not listed here; their licences are
 - **Inter 4.1** Regular and Medium (`assets/fonts/Inter-Regular.ttf`, `assets/fonts/Inter-Medium.ttf`,
   embedded in the binary): <https://github.com/rsms/inter>, SIL Open Font License 1.1,
   Copyright (c) 2016 The Inter Project Authors. Full licence: `assets/fonts/Inter-LICENSE.txt`.
+
+## Recovery phrase word list
+
+- **BIP-39 English word list** (`assets/wordlists/bip39-english.txt`, embedded in the binary):
+  the 2048 words of BIP-39 (<https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki>) as
+  published in `trezor/python-mnemonic` (<https://github.com/trezor/python-mnemonic>),
+  MIT-licensed, Copyright (c) 2013-2018 Pavol Rusnak.

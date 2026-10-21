@@ -251,6 +251,7 @@ dependencies = [
  "blake2",
  "cpufeatures 0.3.1",
  "password-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -1642,6 +1643,7 @@ dependencies = [
 name = "fogu-session"
 version = "0.1.0"
 dependencies = [
+ "argon2",
  "bytes",
  "fogu-core",
  "fogu-session",
@@ -1657,6 +1659,7 @@ dependencies = [
  "rustix 1.1.5",
  "secrecy",
  "security-framework",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

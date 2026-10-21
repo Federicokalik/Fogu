@@ -55,6 +55,12 @@ impl PromptText {
         self.0.is_empty()
     }
 
+    /// The text, for the field that shows it (masked).
+    #[cfg(feature = "ssh")]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
     /// A fresh secret buffer holding the text; `self` is zeroized as it drops.
     pub(crate) fn into_secret(self) -> SecretString {
         SecretString::from(self.0.as_str())

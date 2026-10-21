@@ -259,9 +259,13 @@ impl App {
                 (
                     self.env,
                     &entries,
-                    self.log
-                        .as_ref()
-                        .is_some_and(crate::LogControl::env_override),
+                    crate::settings::Flags {
+                        log_overridden: self
+                            .log
+                            .as_ref()
+                            .is_some_and(crate::LogControl::env_override),
+                        state_dir: self.state_dir.is_some(),
+                    },
                 ),
             );
             let card = container(page)

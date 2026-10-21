@@ -99,6 +99,10 @@ russh-sftp = "3.0.1"
 # why: `CancellationToken` for per-transfer cancel checked between chunks; already in the
 # tree via russh/russh-sftp. No default features needed.
 tokio-util = { version = "0.7.20", default-features = false }
+# why: the Keys page's recovery phrase is kept only as an Argon2id hash (64 MiB, 3 passes), so
+# checking a typed phrase is slow to brute-force. Already in the tree via ssh-key (`ppk`), same
+# version; `alloc` for `hash_password_into`, no password-hash string format needed.
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "zeroize"] }
 # why: passwords/passphrases/keyboard-interactive answers live only in `SecretString`
 # (zeroize-on-drop, redacted `Debug`).
 secrecy = "0.10.3"

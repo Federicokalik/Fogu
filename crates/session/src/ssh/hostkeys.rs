@@ -269,6 +269,80 @@ pub(crate) fn replace(path: &Path, host: &str, port: u16, key: &PublicKey) -> io
     fsutil::write_private_atomic(path, text.as_bytes())
 }
 
+/// One record of a `known_hosts` file, as the Keys page lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownHost {
+    /// Its 1-based line.
+    pub line: usize,
+    /// The host patterns, or "hashed host" for a `|1|…` record.
+    pub hosts: String,
+    /// The key type.
+    pub algorithm: String,
+    /// `SHA256:…`.
+    pub fingerprint: String,
+    /// `@revoked` or `@cert-authority` records.
+    pub marker: Option<String>,
+}
+
+/// Every record of the `known_hosts` file at `path` (none when it is missing, unreadable or
+/// too large).
+#[must_use]
+pub fn list_known_hosts(path: &Path) -> Vec<KnownHost> {
+    let Some(text) = read_limited(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .enumerate()
+        .filter_map(|(index, raw)| {
+            let entry = parse_line(raw)?;
+            let hosts = match entry.host_patterns() {
+                HostPatterns::HashedName { .. } => "hashed host".to_owned(),
+                HostPatterns::Patterns(list) => list.join(", "),
+            };
+            Some(KnownHost {
+                line: index + 1,
+                hosts,
+                algorithm: entry.public_key().algorithm().to_string(),
+                fingerprint: fingerprint(entry.public_key()),
+                marker: entry.marker().map(|m| match m {
+                    Marker::Revoked => "revoked".to_owned(),
+                    Marker::CertAuthority => "certificate authority".to_owned(),
+                }),
+            })
+        })
+        .collect()
+}
+
+/// Removes line `line` of our `known_hosts` at `path`, provided it still holds the key
+/// `expected` (`SHA256:…`); the next connection to that host asks about its key again.
+/// Atomic, `0600`.
+pub fn remove_known_host(path: &Path, line: usize, expected: &str) -> io::Result<()> {
+    let text = read_limited(path)
+        .ok_or_else(|| io::Error::other("known_hosts is missing, unreadable or too large"))?;
+    let lines: Vec<&str> = text.lines().collect();
+    let still = lines
+        .get(line.wrapping_sub(1))
+        .and_then(|raw| parse_line(raw))
+        .is_some_and(|e| fingerprint(e.public_key()) == expected);
+    if !still {
+        return Err(io::Error::other(
+            "known_hosts changed since it was listed; refresh and try again",
+        ));
+    }
+    let kept: String = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i + 1 != line)
+        .flat_map(|(_, raw)| {
+            [
+                *raw, "
+",
+            ]
+        })
+        .collect();
+    fsutil::write_private_atomic(path, kept.as_bytes())
+}
+
 #[cfg(test)]
 #[path = "hostkeys_tests.rs"]
 mod tests;

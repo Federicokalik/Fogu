@@ -63,6 +63,10 @@ impl App {
                 if section == super::Section::Profiles {
                     self.profiles_page_shown();
                 }
+                #[cfg(feature = "ssh")]
+                if section == super::Section::Keys {
+                    tasks.push(self.keys_page_shown());
+                }
                 tasks.push(iced::widget::operation::snap_to(
                     Id::new(SCROLL_ID),
                     iced::widget::operation::RelativeOffset::START,
@@ -101,11 +105,17 @@ impl App {
             SettingsMsg::Shortcut(message) => return self.on_shortcut(message),
             SettingsMsg::Profiles(message) => return self.on_profiles_page(message),
             SettingsMsg::Advanced(message) => return self.on_advanced(message),
+            #[cfg(feature = "ssh")]
+            SettingsMsg::Keys(message) => return self.on_keys(message),
             SettingsMsg::Outside => return self.settings_outside(),
             SettingsMsg::Confirm(yes) => {
                 let confirm = self.settings.as_mut().and_then(|p| p.confirm.take());
                 match confirm {
                     Some(Confirm::ResetSettings) if yes => return self.reset_settings(),
+                    #[cfg(feature = "ssh")]
+                    Some(Confirm::ResetPhrase) if yes => {
+                        return self.on_keys(super::keys::KeysMsg::NewPhrase);
+                    }
                     Some(Confirm::DeleteGroup(id)) if yes => {
                         return self.save_edits(&[fogu_core::config::ProfileEdit::DeleteGroup(id)]);
                     }
@@ -204,9 +214,18 @@ impl App {
         if target.section() == super::Section::Profiles {
             self.profiles_page_shown();
         }
+        #[cfg(feature = "ssh")]
+        let shown = if target.section() == super::Section::Keys {
+            self.keys_page_shown()
+        } else {
+            Task::none()
+        };
+        #[cfg(not(feature = "ssh"))]
+        let shown = Task::none();
         // The reveal waits a frame: the new page must be laid out before it is measured.
         Task::batch([
             flush,
+            shown,
             self.after(
                 std::time::Duration::from_millis(30),
                 Message::Settings(SettingsMsg::Reveal(target)),
@@ -473,6 +492,23 @@ impl App {
     pub(crate) fn settings_modal(&self) -> Option<Modal> {
         let answer = |yes| Message::Settings(SettingsMsg::Confirm(yes));
         match self.settings.as_ref()?.confirm.clone()? {
+            #[cfg(feature = "ssh")]
+            Confirm::ResetPhrase => Some(Modal {
+                title: "Replace the recovery phrase?",
+                body: "A new phrase is made. Secrets stored until now can no longer be revealed \
+                       (they keep working for connections and can be replaced or deleted)."
+                    .to_owned(),
+                buttons: vec![
+                    ModalButton {
+                        label: "Replace",
+                        on_press: answer(true),
+                    },
+                    ModalButton {
+                        label: "Cancel",
+                        on_press: answer(false),
+                    },
+                ],
+            }),
             Confirm::ResetSettings => Some(Modal {
                 title: "Reset settings?",
                 body: "Appearance, terminal, shortcuts, SFTP, SSH, recovery and advanced settings \
