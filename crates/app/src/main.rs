@@ -55,13 +55,13 @@ fn main() -> fogu_ui::Result {
 fn harden_process() {
     #[cfg(unix)]
     {
-    if cfg!(debug_assertions) {
-        return;
-    }
-    if let Err(err) = make_undumpable() {
-        // Logging is not up yet; this is a hardening failure the user should see.
-        eprintln!("fogu: could not make the process non-dumpable: {err}");
-    }
+        if cfg!(debug_assertions) {
+            return;
+        }
+        if let Err(err) = make_undumpable() {
+            // Logging is not up yet; this is a hardening failure the user should see.
+            eprintln!("fogu: could not make the process non-dumpable: {err}");
+        }
     }
     #[cfg(windows)]
     {

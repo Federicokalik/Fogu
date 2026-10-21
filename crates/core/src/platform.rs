@@ -18,22 +18,33 @@ pub fn home_dir() -> Option<PathBuf> {
     dirs::home_dir()
 }
 
-/// `$XDG_CONFIG_HOME/fogu` on Linux, `%APPDATA%\fogu` on Windows.
+/// `$XDG_CONFIG_HOME/fogu` on Unix, `%APPDATA%\fogu` on Windows.
 #[must_use]
 pub fn config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from(".config"))
-        .join(APP_DIR)
+    #[cfg(unix)]
+    {
+        xdg::BaseDirectories::with_prefix(APP_DIR)
+            .get_config_home()
+            .unwrap_or_else(|| PathBuf::from(".config/fogu"))
+    }
+    #[cfg(windows)]
+    {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(APP_DIR)
+    }
 }
 
-/// `$XDG_STATE_HOME/fogu` on Linux (`~/.local/state/fogu` by default), `%LOCALAPPDATA%\fogu`
+/// `$XDG_STATE_HOME/fogu` on Unix (`~/.local/state/fogu` by default), `%LOCALAPPDATA%\fogu`
 /// on Windows.
 #[must_use]
 pub fn state_dir() -> PathBuf {
     #[cfg(unix)]
     {
-        dirs::state_dir()
-            .or_else(dirs::data_local_dir)
+        std::env::var_os("XDG_STATE_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|home| home.join(".local/state")))
             .unwrap_or_else(|| PathBuf::from(".local/state"))
             .join(APP_DIR)
     }

@@ -220,9 +220,14 @@ impl<'a> TabBar<'a> {
             .max_width(crate::metrics::cells_f32(self.tabs.len()) * TAB_STRIDE);
         let add =
             container(row![plus, picker].spacing(0).align_y(Alignment::Center)).padding([6, 2]);
-        let tabs = row![space().width(self.inset), strip, add, space().width(Length::FillPortion(1))]
-            .align_y(Alignment::Center)
-            .width(Length::Fill);
+        let tabs = row![
+            space().width(self.inset),
+            strip,
+            add,
+            space().width(Length::FillPortion(1))
+        ]
+        .align_y(Alignment::Center)
+        .width(Length::Fill);
         // The bar's empty part (tab headers and buttons take their own presses first).
         let tabs = mouse_area(tabs)
             .on_press(Message::Window(WindowCmd::Press))
@@ -282,27 +287,27 @@ impl<'a> TabBar<'a> {
         // macOS: the native title bar has the window buttons.
         if !cfg!(target_os = "macos") {
             bar_row = bar_row
-            .push(space().width(6))
-            .push(solid(look.border, Length::Fixed(1.0), 20.0))
-            .push(space().width(2))
-            .push(window_button(
-                Icon::Minimize,
-                look,
-                false,
-                Message::Window(WindowCmd::Minimize),
-            ))
-            .push(window_button(
-                Icon::Maximize,
-                look,
-                false,
-                Message::Window(WindowCmd::ToggleMaximize),
-            ))
-            .push(window_button(
-                Icon::Close,
-                look,
-                true,
-                Message::CloseRequested,
-            ));
+                .push(space().width(6))
+                .push(solid(look.border, Length::Fixed(1.0), 20.0))
+                .push(space().width(2))
+                .push(window_button(
+                    Icon::Minimize,
+                    look,
+                    false,
+                    Message::Window(WindowCmd::Minimize),
+                ))
+                .push(window_button(
+                    Icon::Maximize,
+                    look,
+                    false,
+                    Message::Window(WindowCmd::ToggleMaximize),
+                ))
+                .push(window_button(
+                    Icon::Close,
+                    look,
+                    true,
+                    Message::CloseRequested,
+                ));
         }
         let bar = container(bar_row)
             .width(Length::Fill)

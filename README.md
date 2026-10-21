@@ -5,13 +5,13 @@
 <h1 align="center">Fogu Terminal</h1>
 
 <p align="center">
-  <strong>A native terminal for Linux and macOS with a built-in SSH manager and SFTP browser.</strong><br>
+  <strong>A native terminal for Linux, macOS and Windows with a built-in SSH manager and SFTP browser.</strong><br>
   Written in Rust. No browser engine, no compromises on your daily workflow.
 </p>
 
 <p align="center">
   <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-yellow">
-  <img alt="Linux | macOS" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-orange">
+  <img alt="Linux | macOS | Windows alpha" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20alpha-orange">
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.99-orange">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-red">
   <img alt="unsafe: forbidden" src="https://img.shields.io/badge/unsafe-forbidden-red">
@@ -21,6 +21,8 @@
 
 > **Fogu is in beta.** It is used daily, but expect rough edges and breaking changes to the
 > configuration format before 1.0. Bug reports and feedback are very welcome.
+> **Windows support is alpha.** It builds and runs on Windows, but needs more real-world testing;
+> please report Windows-specific issues with your Windows version and steps to reproduce.
 
 ## Screenshots
 
@@ -83,8 +85,8 @@ second and stays out of your way.
 - Port forwarding: local, remote and dynamic (SOCKS5), managed live from a dialog
 - Agent and X11 forwarding (off by default, clearly flagged when on)
 - Connection reuse: tabs, splits and SFTP for the same host share one SSH connection
-- Passwords and key passphrases stored in the desktop keyring (Secret Service, or the Keychain
-  on macOS), never on disk
+- Passwords and key passphrases stored in the desktop keyring (Secret Service on Linux, Keychain
+  on macOS, Credential Manager on Windows), never in Fogu's config file
 - Login scripts, starting directory, remembered directory, automatic reconnect with backoff
 
 ### SFTP browser
@@ -97,7 +99,7 @@ second and stays out of your way.
 
 ## Install
 
-Fogu runs on Linux (X11 and Wayland) and macOS (Intel and Apple Silicon). Build from source with a Rust toolchain
+Fogu runs on Linux (X11 and Wayland) and macOS (Intel and Apple Silicon), with alpha support for Windows. Build from source with a Rust toolchain
 ([rustup](https://rustup.rs) picks the pinned version automatically):
 
 ```bash
@@ -110,6 +112,20 @@ fogu
 `./scripts/install.sh --uninstall` removes exactly what was installed. No root needed.
 
 Build dependencies on Debian/Ubuntu: `sudo apt install build-essential pkg-config libudev-dev libxkbcommon-dev libwayland-dev`.
+
+### Windows (alpha)
+
+Install a Rust toolchain and the Visual Studio C++ build tools, then build and launch from
+PowerShell:
+
+```powershell
+git clone https://github.com/Revdep/Fogu.git
+cd Fogu
+cargo run --release
+```
+
+Local tabs use ConPTY and the default Windows shell; SSH and SFTP are available. Configuration
+is stored under `%APPDATA%\fogu` and state under `%LOCALAPPDATA%\fogu`.
 
 ### macOS
 

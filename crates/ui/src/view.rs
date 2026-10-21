@@ -27,6 +27,10 @@ const GRIP_H: f32 = 6.0;
 
 impl App {
     /// Tab bar above the active tab's split container, plus modal / menu overlays.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "terminal layout and its overlays share one visual tree"
+    )]
     pub fn view(&self) -> Element<'_, Message> {
         let Some(tab) = self.active_tab() else {
             return column![].into();

@@ -219,7 +219,9 @@ fn refuse_open(path: &Path) -> Result<(), String> {
     let listed = |list: &[&str]| ext.as_deref().is_some_and(|e| list.contains(&e));
     let launchable = listed(LAUNCHABLE);
     let bundle = cfg!(target_os = "macos") && listed(LAUNCHABLE_MACOS);
-    if bundle || meta.is_file() && (is_executable(&meta) || launchable || is_windows_executable(path)) {
+    if bundle
+        || meta.is_file() && (is_executable(&meta) || launchable || is_windows_executable(path))
+    {
         return Err(format!(
             "{} could run code and is not opened from here; use \u{201c}Show in file \
              manager\u{201d}",

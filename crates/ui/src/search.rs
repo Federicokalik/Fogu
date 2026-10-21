@@ -6,11 +6,11 @@ use iced::{Element, Length, Task};
 
 use crate::app::App;
 use crate::context_menu::panel_style;
+use crate::controls::flat_button as hover_style;
 use crate::icons::{Icon, icon};
 use crate::message::Message;
 use crate::palette::Look;
 use crate::tab::{PaneId, Tab};
-use crate::tab_bar::hover_style;
 
 const SEARCH_INPUT: &str = "fogu-search-input";
 
