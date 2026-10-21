@@ -88,6 +88,57 @@ pub struct RunOptions {
     pub state_dir: Option<std::path::PathBuf>,
     /// `--no-recovery`: start with one default tab, neither restore nor save the session.
     pub no_recovery: bool,
+    /// Changes the log filter while running (Settings → Advanced → Log level).
+    pub log: Option<LogControl>,
+}
+
+/// Changes the running log filter: the binary owns the tracing subscriber and hands the UI a
+/// way to set its level.
+#[derive(Clone)]
+pub struct LogControl {
+    set: Arc<dyn Fn(fogu_core::config::LogLevel) -> std::result::Result<(), String> + Send + Sync>,
+    env_override: bool,
+}
+
+impl LogControl {
+    /// `set` replaces the filter with one for the level; `env_override`: `RUST_LOG` chose the
+    /// filter for this run (the setting then waits for the next start).
+    pub fn new(
+        set: impl Fn(fogu_core::config::LogLevel) -> std::result::Result<(), String>
+        + Send
+        + Sync
+        + 'static,
+        env_override: bool,
+    ) -> Self {
+        Self {
+            set: Arc::new(set),
+            env_override,
+        }
+    }
+
+    /// Whether `RUST_LOG` decides the filter for this run.
+    pub fn env_override(&self) -> bool {
+        self.env_override
+    }
+
+    /// Uses `level` from now on (nothing while `RUST_LOG` decides).
+    pub(crate) fn apply(
+        &self,
+        level: fogu_core::config::LogLevel,
+    ) -> std::result::Result<(), String> {
+        if self.env_override {
+            return Ok(());
+        }
+        (self.set)(level)
+    }
+}
+
+impl std::fmt::Debug for LogControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LogControl")
+            .field("env_override", &self.env_override)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The interface font, bundled (OFL, `assets/fonts/Inter-LICENSE.txt`) so the chrome looks the

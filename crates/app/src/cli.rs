@@ -33,12 +33,13 @@ pub fn software_backend() -> bool {
     std::env::var_os(BACKEND_ENV).is_some_and(|v| v == "tiny-skia")
 }
 
-/// `--software-render` must reach iced as `ICED_BACKEND=tiny-skia` before it starts. Setting an
-/// environment variable in-process is `unsafe` (and the workspace forbids `unsafe`), so the
-/// process re-executes itself once with the variable set. Returns only if no re-exec was needed
-/// (or it failed, which is logged and ignored: the GPU renderer then runs as usual).
-pub fn reexec_for_software_render(cli: &Cli) {
-    if !cli.software_render || std::env::var_os(BACKEND_ENV).is_some_and(|v| v == "tiny-skia") {
+/// `--software-render` (or `[advanced] renderer = "software"`, passed as `software`) must reach
+/// iced as `ICED_BACKEND=tiny-skia` before it starts. Setting an environment variable in-process
+/// is `unsafe` (and the workspace forbids `unsafe`), so the process re-executes itself once with
+/// the variable set. Returns only if no re-exec was needed (or it failed, which is logged and
+/// ignored: the GPU renderer then runs as usual).
+pub fn reexec_for_software_render(software: bool) {
+    if !software || std::env::var_os(BACKEND_ENV).is_some_and(|v| v == "tiny-skia") {
         return;
     }
     let Ok(exe) = std::env::current_exe() else {

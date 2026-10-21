@@ -111,17 +111,20 @@ fn control<'a>(
             unit,
             auto,
         } => slider_control(look, id, (min, max, step), unit, auto, value),
-        Kind::Number { .. } | Kind::Text { .. } => {
-            let shown = page
-                .pending
-                .get(&id)
-                .cloned()
-                .unwrap_or_else(|| match value {
-                    Value::Num(n) => format!("{n}"),
-                    other => other.text().to_owned(),
-                });
+        Kind::Number { .. } | Kind::Text { .. } | Kind::Bytes { .. } => {
+            let shown =
+                page.pending
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| match (spec.kind, value) {
+                        (Kind::Bytes { .. }, Value::Num(n)) => super::spec::show_bytes(*n),
+                        (_, Value::Num(n)) => format!("{n}"),
+                        (_, other) => other.text().to_owned(),
+                    });
             let (placeholder, width) = match spec.kind {
                 Kind::Text { placeholder } => (placeholder, Length::Fill),
+                Kind::Bytes { optional: true } => ("no limit", Length::Fixed(160.0)),
+                Kind::Bytes { .. } => ("", Length::Fixed(160.0)),
                 _ => ("", Length::Fixed(140.0)),
             };
             end(field(look, placeholder, &shown)
@@ -138,6 +141,28 @@ fn control<'a>(
             None => end(small(look, value.text())),
         },
         Kind::Fonts => font_list(look, id, page.fonts.as_ref(), value.list()),
+        Kind::Folder { placeholder } => {
+            let shown = page
+                .pending
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| value.text().to_owned());
+            row![
+                field(look, placeholder, &shown)
+                    .on_input(move |t| msg(Edit::Text(t)))
+                    .on_submit(msg(Edit::Submit))
+                    .width(Length::Fill),
+                controls::action(
+                    "Browse…",
+                    controls::ButtonKind::Secondary,
+                    look,
+                    Some(msg(Edit::Browse))
+                ),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+        }
         Kind::Flags(labels) => labels
             .iter()
             .enumerate()

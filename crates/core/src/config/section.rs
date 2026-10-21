@@ -127,6 +127,39 @@ pub fn set_hotkeys(
     })
 }
 
+/// The tables "Reset settings" removes; profiles, groups, `profile_defaults` and
+/// `default_profile` stay.
+pub const SETTINGS_TABLES: [&str; 7] = [
+    "appearance",
+    "terminal",
+    "hotkeys",
+    "sftp",
+    "ssh",
+    "recovery",
+    "advanced",
+];
+
+/// Removes every settings table ([`SETTINGS_TABLES`]) from `dir/config.toml`, after copying the
+/// file to `config.toml.<unix seconds>.bak`; returns that copy's path. Profiles stay.
+pub fn reset_settings(dir: &Path) -> Result<std::path::PathBuf, ConfigError> {
+    let (text, mut doc) = read_doc(dir)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let backup = dir.join(format!("{FILE_NAME}.{stamp}.bak"));
+    crate::fsutil::write_private_atomic(&backup, text.as_bytes()).map_err(|err| {
+        ConfigError::Io {
+            path: backup.clone(),
+            source: err,
+        }
+    })?;
+    for table in SETTINGS_TABLES {
+        doc.remove(table);
+    }
+    write_atomic(dir, doc.to_string().as_bytes())?;
+    Ok(backup)
+}
+
 /// Applies `edits` to the table at `path` (`[]` = the document root, `["terminal"]`,
 /// `["profile_defaults", "ssh"]`, …) of `dir/config.toml` in one atomic write. Creates the
 /// file and missing tables; a file that does not parse is an error and is never written. Nothing

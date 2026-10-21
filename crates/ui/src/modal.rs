@@ -35,7 +35,7 @@ pub struct Modal {
 }
 
 /// Labels of first buttons that destroy something (drawn as danger buttons).
-const DESTRUCTIVE: [&str; 4] = ["Close", "Delete", "Discard", "Clear"];
+const DESTRUCTIVE: [&str; 5] = ["Close", "Delete", "Discard", "Clear", "Reset"];
 
 /// `modal` as a full-window layer (see [`layer`]). The first button is the default action (a
 /// danger button when it destroys something), the others are secondary.

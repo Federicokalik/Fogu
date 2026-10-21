@@ -121,6 +121,16 @@ fn hotkeys_keep_unchanged_entries_and_drop_reset_ones() {
 }
 
 #[test]
+fn reset_settings_keeps_profiles_and_a_backup() {
+    let t = tmp(Some(FIXTURE));
+    let backup = reset_settings(&t.0).unwrap();
+    assert_eq!(std::fs::read_to_string(&backup).unwrap(), FIXTURE);
+    let text = read(&t);
+    assert!(!text.contains("[terminal]"), "{text}");
+    assert!(text.contains("[[profiles]]"), "{text}");
+}
+
+#[test]
 fn a_file_that_does_not_parse_is_left_alone() {
     let t = tmp(Some("not valid [[["));
     let err = set_keys(&t.0, &["terminal"], &[KeyEdit::set("x", true)]).unwrap_err();

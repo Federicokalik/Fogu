@@ -248,6 +248,8 @@ impl App {
     /// scrollback of every pane whose profile allows it, and ask local shells for their cwd.
     pub(crate) fn recovery_tick(&mut self) -> Task<Message> {
         let Some(mut recovery) = self.recovery.take() else {
+            // Turned off: the chain ends here (turning it on again starts a new one).
+            self.recovery_ticking = false;
             return Task::none();
         };
         recovery.ticks += 1;

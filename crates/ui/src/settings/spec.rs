@@ -6,7 +6,9 @@ use fogu_core::Config;
 use fogu_core::config::TomlValue;
 
 use super::Section;
+use super::advanced::AdvKey;
 use super::profiles::ProfKey;
+use super::sftp::SftpKey;
 use super::terminal::TermKey;
 
 /// How a setting is edited.
@@ -35,6 +37,11 @@ pub enum Kind {
     Fonts,
     /// Any of these labels.
     Flags(&'static [&'static str]),
+    /// A size in bytes typed as `2 GiB`, `500 MB` or a plain number; `optional`: empty is "no
+    /// limit" (the key is removed).
+    Bytes { optional: bool },
+    /// A folder, typed or picked; empty is the default (the key is removed).
+    Folder { placeholder: &'static str },
 }
 
 /// How a slider shows its value.
@@ -52,6 +59,8 @@ pub enum Unit {
     Pt,
     /// A multiplier (`1.25×`).
     Times,
+    /// Seconds.
+    Secs,
 }
 
 impl Unit {
@@ -64,6 +73,7 @@ impl Unit {
             Self::Ms => format!("{value:.0} ms"),
             Self::Pt => format!("{value:.1} pt"),
             Self::Times => format!("{value:.2}×"),
+            Self::Secs => format!("{value:.0} s"),
         }
     }
 }
@@ -73,6 +83,10 @@ impl Unit {
 pub enum Applies {
     /// Right away.
     Live,
+    /// To SFTP panels opened from now on.
+    NewPanels,
+    /// At the next start of Fogu.
+    NextStart,
 }
 
 impl Applies {
@@ -80,6 +94,8 @@ impl Applies {
     pub fn badge(self) -> Option<&'static str> {
         match self {
             Self::Live => None,
+            Self::NewPanels => Some("New panels"),
+            Self::NextStart => Some("Next start"),
         }
     }
 }
@@ -180,6 +196,10 @@ pub enum SettingId {
     Term(TermKey),
     /// A Profiles page setting.
     Prof(ProfKey),
+    /// An SFTP page setting.
+    Sftp(SftpKey),
+    /// An Advanced page setting.
+    Adv(AdvKey),
 }
 
 impl SettingId {
@@ -190,6 +210,8 @@ impl SettingId {
             .copied()
             .map(Self::Term)
             .chain(ProfKey::ALL.iter().copied().map(Self::Prof))
+            .chain(SftpKey::ALL.iter().copied().map(Self::Sftp))
+            .chain(AdvKey::ALL.iter().copied().map(Self::Adv))
     }
 
     /// Its description.
@@ -197,6 +219,8 @@ impl SettingId {
         match self {
             Self::Term(key) => key.spec(),
             Self::Prof(key) => key.spec(),
+            Self::Sftp(key) => key.spec(),
+            Self::Adv(key) => key.spec(),
         }
     }
 
@@ -205,6 +229,8 @@ impl SettingId {
         match self {
             Self::Term(key) => key.get(config),
             Self::Prof(key) => key.get(config),
+            Self::Sftp(key) => key.get(config),
+            Self::Adv(key) => key.get(config),
         }
     }
 
@@ -213,6 +239,8 @@ impl SettingId {
         match self {
             Self::Term(key) => key.set(config, value),
             Self::Prof(key) => key.set(config, value),
+            Self::Sftp(key) => key.set(config, value),
+            Self::Adv(key) => key.set(config, value),
         }
     }
 
@@ -226,11 +254,16 @@ impl SettingId {
                 Some(TomlValue::Int(round(*n)))
             }
             (Kind::Slider { .. }, Value::Num(n)) => Some(TomlValue::float(to_f32(*n))),
-            (Kind::Number { .. }, Value::Num(n)) => Some(TomlValue::Int(round(*n))),
+            (Kind::Number { .. } | Kind::Bytes { .. }, Value::Num(n)) => {
+                Some(TomlValue::Int(round(*n)))
+            }
             (Kind::Choice(_) | Kind::Flags(_), _) => match self {
                 Self::Term(key) => key.named(value),
                 Self::Prof(key) => key.named(value),
+                Self::Adv(key) => key.named(value),
+                Self::Sftp(_) => None,
             },
+            (Kind::Folder { .. }, Value::Text(t)) if t.trim().is_empty() => None,
             (_, Value::List(items)) => Some(TomlValue::List(items.clone())),
             (_, Value::Text(t)) => Some(TomlValue::Str(t.clone())),
             _ => None,
@@ -260,6 +293,58 @@ pub fn round(n: f64) -> i64 {
 )]
 pub fn from_usize(n: usize) -> f64 {
     n as f64
+}
+
+/// A count of bytes or seconds as a control value.
+pub fn from_u64(n: u64) -> f64 {
+    from_usize(usize::try_from(n).unwrap_or(usize::MAX))
+}
+
+/// `bytes` as people write it: `1 GiB`, `512 MiB`, `300 KiB`, `12 B`.
+pub fn show_bytes(bytes: f64) -> String {
+    const UNITS: [(&str, f64); 4] = [
+        ("TiB", 1_099_511_627_776.0),
+        ("GiB", 1_073_741_824.0),
+        ("MiB", 1_048_576.0),
+        ("KiB", 1024.0),
+    ];
+    for (unit, size) in UNITS {
+        if bytes >= size {
+            let n = bytes / size;
+            return if (n - n.round()).abs() < 0.005 {
+                format!("{n:.0} {unit}")
+            } else {
+                format!("{n:.2} {unit}")
+            };
+        }
+    }
+    format!("{bytes:.0} B")
+}
+
+/// Parses a size: a number with an optional unit (`B`, `K`/`KB`/`KiB`, `M…`, `G…`, `T…`;
+/// all binary multiples, as file managers show them).
+pub fn parse_bytes(text: &str) -> Result<f64, String> {
+    let why = || "a size like 512 MiB, 2 GiB or 1048576".to_owned();
+    let text = text.trim().replace('_', "");
+    let split = text
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(text.len());
+    let (number, unit) = text.split_at(split);
+    let number: f64 = number.trim().parse().map_err(|_| why())?;
+    let multiple = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1.0,
+        "k" | "kb" | "kib" => 1024.0,
+        "m" | "mb" | "mib" => 1_048_576.0,
+        "g" | "gb" | "gib" => 1_073_741_824.0,
+        "t" | "tb" | "tib" => 1_099_511_627_776.0,
+        _ => return Err(why()),
+    };
+    let bytes = (number * multiple).round();
+    if (0.0..9.0e18).contains(&bytes) {
+        Ok(bytes)
+    } else {
+        Err(why())
+    }
 }
 
 /// A number field's value as a control value.

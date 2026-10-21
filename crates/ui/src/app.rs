@@ -42,6 +42,10 @@ pub(crate) const WINDOW_SIZE: iced::Size = iced::Size::new(1000.0, 650.0);
 
 /// The whole application state.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent flags of one window's state (focus, full screen, recovery), not a               state machine"
+)]
 pub struct App {
     pub(crate) runtime: Arc<SessionRuntime>,
     pub(crate) config: Arc<Config>,
@@ -113,6 +117,14 @@ pub struct App {
     pub(crate) pending_discard: Option<TabId>,
     /// When the last bell rang (closer bells count once).
     pub(crate) last_bell: Option<Instant>,
+    /// `$XDG_STATE_HOME/fogu` (recovery files, logs), when there is one.
+    pub(crate) state_dir: Option<std::path::PathBuf>,
+    /// `--no-recovery`: recovery stays off whatever the settings say.
+    pub(crate) no_recovery: bool,
+    /// A recovery tick is scheduled (at most one chain runs).
+    pub(crate) recovery_ticking: bool,
+    /// Changes the log filter of this run (Settings → Advanced).
+    pub(crate) log: Option<crate::LogControl>,
     /// Test builds: input ends of the stub sessions (what the UI sent) and the effective
     /// profile each stub session was opened with.
     #[cfg(test)]
@@ -238,6 +250,10 @@ impl App {
             pane_menu: None,
             pending_discard: None,
             last_bell: None,
+            state_dir: None,
+            no_recovery: false,
+            recovery_ticking: false,
+            log: None,
             config,
             #[cfg(test)]
             stub_inputs: Vec::new(),
@@ -269,6 +285,14 @@ impl App {
         );
         app.exit_after_first_frame = options.exit_after_first_frame;
         app.config_dir = options.config_dir;
+        app.state_dir.clone_from(&options.state_dir);
+        app.no_recovery = options.no_recovery;
+        app.log = options.log;
+        if let Some(log) = app.log.as_ref().filter(|l| !l.env_override())
+            && let Err(why) = log.apply(app.config.advanced.log_level)
+        {
+            tracing::warn!(why, "log level not applied");
+        }
         let mut tasks = vec![app.refresh_ssh_hosts()];
         let mut restored = false;
         if let Some(dir) = options.state_dir {
@@ -278,6 +302,7 @@ impl App {
                 restored = app.restore_session(&dir, enabled);
                 if enabled {
                     app.recovery = Some(crate::recovery::Recovery::new(dir));
+                    app.recovery_ticking = true;
                     tasks.push(app.after(Duration::from_secs(1), Message::RecoveryTick));
                 }
             }

@@ -1,12 +1,14 @@
 //! The settings page: a nav of sections (Appearance, Terminal, …), a search over every setting,
 //! and live controls that apply at once and are saved to `config.toml`.
 
+mod advanced;
 mod appearance;
 mod handlers;
 mod index;
 mod profiles;
 mod render;
 mod reveal;
+mod sftp;
 mod shortcuts;
 mod spec;
 mod terminal;
@@ -26,6 +28,7 @@ use crate::message::Message;
 use crate::palette::Look;
 use crate::style_code::{self, CodeEditor, CodeKind};
 
+pub use advanced::AdvancedMsg;
 pub use profiles::ProfilesPageMsg;
 pub use shortcuts::ShortcutMsg;
 pub use spec::SettingId;
@@ -87,11 +90,12 @@ pub enum Anchor {
     ProfileList,
     Groups,
     ProfileDefaults,
+    ConfigTools,
 }
 
 impl Anchor {
     /// Every anchor.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::UiStyle,
         Self::Accent,
         Self::Palette,
@@ -100,6 +104,7 @@ impl Anchor {
         Self::ProfileList,
         Self::Groups,
         Self::ProfileDefaults,
+        Self::ConfigTools,
     ];
 
     /// Its page.
@@ -109,6 +114,7 @@ impl Anchor {
             Self::DefaultProfile | Self::ProfileList | Self::Groups | Self::ProfileDefaults => {
                 Section::Profiles
             }
+            Self::ConfigTools => Section::Advanced,
         }
     }
 
@@ -123,6 +129,7 @@ impl Anchor {
             Self::ProfileList => "Profiles",
             Self::Groups => "Profile groups",
             Self::ProfileDefaults => "Defaults for every profile",
+            Self::ConfigTools => "Config file",
         }
     }
 
@@ -139,6 +146,7 @@ impl Anchor {
             Self::ProfileDefaults => {
                 "inherit user port keepalive agent shell program environment cwd"
             }
+            Self::ConfigTools => "config.toml reload edit open folder reset backup",
         }
     }
 
@@ -153,6 +161,7 @@ impl Anchor {
             Self::ProfileList => profiles::LIST_ANCHOR,
             Self::Groups => profiles::GROUPS_ANCHOR,
             Self::ProfileDefaults => profiles::DEFAULTS_ANCHOR,
+            Self::ConfigTools => advanced::TOOLS_ANCHOR,
         })
     }
 }
@@ -200,6 +209,10 @@ pub enum Edit {
     Auto(bool),
     /// A text or number field changed (kept until Enter or a click elsewhere).
     Text(String),
+    /// "Browse…" on a folder.
+    Browse,
+    /// The folder picker answered.
+    Picked(Option<std::path::PathBuf>),
     /// Enter in a text or number field.
     Submit,
     /// A choice.
@@ -223,6 +236,8 @@ pub enum Confirm {
     ResetShortcuts,
     /// Delete a group (its profiles become ungrouped).
     DeleteGroup(fogu_core::GroupId),
+    /// Every setting back to its default.
+    ResetSettings,
 }
 
 /// A choice in the settings page.
@@ -250,6 +265,8 @@ pub enum SettingsMsg {
     Shortcut(ShortcutMsg),
     /// A choice on the Profiles page.
     Profiles(ProfilesPageMsg),
+    /// A button on the Advanced page.
+    Advanced(AdvancedMsg),
     /// Switch the UI style by key (applies immediately and is saved); the terminal palette
     /// follows when it was the default or another style's paired palette.
     Style(String),
@@ -339,7 +356,7 @@ pub fn view<'a>(
     look: Look,
     config: &Config,
     catalogs: (&SchemeCatalog, &StyleCatalog),
-    (env, entries): (Env, &[crate::profiles::Entry]),
+    (env, entries, log_overridden): (Env, &[crate::profiles::Entry], bool),
 ) -> Element<'a, Message> {
     let header = header(page, look);
     let nav = Section::ALL
@@ -365,8 +382,8 @@ pub fn view<'a>(
         .height(Length::Fill)
         .into()
     } else {
-        let body = section_body(page, look, config, catalogs, (env, entries));
-        scrollable(container(body).padding(iced::Padding::ZERO.right(14)))
+        let body = section_body(page, look, config, catalogs, (env, entries, log_overridden));
+        scrollable(container(body).padding(iced::Padding::ZERO.right(14).bottom(24)))
             .id(Id::new(SCROLL_ID))
             .height(Length::Fill)
             .width(Length::Fill)
@@ -455,7 +472,7 @@ fn section_body<'a>(
     look: Look,
     config: &Config,
     catalogs: (&SchemeCatalog, &StyleCatalog),
-    (env, entries): (Env, &[crate::profiles::Entry]),
+    (env, entries, log_overridden): (Env, &[crate::profiles::Entry], bool),
 ) -> Element<'a, Message> {
     let anchor = match page.highlight {
         Some(Target::Anchor(anchor)) => Some(anchor),
@@ -473,13 +490,28 @@ fn section_body<'a>(
             );
             profiles::body(&page.profiles, config, entries, rows, look)
         }
+        Section::Sftp => render::rows(
+            page,
+            look,
+            config,
+            sftp::SftpKey::ALL.iter().copied().map(SettingId::Sftp),
+        ),
+        Section::Advanced => {
+            let rows = render::rows(
+                page,
+                look,
+                config,
+                advanced::AdvKey::ALL.iter().copied().map(SettingId::Adv),
+            );
+            advanced::body(rows, log_overridden, look)
+        }
         Section::Terminal => render::rows(
             page,
             look,
             config,
             terminal::TermKey::ALL.iter().copied().map(SettingId::Term),
         ),
-        section => placeholder(look, section),
+        section @ Section::Keys => placeholder(look, section),
     }
 }
 

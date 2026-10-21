@@ -15,7 +15,7 @@ pub use edit::{
     set_profile_defaults, slug, unique_group_id, unique_profile_id, unique_profile_name,
 };
 pub use io::{ConfigError, config_dir, load, set_profile_background};
-pub use section::{KeyEdit, TomlValue, set_hotkeys, set_keys};
+pub use section::{KeyEdit, TomlValue, reset_settings, set_hotkeys, set_keys};
 pub use sftp::SftpCfg;
 pub use validate::{ConfigIssue, validate, validate_with_catalog};
 
@@ -268,6 +268,46 @@ pub struct Config {
     pub ssh: SshCfg,
     /// Tab recovery on restart.
     pub recovery: RecoveryCfg,
+    /// Logging and rendering.
+    pub advanced: AdvancedCfg,
+}
+
+/// How much Fogu writes to its log (its own crates; dependencies stay at `warn`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    /// Only errors.
+    Error,
+    /// Problems.
+    Warn,
+    /// What happened (the default).
+    #[default]
+    Info,
+    /// Details for a bug report.
+    Debug,
+    /// Everything.
+    Trace,
+}
+
+/// What draws the window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Renderer {
+    /// The GPU (wgpu), iced's default.
+    #[default]
+    Gpu,
+    /// The CPU (tiny-skia), for broken drivers and VMs; same as `--software-render`.
+    Software,
+}
+
+/// `[advanced]`: logging and rendering.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AdvancedCfg {
+    /// Log verbosity (`RUST_LOG` wins when set).
+    pub log_level: LogLevel,
+    /// What draws the window; applies at the next start.
+    pub renderer: Renderer,
 }
 
 /// `[recovery]`: rebuild the tabs on restart. Saved scrollback may contain passwords or
@@ -324,6 +364,7 @@ impl Default for Config {
             sftp: SftpCfg::default(),
             ssh: SshCfg::default(),
             recovery: RecoveryCfg::default(),
+            advanced: AdvancedCfg::default(),
         }
     }
 }

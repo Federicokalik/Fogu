@@ -13,9 +13,9 @@ use fogu_core::{SchemeCatalog, StyleCatalog, fsutil};
 use fogu_ui::{Level, Notification, RunOptions};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
+use tracing_subscriber::{EnvFilter, reload};
 
 use crate::cli::Cli;
 
@@ -30,10 +30,10 @@ const MAX_LOG_FILES: usize = 7;
 fn main() -> fogu_ui::Result {
     harden_process();
     let cli = Cli::parse();
-    cli::reexec_for_software_render(&cli);
+    cli::reexec_for_software_render(cli.software_render || software_in_config(&cli));
     let state_dir = state_dir();
     crash::install(state_dir.as_ref().ok().cloned());
-    let _log_guard = init_logging(&state_dir);
+    let (_log_guard, log) = init_logging(&state_dir);
     let (config, (schemes, styles), notices) = load_config(&cli);
     let options = RunOptions {
         notices,
@@ -45,6 +45,7 @@ fn main() -> fogu_ui::Result {
         state_dir: state_dir.ok(),
         // Benchmarks measure a cold start with one tab.
         no_recovery: cli.no_recovery || cli.exit_after_first_frame,
+        log: Some(log),
     };
     fogu_ui::run(Arc::new(config), options)
 }
@@ -137,11 +138,47 @@ fn load_config(
     (loaded, (schemes, styles), notices)
 }
 
+/// `[advanced] renderer = "software"`, read before anything else starts (a missing or broken
+/// file is the GPU, as the full load later reports).
+fn software_in_config(cli: &Cli) -> bool {
+    let dir = config::config_dir(cli.config_dir.as_deref());
+    config::load(&dir).0.advanced.renderer == config::Renderer::Software
+}
+
+/// The log filter of `level` for Fogu's own crates; dependencies stay at `warn` (or `error`).
+fn filter_for(level: config::LogLevel) -> String {
+    let own = match level {
+        config::LogLevel::Error => "error",
+        config::LogLevel::Warn => "warn",
+        config::LogLevel::Info => "info",
+        config::LogLevel::Debug => "debug",
+        config::LogLevel::Trace => "trace",
+    };
+    let deps = if level == config::LogLevel::Error {
+        "error"
+    } else {
+        "warn"
+    };
+    format!("{deps},fogu={own},fogu_core={own},fogu_term={own},fogu_session={own},fogu_ui={own}")
+}
+
 /// stderr + non-blocking daily file in `$XDG_STATE_HOME/fogu/`; `log` records are bridged
-/// by tracing-subscriber's `tracing-log` feature. The guard flushes the file on drop.
-fn init_logging(state_dir: &Result<PathBuf, String>) -> Option<WorkerGuard> {
+/// by tracing-subscriber's `tracing-log` feature. The guard flushes the file on drop. The
+/// filter can be swapped while running through the returned [`fogu_ui::LogControl`] (unless
+/// `RUST_LOG` chose it).
+fn init_logging(state_dir: &Result<PathBuf, String>) -> (Option<WorkerGuard>, fogu_ui::LogControl) {
+    let env_override = std::env::var_os("RUST_LOG").is_some();
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
+    let (filter, handle) = reload::Layer::new(filter);
+    let control = fogu_ui::LogControl::new(
+        move |level| {
+            handle
+                .reload(EnvFilter::new(filter_for(level)))
+                .map_err(|err| err.to_string())
+        },
+        env_override,
+    );
     let file = state_dir.clone().and_then(|dir| {
         RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
@@ -173,7 +210,7 @@ fn init_logging(state_dir: &Result<PathBuf, String>) -> Option<WorkerGuard> {
     if let Some(err) = file_err {
         tracing::warn!("file logging disabled: {err}");
     }
-    guard
+    (guard, control)
 }
 
 /// The platform state directory (see [`fogu_core::platform::state_dir`]), created private on

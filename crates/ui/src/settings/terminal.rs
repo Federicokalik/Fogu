@@ -5,7 +5,7 @@ use fogu_core::config::{BellMode, CursorShapeCfg, RightClickAction, TomlValue};
 use fogu_core::{Config, Osc52Policy};
 
 use super::Section;
-use super::spec::{Applies, Kind, Spec, Unit, Value, from_usize, round, to_f32};
+use super::spec::{Applies, Kind, Spec, Unit, Value, from_u64, from_usize, round, to_f32};
 
 /// One Terminal page setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -489,11 +489,6 @@ fn bell_name(mode: BellMode) -> &'static str {
         BellMode::Attention => "attention",
         BellMode::Sound => "sound",
     }
-}
-
-/// A millisecond count as a control value.
-fn from_u64(n: u64) -> f64 {
-    from_usize(usize::try_from(n).unwrap_or(usize::MAX))
 }
 
 /// `policy`'s index in a three-way OSC 52 choice (ask, allow, deny).

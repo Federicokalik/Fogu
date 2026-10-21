@@ -256,7 +256,13 @@ impl App {
                 look,
                 &self.config,
                 (&self.schemes, &self.styles),
-                (self.env, &entries),
+                (
+                    self.env,
+                    &entries,
+                    self.log
+                        .as_ref()
+                        .is_some_and(crate::LogControl::env_override),
+                ),
             );
             let card = container(page)
                 .width(width)

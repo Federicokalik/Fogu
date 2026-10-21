@@ -11,7 +11,7 @@ use iced::keyboard::{Key, Modifiers};
 use iced::widget::Id;
 
 use super::index;
-use super::spec::{Kind, SettingId, Value, from_i64, parse_number};
+use super::spec::{Kind, SettingId, Value, from_i64, parse_bytes, parse_number};
 use super::{Confirm, Edit, HIGHLIGHT, SCROLL_ID, SettingsMsg, SettingsPage, Target};
 use crate::app::App;
 use crate::design::resolve_style;
@@ -100,10 +100,12 @@ impl App {
             SettingsMsg::Set(id, edit) => return self.edit_setting(id, edit),
             SettingsMsg::Shortcut(message) => return self.on_shortcut(message),
             SettingsMsg::Profiles(message) => return self.on_profiles_page(message),
+            SettingsMsg::Advanced(message) => return self.on_advanced(message),
             SettingsMsg::Outside => return self.settings_outside(),
             SettingsMsg::Confirm(yes) => {
                 let confirm = self.settings.as_mut().and_then(|p| p.confirm.take());
                 match confirm {
+                    Some(Confirm::ResetSettings) if yes => return self.reset_settings(),
                     Some(Confirm::DeleteGroup(id)) if yes => {
                         return self.save_edits(&[fogu_core::config::ProfileEdit::DeleteGroup(id)]);
                     }
@@ -255,6 +257,23 @@ impl App {
                 Task::none()
             }
             Edit::Submit => self.flush_setting(id),
+            Edit::Browse => {
+                let dialog = rfd::AsyncFileDialog::new().set_title(spec.label);
+                Task::perform(dialog.pick_folder(), move |f| {
+                    Message::Settings(SettingsMsg::Set(
+                        id,
+                        Edit::Picked(f.map(|f| f.path().to_path_buf())),
+                    ))
+                })
+            }
+            Edit::Picked(Some(path)) => {
+                if let Some(page) = &mut self.settings {
+                    page.pending.remove(&id);
+                    page.errors.remove(&id);
+                }
+                self.commit_setting(id, &Value::Text(path.display().to_string()))
+            }
+            Edit::Picked(None) => Task::none(),
             Edit::Flag(i) => {
                 let Value::Flags(mut flags) = id.get(&self.config) else {
                     return Task::none();
@@ -410,6 +429,15 @@ impl App {
             self.profiles.ssh_hosts.forget();
             tasks.push(self.refresh_ssh_hosts());
         }
+        if new.recovery.enabled != old.recovery.enabled {
+            tasks.push(self.set_recovery(new.recovery.enabled));
+        }
+        if new.advanced.log_level != old.advanced.log_level
+            && let Some(log) = &self.log
+            && let Err(why) = log.apply(new.advanced.log_level)
+        {
+            notes.push(Notification::new(Level::Warn, "Log level not changed").detail(why));
+        }
         let (t, before) = (&new.terminal, &old.terminal);
         if t.scrollback_lines != before.scrollback_lines
             || t.word_separators != before.word_separators
@@ -445,6 +473,23 @@ impl App {
     pub(crate) fn settings_modal(&self) -> Option<Modal> {
         let answer = |yes| Message::Settings(SettingsMsg::Confirm(yes));
         match self.settings.as_ref()?.confirm.clone()? {
+            Confirm::ResetSettings => Some(Modal {
+                title: "Reset settings?",
+                body: "Appearance, terminal, shortcuts, SFTP, SSH, recovery and advanced settings \
+                       go back to their defaults. Profiles, groups and profile defaults stay; \
+                       the current config.toml is kept as a dated backup."
+                    .to_owned(),
+                buttons: vec![
+                    ModalButton {
+                        label: "Reset",
+                        on_press: answer(true),
+                    },
+                    ModalButton {
+                        label: "Cancel",
+                        on_press: answer(false),
+                    },
+                ],
+            }),
             Confirm::DeleteGroup(id) => {
                 let name = self
                     .config
@@ -715,6 +760,8 @@ fn check(id: SettingId, text: &str) -> Result<Value, String> {
     match id.spec().kind {
         Kind::Number { min, max } => parse_number(text, min, max).map(|n| Value::Num(from_i64(n))),
         Kind::Font if text.trim().is_empty() => Err("a font family name".to_owned()),
+        Kind::Bytes { optional: true } if text.trim().is_empty() => Ok(Value::Auto),
+        Kind::Bytes { .. } => parse_bytes(text).map(Value::Num),
         _ => Ok(Value::Text(text.to_owned())),
     }
 }
