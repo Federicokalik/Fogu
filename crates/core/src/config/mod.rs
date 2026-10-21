@@ -62,6 +62,20 @@ pub enum ProfileClick {
     Double,
 }
 
+/// How a terminal bell (BEL) shows itself; any combination.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BellMode {
+    /// A short flash of the pane.
+    Visual,
+    /// A dot on the tab until it is activated (background tabs).
+    Badge,
+    /// Flashes the window in the taskbar / dock while it is not focused.
+    Attention,
+    /// A short sound.
+    Sound,
+}
+
 /// What a right click does by default; a profile/session may
 /// still show the menu via other means (e.g. a dedicated hotkey).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +105,14 @@ pub struct Appearance {
     pub cursor_shape: CursorShapeCfg,
     /// Whether the cursor blinks while focused.
     pub cursor_blink: bool,
+    /// Half-period of the cursor blink in milliseconds (100..=2000).
+    pub cursor_blink_interval_ms: u64,
+    /// Line height as a multiple of the font's own (0.8..=2.0); glyphs stay centred.
+    pub line_height: f32,
+    /// Room between a pane's left and right edges and its grid, logical px (0..=32).
+    pub padding_x: f32,
+    /// Room between a pane's top and bottom edges and its grid, logical px (0..=32).
+    pub padding_y: f32,
     /// Active colour scheme name (`ColorScheme::by_name`).
     pub color_scheme: String,
     /// UI shape preset: `fogu`, `fluent`, `minimal` or `retro`. Unknown values fall back to
@@ -122,6 +144,10 @@ impl Default for Appearance {
             fallback_fonts: Vec::new(),
             cursor_shape: CursorShapeCfg::default(),
             cursor_blink: true,
+            cursor_blink_interval_ms: 530,
+            line_height: 1.0,
+            padding_x: 8.0,
+            padding_y: 6.0,
             color_scheme: "Fogu Dark".to_owned(),
             ui_theme: "fogu".to_owned(),
             accent: None,
@@ -178,6 +204,10 @@ pub struct TerminalCfg {
     /// a dim "── restarted ──" / "── reconnected ──" line; `false` starts from a
     /// blank terminal. Terminal modes the old session set are reset either way. Default `true`.
     pub keep_history_on_restart: bool,
+    /// How a bell shows itself (`[]` = ignored).
+    pub bell: Vec<BellMode>,
+    /// Volume of the bell sound (0..=1).
+    pub bell_volume: f32,
 }
 
 impl Default for TerminalCfg {
@@ -198,6 +228,8 @@ impl Default for TerminalCfg {
             right_click: RightClickAction::default(),
             osc52_write: Osc52Policy::default(),
             keep_history_on_restart: true,
+            bell: vec![BellMode::Badge],
+            bell_volume: 0.5,
         }
     }
 }

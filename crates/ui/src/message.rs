@@ -167,6 +167,8 @@ pub enum Message {
     TabSaveToProfile,
     /// Tab recovery: compare the layout with the last save (every second).
     RecoveryTick,
+    /// Pane `.0`'s bell flash is over.
+    BellFlashEnd(PaneId),
     /// The window's close button: save the session, then exit.
     CloseRequested,
     /// A title bar button or drag (the window has no OS decorations).

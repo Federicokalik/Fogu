@@ -324,9 +324,9 @@ impl App {
             }
             // No UI for these yet; Progress/Notify/PromptMark are logged by the session. Agent
             // forwarding is what the profile asked for, not a problem: no badge, no toast.
+            SessionOutput::Bell => return self.on_bell(pane_id),
             SessionOutput::Warning(_)
             | SessionOutput::Wakeup
-            | SessionOutput::Bell
             | SessionOutput::Progress(_)
             | SessionOutput::Notify { .. }
             | SessionOutput::PromptMark(_) => {}

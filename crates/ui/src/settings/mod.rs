@@ -19,7 +19,7 @@ use iced::{Alignment, Border, Element, Length};
 
 use crate::controls;
 use crate::design::{Env, resolve_style};
-use crate::icons::{Icon, icon};
+use crate::icons::{Icon, fixed, icon};
 use crate::message::Message;
 use crate::palette::Look;
 use crate::style_code::{self, CodeEditor, CodeKind};
@@ -166,6 +166,14 @@ pub enum Edit {
     Submit,
     /// A choice.
     Choice(usize),
+    /// A flag of a flag set was clicked (toggles it).
+    Flag(usize),
+    /// A font family picked from the list.
+    Pick(String),
+    /// A font family added to a list.
+    Add(String),
+    /// Item `.0` of a list removed.
+    Remove(usize),
 }
 
 /// A question the page asks before going on.
@@ -182,6 +190,8 @@ pub enum SettingsMsg {
     Section(Section),
     /// The search text changed.
     Query(String),
+    /// Enter in the search field: go to the highlighted result.
+    SearchSubmit,
     /// Go to a search result.
     Jump(Target),
     /// Scroll the jumped-to row into view (once its page is laid out).
@@ -241,6 +251,27 @@ pub struct SettingsPage {
     pub editor: Option<CodeEditor>,
     /// The editor's text when it opened (unsaved changes = it differs).
     pub editor_original: String,
+    /// The font family pickers (installed monospace families), filled when the page opens.
+    pub fonts: Option<FontPickers>,
+}
+
+/// The searchable font lists of the Terminal page.
+#[derive(Debug)]
+pub struct FontPickers {
+    /// The terminal font family.
+    pub family: iced::widget::combo_box::State<String>,
+    /// "Add a fallback font".
+    pub fallback: iced::widget::combo_box::State<String>,
+}
+
+impl FontPickers {
+    /// Pickers over `families`.
+    pub fn new(families: Vec<String>) -> Self {
+        Self {
+            fallback: iced::widget::combo_box::State::new(families.clone()),
+            family: iced::widget::combo_box::State::new(families),
+        }
+    }
 }
 
 impl SettingsPage {
@@ -315,11 +346,11 @@ fn header(page: &SettingsPage, look: Look) -> Element<'_, Message> {
         .style(move |_theme: &iced::Theme, status| controls::flat_button(look, status, false))
         .on_press(Message::CloseSettings);
     let search = row![
-        icon(Icon::Search, 12.0, look.dim),
+        fixed(Icon::Search, 12.0, look.dim),
         iced::widget::text_input("Search settings", &page.query)
             .id(Id::new(SEARCH_ID))
             .on_input(|q| Message::Settings(SettingsMsg::Query(q)))
-            .on_submit(Message::Settings(SettingsMsg::Query(page.query.clone())))
+            .on_submit(Message::Settings(SettingsMsg::SearchSubmit))
             .size(13)
             .font(look.text.chrome)
             .padding([5, 8])

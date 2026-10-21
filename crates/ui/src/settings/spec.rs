@@ -28,6 +28,12 @@ pub enum Kind {
     Text { placeholder: &'static str },
     /// One of these labels.
     Choice(&'static [&'static str]),
+    /// A font family: the installed monospace families, or any name typed.
+    Font,
+    /// An ordered list of font families (chips, plus a picker to add one).
+    Fonts,
+    /// Any of these labels.
+    Flags(&'static [&'static str]),
 }
 
 /// How a slider shows its value.
@@ -66,8 +72,6 @@ impl Unit {
 pub enum Applies {
     /// Right away.
     Live,
-    /// To panes opened from now on.
-    NewPanes,
 }
 
 impl Applies {
@@ -75,7 +79,6 @@ impl Applies {
     pub fn badge(self) -> Option<&'static str> {
         match self {
             Self::Live => None,
-            Self::NewPanes => Some("New panes"),
         }
     }
 }
@@ -114,6 +117,10 @@ pub enum Value {
     Text(String),
     /// The index of a choice.
     Choice(usize),
+    /// A list of names.
+    List(Vec<String>),
+    /// Which of a flag set's labels are on.
+    Flags(Vec<bool>),
     /// The automatic value of an optional slider (no key in the file).
     Auto,
 }
@@ -145,6 +152,22 @@ impl Value {
         match self {
             Self::Choice(i) => *i,
             _ => 0,
+        }
+    }
+
+    /// The list (empty for any other value).
+    pub fn list(&self) -> &[String] {
+        match self {
+            Self::List(items) => items,
+            _ => &[],
+        }
+    }
+
+    /// Whether flag `i` is on (`false` for any other value).
+    pub fn flag(&self, i: usize) -> bool {
+        match self {
+            Self::Flags(flags) => flags.get(i).copied().unwrap_or(false),
+            _ => false,
         }
     }
 }
@@ -194,9 +217,10 @@ impl SettingId {
             }
             (Kind::Slider { .. }, Value::Num(n)) => Some(TomlValue::float(to_f32(*n))),
             (Kind::Number { .. }, Value::Num(n)) => Some(TomlValue::Int(round(*n))),
-            (Kind::Choice(_), Value::Choice(_)) => match self {
-                Self::Term(key) => key.choice_value(value).map(TomlValue::from),
+            (Kind::Choice(_) | Kind::Flags(_), _) => match self {
+                Self::Term(key) => key.named(value),
             },
+            (_, Value::List(items)) => Some(TomlValue::List(items.clone())),
             (_, Value::Text(t)) => Some(TomlValue::Str(t.clone())),
             _ => None,
         }

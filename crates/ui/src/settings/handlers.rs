@@ -23,7 +23,10 @@ use crate::style_code::CodeKind;
 impl App {
     /// Opens the settings page (or brings it back to its first page).
     pub(crate) fn open_settings(&mut self) -> Task<Message> {
-        self.settings = Some(SettingsPage::default());
+        self.settings = Some(SettingsPage {
+            fonts: Some(super::FontPickers::new(crate::metrics::monospace_families())),
+            ..SettingsPage::default()
+        });
         Task::none()
     }
 
@@ -58,6 +61,16 @@ impl App {
                 if let Some(page) = &mut self.settings {
                     page.query = query;
                     page.selected = 0;
+                }
+            }
+            SettingsMsg::SearchSubmit => {
+                let hit = self.settings.as_ref().and_then(|page| {
+                    index::search(&page.query)
+                        .get(page.selected)
+                        .map(|hit| hit.target)
+                });
+                if let Some(target) = hit {
+                    return self.jump(target);
                 }
             }
             SettingsMsg::Jump(target) => return self.jump(target),
@@ -214,15 +227,63 @@ impl App {
                 Task::none()
             }
             Edit::Submit => self.flush_setting(id),
+            Edit::Flag(i) => {
+                let Value::Flags(mut flags) = id.get(&self.config) else {
+                    return Task::none();
+                };
+                if let Some(flag) = flags.get_mut(i) {
+                    *flag = !*flag;
+                }
+                self.commit_setting(id, &Value::Flags(flags))
+            }
+            Edit::Pick(name) => {
+                if let Some(page) = &mut self.settings {
+                    page.pending.remove(&id);
+                    page.errors.remove(&id);
+                }
+                self.commit_setting(id, &Value::Text(name))
+            }
+            Edit::Add(name) => {
+                let mut items = id.get(&self.config).list().to_vec();
+                if items.contains(&name) {
+                    return Task::none();
+                }
+                items.push(name);
+                self.commit_setting(id, &Value::List(items))
+            }
+            Edit::Remove(i) => {
+                let mut items = id.get(&self.config).list().to_vec();
+                if i < items.len() {
+                    items.remove(i);
+                }
+                self.commit_setting(id, &Value::List(items))
+            }
         }
     }
 
-    /// Saves every field's typed text that is valid (a click elsewhere, a page switch, closing).
+    /// Saves every field's typed text that is valid (a page switch, closing).
     pub(crate) fn flush_settings(&mut self) -> Task<Message> {
         let ids: Vec<SettingId> = self
             .settings
             .as_ref()
             .map(|p| p.pending.keys().copied().collect())
+            .unwrap_or_default();
+        Task::batch(ids.into_iter().map(|id| self.flush_setting(id)))
+    }
+
+    /// A click anywhere: saves the typed text of plain fields. A font field is left alone: the
+    /// click may be on one of its suggestions, and it saves itself when its list closes.
+    pub(crate) fn flush_settings_on_click(&mut self) -> Task<Message> {
+        let ids: Vec<SettingId> = self
+            .settings
+            .as_ref()
+            .map(|p| {
+                p.pending
+                    .keys()
+                    .copied()
+                    .filter(|id| !matches!(id.spec().kind, Kind::Font))
+                    .collect()
+            })
             .unwrap_or_default();
         Task::batch(ids.into_iter().map(|id| self.flush_setting(id)))
     }
@@ -284,13 +345,31 @@ impl App {
     /// Brings the running app in line with the config after it changed from `old`.
     pub(crate) fn apply_config_change(&mut self, old: &Config) -> Task<Message> {
         let new = Arc::clone(&self.config);
+        let (a, was) = (&new.appearance, &old.appearance);
         let mut notes = Vec::new();
-        if new.appearance.color_scheme != old.appearance.color_scheme {
+        if a.color_scheme != was.color_scheme {
             notes.extend(self.apply_scheme());
-        } else if new.appearance.ui_theme != old.appearance.ui_theme
-            || new.appearance.accent != old.appearance.accent
-        {
+        } else if a.ui_theme != was.ui_theme || a.accent != was.accent {
             self.refresh_look();
+        }
+        if a.font_family != was.font_family || a.fallback_fonts != was.fallback_fonts {
+            notes.extend(self.reresolve_font());
+        }
+        // A new size in Settings also ends any zoom.
+        if a.font_size.to_bits() != was.font_size.to_bits() {
+            self.set_font_size(a.font_size);
+        } else if a.line_height.to_bits() != was.line_height.to_bits()
+            || a.padding_x.to_bits() != was.padding_x.to_bits()
+            || a.padding_y.to_bits() != was.padding_y.to_bits()
+        {
+            self.apply_metrics();
+        }
+        let (t, before) = (&new.terminal, &old.terminal);
+        if t.scrollback_lines != before.scrollback_lines
+            || t.word_separators != before.word_separators
+            || a.cursor_shape != was.cursor_shape
+        {
+            self.apply_term_options();
         }
         Task::batch(notes.into_iter().map(|n| self.notify(n)))
     }
@@ -526,6 +605,7 @@ impl App {
 fn check(id: SettingId, text: &str) -> Result<Value, String> {
     match id.spec().kind {
         Kind::Number { min, max } => parse_number(text, min, max).map(|n| Value::Num(from_i64(n))),
+        Kind::Font if text.trim().is_empty() => Err("a font family name".to_owned()),
         _ => Ok(Value::Text(text.to_owned())),
     }
 }

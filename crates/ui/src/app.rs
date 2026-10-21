@@ -20,7 +20,7 @@ use crate::context_menu::ContextMenu;
 use crate::design::{Env, resolve_style};
 use crate::lifecycle::PendingClipboard;
 use crate::message::{Message, PasteSource, SelectEvent, WindowCmd};
-use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, viewport_to_point};
+use crate::metrics::{self, CellMetrics, FontSpec, ResolvedFont, Spacing, viewport_to_point};
 use crate::notifications::{AUTO_DISMISS, Level, Notification, Toasts};
 use crate::palette::{Colors, Look};
 use crate::panes::{CloseTarget, CwdQuery};
@@ -66,8 +66,6 @@ pub struct App {
     /// Source of every `TabId`/`PaneId`.
     pub(crate) next_id: u64,
     pub(crate) font: FontSpec,
-    /// `config.appearance.font_size` at boot, in points; `ZoomReset`'s target.
-    default_font_size_pt: f32,
     pub(crate) resolved: ResolvedFont,
     pub(crate) metrics: CellMetrics,
     pub(crate) scale: f32,
@@ -113,6 +111,8 @@ pub struct App {
     pub(crate) pane_menu: Option<PaneId>,
     /// A profile editor tab with unsaved changes waits for "Discard changes?".
     pub(crate) pending_discard: Option<TabId>,
+    /// When the last bell rang (closer bells count once).
+    pub(crate) last_bell: Option<Instant>,
     /// Test builds: input ends of the stub sessions (what the UI sent) and the effective
     /// profile each stub session was opened with.
     #[cfg(test)]
@@ -172,7 +172,8 @@ impl App {
             family: config.appearance.font_family.clone(),
             size_pt: config.appearance.font_size,
         };
-        let metrics = CellMetrics::new(resolved.units, font.size_px(), 1.0);
+        let spacing = Spacing::from_config(&config.appearance);
+        let metrics = CellMetrics::new(resolved.units, font.size_px(), 1.0, spacing);
         let (scheme, scheme_note) = resolve_scheme(&config.appearance.color_scheme, &schemes);
         let colors = Colors::new(&scheme);
         let env = Env {
@@ -203,7 +204,6 @@ impl App {
             fullscreen: false,
             pending_cwd: None,
             next_id: 1,
-            default_font_size_pt: font.size_pt,
             font,
             resolved,
             metrics,
@@ -237,6 +237,7 @@ impl App {
             recovery: None,
             pane_menu: None,
             pending_discard: None,
+            last_bell: None,
             config,
             #[cfg(test)]
             stub_inputs: Vec::new(),
@@ -358,11 +359,16 @@ impl App {
         }
         let blink = &self.config.appearance;
         if self.blink.arm(now, blink.cursor_blink, self.focused) {
-            return Task::batch([task, self.after(blink::PERIOD, Message::BlinkTick)]);
+            let period = blink::period(blink.cursor_blink_interval_ms);
+            return Task::batch([task, self.after(period, Message::BlinkTick)]);
         }
         task
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive message dispatch; grouping arms hides the message flow"
+    )]
     fn dispatch(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::DismissToast(id) => {
@@ -376,6 +382,10 @@ impl App {
             }
             Message::ReconnectTick(pane) => self.reconnect_tick(pane),
             Message::RecoveryTick => self.recovery_tick(),
+            Message::BellFlashEnd(pane) => {
+                self.bell_flash_end(pane);
+                Task::none()
+            }
             Message::PaneMenu(_)
             | Message::MenuSplit
             | Message::MenuNewWith
@@ -400,7 +410,8 @@ impl App {
             Message::BlinkTick => {
                 let (blink, focused) = (self.config.appearance.cursor_blink, self.focused);
                 if self.blink.tick(Instant::now(), blink, focused) {
-                    return self.after(blink::PERIOD, Message::BlinkTick);
+                    let period = blink::period(self.config.appearance.cursor_blink_interval_ms);
+                    return self.after(period, Message::BlinkTick);
                 }
                 Task::none()
             }
@@ -428,7 +439,7 @@ impl App {
             Message::MousePressed => {
                 self.on_mouse_pressed();
                 // A click elsewhere saves the text typed into a settings field.
-                self.flush_settings()
+                self.flush_settings_on_click()
             }
             Message::Session(pane, event) => self.on_session(pane, event),
             Message::Action(action) => self.on_action(action),
@@ -570,16 +581,55 @@ impl App {
         self.apply_metrics();
     }
 
+    /// Back to the size set in Settings (zoom only changes the running window).
     pub(crate) fn zoom_reset(&mut self) {
-        self.set_font_size(self.default_font_size_pt);
+        self.set_font_size(self.config.appearance.font_size);
     }
 
-    /// Recomputes cell metrics from font + scale and tells every pane's terminal.
-    fn apply_metrics(&mut self) {
-        self.metrics = CellMetrics::new(self.resolved.units, self.font.size_px(), self.scale);
+    /// Recomputes cell metrics from font, scale, line height and padding, and tells every
+    /// pane's terminal.
+    pub(crate) fn apply_metrics(&mut self) {
+        let spacing = Spacing::from_config(&self.config.appearance);
+        self.metrics = CellMetrics::new(
+            self.resolved.units,
+            self.font.size_px(),
+            self.scale,
+            spacing,
+        );
         let m = &self.metrics;
         for pane in self.tabs.iter_mut().flat_map(|t| t.panes.values_mut()) {
             pane.term.set_cell_size_px(m.cell_w_px, m.cell_h_px);
+        }
+    }
+
+    /// Resolves the configured terminal font family (and checks the fallbacks) again and
+    /// redraws every pane with it; returns what to report (a family that is not installed).
+    pub(crate) fn reresolve_font(&mut self) -> Vec<Notification> {
+        let appearance = &self.config.appearance;
+        let (resolved, problems) =
+            metrics::resolve(&appearance.font_family, &appearance.fallback_fonts);
+        self.font.family.clone_from(&appearance.font_family);
+        self.resolved = resolved;
+        self.env.mono = resolved.font;
+        self.refresh_look();
+        self.apply_metrics();
+        problems
+            .into_iter()
+            .map(|p| Notification::new(Level::Warn, "Font").detail(p))
+            .collect()
+    }
+
+    /// Gives every open pane the configured scrollback, word separators and cursor shape.
+    pub(crate) fn apply_term_options(&mut self) {
+        let terminal = &self.config.terminal;
+        let options = fogu_term::TermOptions {
+            scrollback_lines: terminal.scrollback_lines,
+            word_separators: &terminal.word_separators,
+            cursor_shape: crate::appearance::cursor_shape(self.config.appearance.cursor_shape),
+        };
+        for pane in self.tabs.iter_mut().flat_map(|t| t.panes.values_mut()) {
+            pane.term.set_options(&options);
+            pane.refresh();
         }
     }
 

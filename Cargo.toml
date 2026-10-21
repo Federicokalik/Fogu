@@ -125,6 +125,12 @@ open = "5.4.4"
 # formats we accept (PNG, JPEG, WebP; all pure-Rust decoders).
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 
+# why: the terminal bell's sound (`[terminal] bell = ["sound"]`): a safe API over the OS audio
+# output (WASAPI, CoreAudio, ALSA via cpal). Playback only: the short embedded WAV is decoded by
+# hand, so no codec (symphonia) is pulled in. Behind fogu-ui's `bell-sound` feature (on by
+# default); Linux builds need the ALSA headers (`libasound2-dev`).
+rodio = { version = "0.23.0", default-features = false, features = ["playback"] }
+
 # why: command-line flags (`--config-dir`, `--software-render`, `--version`).
 # `derive` keeps the flag definitions declarative; default features (help, usage, errors) only.
 clap = { version = "4.6.7", features = ["derive"] }

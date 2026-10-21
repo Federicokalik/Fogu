@@ -4,8 +4,10 @@
 
 use std::time::{Duration, Instant};
 
-/// Half-period of the blink.
-pub const PERIOD: Duration = Duration::from_millis(530);
+/// The half-period `appearance.cursor_blink_interval_ms` asks for, kept to 100..=2000 ms.
+pub fn period(ms: u64) -> Duration {
+    Duration::from_millis(ms.clamp(100, 2000))
+}
 /// Blinking stops (cursor solid) after this long without user activity.
 pub const IDLE_AFTER: Duration = Duration::from_secs(10);
 
@@ -66,6 +68,9 @@ impl Blink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The default half-period.
+    const PERIOD: Duration = Duration::from_millis(530);
 
     #[test]
     fn blinks_then_goes_solid_after_ten_idle_seconds() {

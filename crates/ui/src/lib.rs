@@ -11,6 +11,7 @@ mod app;
 mod appearance;
 mod background;
 mod background_menu;
+mod bell;
 mod blink;
 mod color_picker;
 mod context_menu;

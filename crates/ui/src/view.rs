@@ -80,6 +80,7 @@ impl App {
                 .status(pane.status.as_deref())
                 .hotkeys(&self.config.hotkeys)
                 .cursor_on(self.blink.on)
+                .flash(pane.flash)
                 .default_bg_alpha(terminal_alpha)
                 .into();
                 let view = view.map(move |message| message.for_pane(id));
@@ -176,9 +177,12 @@ impl App {
         // there (an empty spacer without toasts): wrapping the panes only while a toast shows
         // would rebuild their widget state, and a prompt's text field would lose its focus when
         // the toast goes away.
+        // With the settings page open the toasts are drawn over it instead (see `overlays`).
         let toasts = self
-            .toasts
-            .view(self.metrics.cell_h, self.look)
+            .settings
+            .is_none()
+            .then(|| self.toasts.view(self.metrics.cell_h, self.look))
+            .flatten()
             .unwrap_or_else(|| iced::widget::space().into());
         let panes: Element<'a, Message> = iced::widget::stack![body, toasts].into();
         let look = self.look;
@@ -223,8 +227,8 @@ impl App {
         self.overlays(main, sftp_modal, dialog)
     }
 
-    /// Every layer over `base`, bottom to top: the SFTP panel, the settings page, a
-    /// confirmation, a dialog, the profile picker, the context menu, the drag label and the
+    /// Every layer over `base`, bottom to top: the SFTP panel, the settings page (and the
+    /// toasts while it is open), a confirmation, a dialog, the profile picker, the context menu, the drag label and the
     /// window's resize edges. The stack always has the same children (an empty space for a
     /// layer that is not shown), so opening one never rebuilds the state of those below it: the
     /// settings page keeps its scroll and a field its focus while a confirmation comes and goes.
@@ -256,6 +260,11 @@ impl App {
             let outside = Message::Settings(crate::settings::SettingsMsg::Outside);
             modal::centered(card.into(), look, Some(outside))
         });
+        // A save that failed must be seen while the settings page is open.
+        let toasts = self
+            .settings
+            .as_ref()
+            .and_then(|_| self.toasts.view(36.0, look));
         let confirm = self
             .paste_modal()
             .or_else(|| self.close_modal())
@@ -296,6 +305,7 @@ impl App {
             Some(base),
             sftp,
             settings,
+            toasts,
             confirm,
             dialog,
             picker,

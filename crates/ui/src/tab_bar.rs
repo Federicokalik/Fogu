@@ -366,6 +366,14 @@ impl<'a> TabBar<'a> {
         if let Some(badge) = warning_badge(tab, look) {
             line = line.push(badge);
         }
+        if tab.bell {
+            line = line.push(controls::tip(
+                controls::dot(look, look.accent, 6.0),
+                "The bell rang",
+                tooltip::Position::Bottom,
+                look,
+            ));
+        }
         line = line.push(title);
         if let Some(close) = close {
             line = line.push(close);

@@ -202,6 +202,7 @@ impl App {
         self.active = id;
         self.focus_report(true);
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+            tab.bell = false;
             tab.panes.values_mut().for_each(Pane::refresh);
         }
     }

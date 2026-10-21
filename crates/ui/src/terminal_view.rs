@@ -43,6 +43,8 @@ pub struct TerminalView<'a> {
     cursor_on: bool,
     /// Alpha of the scheme's default background (below 1 over a tab background).
     default_bg_alpha: f32,
+    /// The bell flash is showing.
+    flash: bool,
 }
 
 impl<'a> TerminalView<'a> {
@@ -68,7 +70,15 @@ impl<'a> TerminalView<'a> {
             hotkeys: None,
             cursor_on: true,
             default_bg_alpha: 1.0,
+            flash: false,
         }
+    }
+
+    /// Draws the bell flash over the pane.
+    #[must_use]
+    pub fn flash(mut self, on: bool) -> Self {
+        self.flash = on;
+        self
     }
 
     /// A status line drawn below the cursor, such as "[process exited with code 0]".
@@ -349,7 +359,7 @@ impl<'a> TerminalView<'a> {
         let Some(label) = self.overlay else { return };
         let row = (self.snapshot.cursor.row + 1).min(self.snapshot.rows.saturating_sub(1));
         let cols = label.chars().count();
-        let rect = self.cell_rect(grid_origin(bounds), 0, row, cols);
+        let rect = self.cell_rect(grid_origin(bounds, &self.metrics), 0, row, cols);
         fill(renderer, rect, self.colors.foreground());
         let style = Style {
             fg: self.colors.background(),
@@ -370,7 +380,7 @@ impl TerminalView<'_> {
     /// The hovered link: underlined, with its real target on the row below (above on the last
     /// row) so an OSC 8 text can't pass for another address.
     fn draw_link(&self, renderer: &mut iced::Renderer, bounds: Rectangle, link: &links::Link) {
-        let origin = grid_origin(bounds);
+        let origin = grid_origin(bounds, &self.metrics);
         let cells_rect = self.cell_rect(origin, link.start, link.row, link.end - link.start);
         let underline = Rectangle {
             y: cells_rect.y + cells_rect.height - 1.0,
@@ -458,7 +468,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
         let bounds = layout.bounds();
         // Any event (incl. the RedrawRequested sent before every frame) checks whether the
         // widget's size now holds a different grid.
-        let (cols, rows) = grid_size(grid_room(bounds.size()), &self.metrics);
+        let (cols, rows) = grid_size(grid_room(bounds.size(), &self.metrics), &self.metrics);
         if (usize::from(cols), usize::from(rows)) != (self.snapshot.cols, self.snapshot.rows) {
             shell.publish(Message::GridResized {
                 pane: self.pane,
@@ -543,7 +553,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
             Event::Window(window::Event::RedrawRequested(_)) => {
                 let c = &self.snapshot.cursor;
                 shell.request_input_method::<&str>(&InputMethod::Enabled {
-                    cursor: self.cell_rect(grid_origin(bounds), c.col, c.row, 1),
+                    cursor: self.cell_rect(grid_origin(bounds, &self.metrics), c.col, c.row, 1),
                     purpose: input_method::Purpose::Terminal,
                     preedit: None,
                 });
@@ -595,7 +605,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
             };
             renderer::Renderer::fill_quad(renderer, quad, bg);
         }
-        let origin = grid_origin(bounds);
+        let origin = grid_origin(bounds, &self.metrics);
         self.draw_runs(renderer, origin, bounds);
         self.draw_selection(renderer, origin);
         self.draw_cursor(renderer, origin, bounds);
@@ -603,6 +613,15 @@ impl Widget<Message, iced::Theme, iced::Renderer> for TerminalView<'_> {
         self.draw_overlay(renderer, bounds);
         if let Some(link) = &tree.state.downcast_ref::<MouseState>().link {
             self.draw_link(renderer, bounds, link);
+        }
+        if self.flash {
+            let mut veil = to_iced(self.colors.foreground());
+            veil.a = 0.12;
+            let quad = Quad {
+                bounds,
+                ..Quad::default()
+            };
+            renderer::Renderer::fill_quad(renderer, quad, veil);
         }
     }
 }

@@ -19,6 +19,8 @@ clap = { workspace = true }
 rustix = { workspace = true }
 
 [features]
-default = ["ssh"]
+default = ["ssh", "bell-sound"]
 # SSH sessions (forwards `fogu-ui/ssh`).
 ssh = ["fogu-ui/ssh"]
+# The terminal bell's sound (forwards `fogu-ui/bell-sound`).
+bell-sound = ["fogu-ui/bell-sound"]

@@ -34,7 +34,7 @@ pub struct MouseConfig {
 /// Where the grid sits on screen.
 #[derive(Clone, Copy, Debug)]
 pub struct Grid {
-    /// Widget bounds; the grid starts [`crate::metrics::GRID_PAD`] in from the top-left corner.
+    /// Widget bounds; the grid starts the metrics' padding in from the top-left corner.
     pub bounds: Rectangle,
     /// Cell size.
     pub metrics: CellMetrics,

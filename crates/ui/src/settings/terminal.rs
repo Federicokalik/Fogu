@@ -1,14 +1,27 @@
-//! The Terminal page: `[terminal]` behaviour (scrollback, selection, paste, keyboard, mouse).
+//! The Terminal page: the grid's font, cursor, spacing and bell (`[appearance]`, `[terminal]`)
+//! and `[terminal]` behaviour (scrollback, selection, paste, keyboard, mouse).
 
-use fogu_core::config::RightClickAction;
+use fogu_core::config::{BellMode, CursorShapeCfg, RightClickAction, TomlValue};
 use fogu_core::{Config, Osc52Policy};
 
 use super::Section;
 use super::spec::{Applies, Kind, Spec, Unit, Value, from_usize, round, to_f32};
 
-/// One `[terminal]` setting.
+/// One Terminal page setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TermKey {
+    FontFamily,
+    FontSize,
+    FallbackFonts,
+    LineHeight,
+    CursorShape,
+    CursorBlink,
+    BlinkInterval,
+    PaddingX,
+    PaddingY,
+    BgAlpha,
+    Bell,
+    BellVolume,
     ScrollbackLines,
     KeepHistory,
     CopyOnSelect,
@@ -32,10 +45,36 @@ const RIGHT_CLICK: &[&str] = &[
     "Paste the clipboard",
 ];
 const OSC52: &[&str] = &["Ask each time", "Allow", "Deny"];
+const CURSOR: &[&str] = &["Block", "Beam", "Underline"];
+const BELL: &[&str] = &[
+    "Flash the pane",
+    "Dot on the tab",
+    "Flash the taskbar",
+    "Play a sound",
+];
+/// The bell modes in [`BELL`]'s order.
+const BELL_MODES: [BellMode; 4] = [
+    BellMode::Visual,
+    BellMode::Badge,
+    BellMode::Attention,
+    BellMode::Sound,
+];
 
 impl TermKey {
     /// Every key, in page order.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 27] = [
+        Self::FontFamily,
+        Self::FontSize,
+        Self::FallbackFonts,
+        Self::LineHeight,
+        Self::CursorShape,
+        Self::CursorBlink,
+        Self::BlinkInterval,
+        Self::PaddingX,
+        Self::PaddingY,
+        Self::BgAlpha,
+        Self::Bell,
+        Self::BellVolume,
         Self::ScrollbackLines,
         Self::KeepHistory,
         Self::CopyOnSelect,
@@ -59,40 +98,143 @@ impl TermKey {
         reason = "the page's settings table: one short entry per setting"
     )]
     pub fn spec(self) -> Spec {
-        let row = |group, key, label, help, keywords, kind, applies| Spec {
+        let row = |group, (path, key), label, help, keywords, kind| Spec {
             section: Section::Terminal,
             group,
-            path: &["terminal"],
+            path,
             key,
             label,
             help,
             keywords,
             kind,
-            applies,
+            applies: Applies::Live,
         };
+        let look: &'static [&'static str] = &["appearance"];
+        let term: &'static [&'static str] = &["terminal"];
         let toggle = |group, key, label, help, keywords| {
-            row(
-                group,
-                key,
-                label,
-                help,
-                keywords,
-                Kind::Toggle,
-                Applies::Live,
-            )
+            row(group, (term, key), label, help, keywords, Kind::Toggle)
+        };
+        let slider = |min, max, step, unit| Kind::Slider {
+            min,
+            max,
+            step,
+            unit,
+            auto: None,
         };
         match self {
+            Self::FontFamily => row(
+                "Font",
+                (look, "font_family"),
+                "Font family",
+                "A monospace family; \"monospace\" is the system's default one.",
+                "typeface font face monospace",
+                Kind::Font,
+            ),
+            Self::FontSize => row(
+                "Font",
+                (look, "font_size"),
+                "Font size",
+                "Zoom shortcuts change the open window only; Reset zoom returns here.",
+                "text size zoom points",
+                slider(6.0, 40.0, 0.5, Unit::Pt),
+            ),
+            Self::FallbackFonts => row(
+                "Font",
+                (look, "fallback_fonts"),
+                "Fallback fonts",
+                "Checked and reported when missing; glyphs the main font lacks are found \
+                 automatically.",
+                "fallback glyphs icons emoji",
+                Kind::Fonts,
+            ),
+            Self::LineHeight => row(
+                "Font",
+                (look, "line_height"),
+                "Line height",
+                "Space between rows, as a multiple of the font's own; text stays centred.",
+                "line spacing leading rows",
+                slider(0.8, 2.0, 0.05, Unit::Times),
+            ),
+            Self::CursorShape => row(
+                "Cursor",
+                (look, "cursor_shape"),
+                "Cursor shape",
+                "Until a program picks its own shape.",
+                "block beam bar underline caret",
+                Kind::Choice(CURSOR),
+            ),
+            Self::CursorBlink => row(
+                "Cursor",
+                (look, "cursor_blink"),
+                "Blinking cursor",
+                "The cursor blinks while you type and stops after ten idle seconds.",
+                "blink caret",
+                Kind::Toggle,
+            ),
+            Self::BlinkInterval => row(
+                "Cursor",
+                (look, "cursor_blink_interval_ms"),
+                "Blink speed",
+                "How long the cursor stays on and off.",
+                "blink rate interval",
+                slider(100.0, 2000.0, 10.0, Unit::Ms),
+            ),
+            Self::PaddingX => row(
+                "Spacing",
+                (look, "padding_x"),
+                "Side padding",
+                "Room between a pane's left and right edges and the text.",
+                "margin padding horizontal",
+                slider(0.0, 32.0, 1.0, Unit::Px),
+            ),
+            Self::PaddingY => row(
+                "Spacing",
+                (look, "padding_y"),
+                "Top and bottom padding",
+                "Room between a pane's top and bottom edges and the text.",
+                "margin padding vertical",
+                slider(0.0, 32.0, 1.0, Unit::Px),
+            ),
+            Self::BgAlpha => row(
+                "Spacing",
+                (look, "terminal_bg_alpha"),
+                "Background opacity",
+                "Over a tab background image or colour; automatic is 75% over an image.",
+                "transparency alpha opacity background",
+                Kind::Slider {
+                    min: 0.0,
+                    max: 1.0,
+                    step: 0.05,
+                    unit: Unit::Percent,
+                    auto: Some("Automatic"),
+                },
+            ),
+            Self::Bell => row(
+                "Bell",
+                (term, "bell"),
+                "When a program rings the bell",
+                "Any combination; none ignores the bell.",
+                "bell beep alert notification sound flash",
+                Kind::Flags(BELL),
+            ),
+            Self::BellVolume => row(
+                "Bell",
+                (term, "bell_volume"),
+                "Bell volume",
+                "Loudness of the bell sound.",
+                "sound volume loud",
+                slider(0.0, 1.0, 0.05, Unit::Percent),
+            ),
             Self::ScrollbackLines => row(
                 "Scrollback",
-                "scrollback_lines",
+                (term, "scrollback_lines"),
                 "Scrollback lines",
-                "Lines of history kept per pane.",
+                "Lines of history kept per pane; lowering it drops older lines in open panes.",
                 "history buffer lines",
                 Kind::Number {
                     min: 0,
                     max: 1_000_000,
                 },
-                Applies::NewPanes,
             ),
             Self::KeepHistory => toggle(
                 "Scrollback",
@@ -110,23 +252,21 @@ impl TermKey {
             ),
             Self::WordSeparators => row(
                 "Selection",
-                "word_separators",
+                (term, "word_separators"),
                 "Word separators",
                 "Characters that end a double-click word selection.",
                 "double click semantic word",
                 Kind::Text {
                     placeholder: " ()[]{}'\"",
                 },
-                Applies::NewPanes,
             ),
             Self::Osc52 => row(
                 "Selection",
-                "osc52_write",
+                (term, "osc52_write"),
                 "Programs writing the clipboard",
                 "OSC 52 requests from programs (tmux, editors); profiles may override it.",
                 "osc52 clipboard tmux remote copy",
                 Kind::Choice(OSC52),
-                Applies::Live,
             ),
             Self::MiddlePaste => toggle(
                 "Paste",
@@ -179,50 +319,54 @@ impl TermKey {
             ),
             Self::WheelLines => row(
                 "Mouse",
-                "wheel_lines",
+                (term, "wheel_lines"),
                 "Lines per wheel notch",
                 "How far one notch of the mouse wheel scrolls.",
                 "scroll speed wheel",
-                Kind::Slider {
-                    min: 1.0,
-                    max: 20.0,
-                    step: 1.0,
-                    unit: Unit::Plain(0),
-                    auto: None,
-                },
-                Applies::Live,
+                slider(1.0, 20.0, 1.0, Unit::Plain(0)),
             ),
             Self::RightClick => row(
                 "Mouse",
-                "right_click",
+                (term, "right_click"),
                 "Right click",
                 "Shift+right-click always opens the menu.",
                 "context menu paste mouse",
                 Kind::Choice(RIGHT_CLICK),
-                Applies::Live,
             ),
             Self::ResizeStep => row(
                 "Panes",
-                "pane_resize_step",
+                (term, "pane_resize_step"),
                 "Resize step",
                 "Share of a split each resize-pane shortcut moves.",
                 "split resize keyboard",
-                Kind::Slider {
-                    min: 0.01,
-                    max: 0.5,
-                    step: 0.01,
-                    unit: Unit::Percent,
-                    auto: None,
-                },
-                Applies::Live,
+                slider(0.01, 0.5, 0.01, Unit::Percent),
             ),
         }
     }
 
     /// Its current value.
     pub fn get(self, config: &Config) -> Value {
+        let a = &config.appearance;
         let t = &config.terminal;
         match self {
+            Self::FontFamily => Value::Text(a.font_family.clone()),
+            Self::FontSize => Value::Num(f64::from(a.font_size)),
+            Self::FallbackFonts => Value::List(a.fallback_fonts.clone()),
+            Self::LineHeight => Value::Num(f64::from(a.line_height)),
+            Self::CursorShape => Value::Choice(match a.cursor_shape {
+                CursorShapeCfg::Block => 0,
+                CursorShapeCfg::Beam => 1,
+                CursorShapeCfg::Underline => 2,
+            }),
+            Self::CursorBlink => Value::Bool(a.cursor_blink),
+            Self::BlinkInterval => Value::Num(from_u64(a.cursor_blink_interval_ms)),
+            Self::PaddingX => Value::Num(f64::from(a.padding_x)),
+            Self::PaddingY => Value::Num(f64::from(a.padding_y)),
+            Self::BgAlpha => a
+                .terminal_bg_alpha
+                .map_or(Value::Auto, |v| Value::Num(f64::from(v))),
+            Self::Bell => Value::Flags(BELL_MODES.iter().map(|m| t.bell.contains(m)).collect()),
+            Self::BellVolume => Value::Num(f64::from(t.bell_volume)),
             Self::ScrollbackLines => Value::Num(from_usize(t.scrollback_lines)),
             Self::KeepHistory => Value::Bool(t.keep_history_on_restart),
             Self::CopyOnSelect => Value::Bool(t.copy_on_select),
@@ -247,11 +391,37 @@ impl TermKey {
 
     /// Sets it in the running config.
     pub fn set(self, config: &mut Config, value: &Value) {
+        let a = &mut config.appearance;
         let t = &mut config.terminal;
+        let count = |v: &Value| usize::try_from(round(v.num())).unwrap_or(0);
         match self {
-            Self::ScrollbackLines => {
-                t.scrollback_lines = usize::try_from(round(value.num())).unwrap_or(0);
+            Self::FontFamily => value.text().trim().clone_into(&mut a.font_family),
+            Self::FontSize => a.font_size = to_f32(value.num()),
+            Self::FallbackFonts => a.fallback_fonts = value.list().to_vec(),
+            Self::LineHeight => a.line_height = to_f32(value.num()),
+            Self::CursorShape => a.cursor_shape = cursor(value.choice()),
+            Self::CursorBlink => a.cursor_blink = value.bool(),
+            Self::BlinkInterval => {
+                a.cursor_blink_interval_ms = u64::try_from(round(value.num())).unwrap_or(530);
             }
+            Self::PaddingX => a.padding_x = to_f32(value.num()),
+            Self::PaddingY => a.padding_y = to_f32(value.num()),
+            Self::BgAlpha => {
+                a.terminal_bg_alpha = match value {
+                    Value::Auto => None,
+                    v => Some(to_f32(v.num())),
+                };
+            }
+            Self::Bell => {
+                t.bell = BELL_MODES
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| value.flag(*i))
+                    .map(|(_, m)| *m)
+                    .collect();
+            }
+            Self::BellVolume => t.bell_volume = to_f32(value.num()),
+            Self::ScrollbackLines => t.scrollback_lines = count(value),
             Self::KeepHistory => t.keep_history_on_restart = value.bool(),
             Self::CopyOnSelect => t.copy_on_select = value.bool(),
             Self::WordSeparators => value.text().clone_into(&mut t.word_separators),
@@ -275,18 +445,55 @@ impl TermKey {
         }
     }
 
-    /// The TOML string of a choice.
-    pub fn choice_value(self, value: &Value) -> Option<&'static str> {
-        match self {
-            Self::Osc52 => Some(osc52_name(osc52(value.choice()))),
-            Self::RightClick => Some(match value.choice() {
+    /// How a choice or flag set is written.
+    pub fn named(self, value: &Value) -> Option<TomlValue> {
+        let name = match self {
+            Self::Osc52 => osc52_name(osc52(value.choice())),
+            Self::CursorShape => match cursor(value.choice()) {
+                CursorShapeCfg::Block => "block",
+                CursorShapeCfg::Beam => "beam",
+                CursorShapeCfg::Underline => "underline",
+            },
+            Self::RightClick => match value.choice() {
                 1 => "paste",
                 2 => "clipboard",
                 _ => "menu",
-            }),
-            _ => None,
-        }
+            },
+            Self::Bell => {
+                let names = BELL_MODES
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| value.flag(*i))
+                    .map(|(_, m)| bell_name(*m).to_owned())
+                    .collect();
+                return Some(TomlValue::List(names));
+            }
+            _ => return None,
+        };
+        Some(TomlValue::from(name))
     }
+}
+
+fn cursor(index: usize) -> CursorShapeCfg {
+    match index {
+        1 => CursorShapeCfg::Beam,
+        2 => CursorShapeCfg::Underline,
+        _ => CursorShapeCfg::Block,
+    }
+}
+
+fn bell_name(mode: BellMode) -> &'static str {
+    match mode {
+        BellMode::Visual => "visual",
+        BellMode::Badge => "badge",
+        BellMode::Attention => "attention",
+        BellMode::Sound => "sound",
+    }
+}
+
+/// A millisecond count as a control value.
+fn from_u64(n: u64) -> f64 {
+    from_usize(usize::try_from(n).unwrap_or(usize::MAX))
 }
 
 /// `policy`'s index in a three-way OSC 52 choice (ask, allow, deny).

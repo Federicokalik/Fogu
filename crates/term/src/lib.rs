@@ -21,6 +21,6 @@ pub use event_proxy::{
     CLIPBOARD_STORE_MAX_BYTES, EventProxy, Palette, TITLE_MAX_CHARS, TermEvent, default_palette,
     dim, sanitize_title,
 };
-pub use handle::{TermHandle, WORD_SEPARATORS};
+pub use handle::{TermHandle, TermOptions, WORD_SEPARATORS};
 pub use osc::{OscEvent, OscScanner, PromptMark};
 pub use snapshot::{Cell, CellFlags, Cursor, RenderSnapshot};

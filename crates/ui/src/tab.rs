@@ -189,6 +189,8 @@ pub struct Pane {
     /// Seconds left before an ended SSH pane reconnects by itself (`behavior_on_session_end`
     /// `reconnect` / `auto`); `None` = no countdown (never started or cancelled with Esc).
     pub reconnect_in: Option<u8>,
+    /// The bell flash is showing.
+    pub flash: bool,
 }
 
 impl Pane {
@@ -228,6 +230,7 @@ impl Pane {
             forwards: Vec::new(),
             connection: None,
             reconnect_in: None,
+            flash: false,
         }
     }
 
@@ -321,6 +324,8 @@ pub struct Tab {
     /// "Maximize pane": the one-pane tree shown instead of `layout` until the layout or the
     /// focus changes.
     pub solo: Option<SplitTree<PaneId>>,
+    /// A pane rang the bell while the tab was in the background (a dot until it is shown).
+    pub bell: bool,
 }
 
 impl Tab {
@@ -338,6 +343,7 @@ impl Tab {
             sftp: None,
             editor: None,
             solo: None,
+            bell: false,
         }
     }
 
@@ -357,6 +363,7 @@ impl Tab {
             background: TabBackground::None,
             editor: Some(Box::new(editor)),
             solo: None,
+            bell: false,
         }
     }
 

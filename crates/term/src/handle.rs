@@ -28,6 +28,18 @@ const MAX_BYTES_PER_LOCK: usize = 64 * 1024;
 /// The default word separators: the characters that end a double-click (semantic) selection.
 pub const WORD_SEPARATORS: &str = " ()[]{}'\"";
 
+/// The settings of a running terminal that can change while it runs
+/// ([`TermHandle::set_options`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TermOptions<'a> {
+    /// Lines of history kept.
+    pub scrollback_lines: usize,
+    /// Characters that end a double-click (semantic) selection.
+    pub word_separators: &'a str,
+    /// The cursor shape until the application picks one with DECSCUSR.
+    pub cursor_shape: CursorShape,
+}
+
 /// Grid size in cells.
 #[derive(Clone, Copy, Debug)]
 struct Size {
@@ -172,6 +184,31 @@ impl TermHandle {
     pub fn set_default_cursor_shape(&mut self, shape: CursorShape) {
         self.config.default_cursor_style.shape = shape;
         self.term.lock().set_options(self.config.clone());
+    }
+
+    /// Changes the settings of a running terminal: scrollback length (lowering it drops the
+    /// oldest history lines at once), word separators and default cursor shape. No-op when
+    /// nothing changes.
+    pub fn set_options(&mut self, options: &TermOptions<'_>) {
+        let mut config = self.config.clone();
+        config.scrolling_history = options.scrollback_lines;
+        options
+            .word_separators
+            .clone_into(&mut config.semantic_escape_chars);
+        config.default_cursor_style.shape = options.cursor_shape;
+        if config == self.config {
+            return;
+        }
+        let shrinks = config.scrolling_history < self.config.scrolling_history;
+        {
+            let mut term = self.term.lock();
+            if shrinks {
+                // A selection may reach into the dropped lines.
+                term.selection = None;
+            }
+            term.set_options(config.clone());
+        }
+        self.config = config;
     }
 
     /// Scrolls the viewport through history.

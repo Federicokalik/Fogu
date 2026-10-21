@@ -63,6 +63,44 @@ pub struct ResolvedFont {
     pub units: FontUnits,
 }
 
+/// The room around and between rows a user can set: line height and the grid's padding.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spacing {
+    /// Multiple of the font's own line height (glyphs stay vertically centred).
+    pub line_height: f32,
+    /// Room between a pane's edges and its grid: `x` left and right, `y` top and bottom.
+    pub pad: Vector,
+}
+
+impl Default for Spacing {
+    fn default() -> Self {
+        Self {
+            line_height: 1.0,
+            pad: DEFAULT_PAD,
+        }
+    }
+}
+
+impl Spacing {
+    /// `appearance.line_height` and `padding_x` / `padding_y`, clamped to their ranges.
+    pub fn from_config(appearance: &fogu_core::config::Appearance) -> Self {
+        let clamp = |v: f32, lo: f32, hi: f32, default: f32| {
+            if v.is_finite() {
+                v.clamp(lo, hi)
+            } else {
+                default
+            }
+        };
+        Self {
+            line_height: clamp(appearance.line_height, 0.8, 2.0, 1.0),
+            pad: Vector::new(
+                clamp(appearance.padding_x, 0.0, 32.0, DEFAULT_PAD.x),
+                clamp(appearance.padding_y, 0.0, 32.0, DEFAULT_PAD.y),
+            ),
+        }
+    }
+}
+
 /// Cell size for one font size and scale factor.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CellMetrics {
@@ -78,18 +116,22 @@ pub struct CellMetrics {
     pub cell_w_px: u16,
     /// Cell height in device px.
     pub cell_h_px: u16,
+    /// Room between a pane's edges and its grid (left/right, top/bottom).
+    pub pad: Vector,
 }
 
 impl CellMetrics {
-    /// Scales `units` to `font_size` logical px at `scale` device px per logical px.
-    pub fn new(units: FontUnits, font_size: f32, scale: f32) -> Self {
+    /// Scales `units` to `font_size` logical px at `scale` device px per logical px, with
+    /// `spacing`'s line height and padding.
+    pub fn new(units: FontUnits, font_size: f32, scale: f32, spacing: Spacing) -> Self {
         let scale = if scale.is_finite() && scale > 0.0 {
             scale
         } else {
             1.0
         };
         let (width, width_px) = round_to_device(units.advance * font_size, scale);
-        let (height, height_px) = round_to_device(units.line_height * font_size, scale);
+        let line = units.line_height * font_size * spacing.line_height;
+        let (height, height_px) = round_to_device(line, scale);
         let fitted = width / units.advance;
         Self {
             font_size: if fitted.is_finite() && fitted > 0.0 {
@@ -101,6 +143,7 @@ impl CellMetrics {
             cell_h: height,
             cell_w_px: width_px,
             cell_h_px: height_px,
+            pad: spacing.pad,
         }
     }
 }
@@ -120,20 +163,20 @@ pub fn grid_size(bounds: iced::Size, metrics: &CellMetrics) -> (u16, u16) {
     )
 }
 
-/// Room between a pane's left / top edge and its grid: text never touches the edge, and a
+/// Default room between a pane's edges and its grid: text never touches the edge, and a
 /// selection of the first column can start in the margin.
-pub const GRID_PAD: Vector = Vector::new(8.0, 6.0);
+pub const DEFAULT_PAD: Vector = Vector::new(8.0, 6.0);
 
 /// Where the grid starts in the widget's `bounds`.
-pub fn grid_origin(bounds: iced::Rectangle) -> iced::Point {
-    bounds.position() + GRID_PAD
+pub fn grid_origin(bounds: iced::Rectangle, m: &CellMetrics) -> iced::Point {
+    bounds.position() + m.pad
 }
 
-/// The part of a widget of `size` left for the grid.
-pub fn grid_room(size: iced::Size) -> iced::Size {
+/// The part of a widget of `size` left for the grid (the padding on both sides taken off).
+pub fn grid_room(size: iced::Size, m: &CellMetrics) -> iced::Size {
     iced::Size::new(
-        (size.width - GRID_PAD.x).max(0.0),
-        (size.height - GRID_PAD.y).max(0.0),
+        (size.width - 2.0 * m.pad.x).max(0.0),
+        (size.height - 2.0 * m.pad.y).max(0.0),
     )
 }
 
@@ -145,7 +188,7 @@ pub fn grid_cell(
     cols: usize,
     rows: usize,
 ) -> CellPos {
-    pixel_to_cell(p - grid_origin(bounds), m, cols, rows)
+    pixel_to_cell(p - grid_origin(bounds, m), m, cols, rows)
 }
 
 /// Rounds a logical length to whole device pixels (at least 1). Returns the snapped logical
@@ -280,6 +323,24 @@ pub fn resolve(family: &str, fallbacks: &[String]) -> (ResolvedFont, Vec<String>
     (resolved, problems)
 }
 
+/// The families of every installed monospace face (no emoji fonts), sorted, after the generic
+/// `monospace`: what the font pickers offer.
+pub fn monospace_families() -> Vec<String> {
+    let mut system = font_system()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let names: std::collections::BTreeSet<String> = system
+        .raw()
+        .db()
+        .faces()
+        .filter(|face| face.monospaced && !face.post_script_name.contains("Emoji"))
+        .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
+        .collect();
+    std::iter::once("monospace".to_owned())
+        .chain(names.into_iter().filter(|n| n != "monospace"))
+        .collect()
+}
+
 fn log_face(what: &str, requested: &str, db: &Database, found: &Found) {
     let source = db.face(found.id).map(|face| match &face.source {
         fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => {
@@ -379,21 +440,21 @@ mod tests {
             advance: 0.6,
             line_height: 1.17,
         };
-        let m = CellMetrics::new(units, 16.0, 1.0);
+        let m = CellMetrics::new(units, 16.0, 1.0, Spacing::default());
         assert_eq!((m.cell_w_px, m.cell_h_px), (10, 19));
         assert!((m.cell_w - 10.0).abs() < f32::EPSILON);
         // Glyphs are drawn at the size whose advance is exactly one cell (10 px, not 9.6).
         assert!((m.font_size * units.advance - m.cell_w).abs() < 1e-4);
-        let hidpi = CellMetrics::new(units, 16.0, 2.0);
+        let hidpi = CellMetrics::new(units, 16.0, 2.0, Spacing::default());
         assert_eq!((hidpi.cell_w_px, hidpi.cell_h_px), (19, 37));
         assert!((hidpi.font_size * units.advance - hidpi.cell_w).abs() < 1e-4);
         // A broken scale factor falls back to 1.0.
-        assert_eq!(CellMetrics::new(units, 16.0, 0.0), m);
+        assert_eq!(CellMetrics::new(units, 16.0, 0.0, Spacing::default()), m);
     }
 
     #[test]
     fn pixel_to_cell_table() {
-        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0);
+        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0, Spacing::default());
         // cell 10 × 19, grid 80 × 24
         let (l, r) = (Side::Left, Side::Right);
         let cases = [
@@ -431,16 +492,17 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_sits_inside_a_left_and_top_margin() {
-        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0);
+    fn the_grid_sits_inside_its_padding() {
+        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0, Spacing::default());
         // cell 10 × 19
-        let size = iced::Size::new(800.0 + GRID_PAD.x, 456.0 + GRID_PAD.y);
+        let pad = DEFAULT_PAD;
+        let size = iced::Size::new(800.0 + 2.0 * pad.x, 456.0 + 2.0 * pad.y);
         let widget = iced::Rectangle::new(iced::Point::new(100.0, 50.0), size);
-        let start = grid_origin(widget);
+        let start = grid_origin(widget, &m);
         assert!(start.x >= 106.0 && start.y >= 54.0, "no margin: {start:?}");
-        assert_eq!(grid_size(grid_room(widget.size()), &m), (80, 24));
-        let (x0, y0) = (100.0 + GRID_PAD.x, 50.0 + GRID_PAD.y);
-        assert_eq!(grid_origin(widget), iced::Point::new(x0, y0));
+        assert_eq!(grid_size(grid_room(widget.size(), &m), &m), (80, 24));
+        let (x0, y0) = (100.0 + pad.x, 50.0 + pad.y);
+        assert_eq!(grid_origin(widget, &m), iced::Point::new(x0, y0));
         let at = |x: f32, y: f32| grid_cell(widget, iced::Point::new(x, y), &m, 80, 24);
         let cell = |col, row, side| CellPos { col, row, side };
         // In the margin: the first cell's left half, where a selection of column 0 starts.
@@ -448,14 +510,27 @@ mod tests {
         assert_eq!(at(x0 + 12.0, y0 + 20.0), cell(1, 1, Side::Left));
         assert_eq!(at(x0 + 8.0, y0), cell(0, 0, Side::Right));
         assert_eq!(
-            grid_room(iced::Size::new(1.0, 1.0)),
+            grid_room(iced::Size::new(1.0, 1.0), &m),
             iced::Size::new(0.0, 0.0)
         );
     }
 
     #[test]
+    fn line_height_and_padding_scale_the_cell_and_the_room() {
+        let spacing = Spacing {
+            line_height: 1.5,
+            pad: Vector::new(0.0, 12.0),
+        };
+        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0, spacing);
+        // 1.2 em x 16 px x 1.5 = 28.8, so 29 px rows; the width is unchanged.
+        assert_eq!((m.cell_w_px, m.cell_h_px), (10, 29));
+        let room = grid_room(iced::Size::new(100.0, 100.0), &m);
+        assert_eq!(room, iced::Size::new(100.0, 76.0));
+    }
+
+    #[test]
     fn grid_size_floors_and_clamps() {
-        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0);
+        let m = CellMetrics::new(FontUnits::FALLBACK, 16.0, 1.0, Spacing::default());
         // cell 10 × 19
         assert_eq!(grid_size(iced::Size::new(805.0, 460.0), &m), (80, 24));
         assert_eq!(grid_size(iced::Size::new(3.0, 0.0), &m), (2, 1));
