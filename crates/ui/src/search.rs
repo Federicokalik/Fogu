@@ -122,8 +122,11 @@ fn view(search: &Search, look: Look) -> Element<'_, Message> {
     if !search.found {
         bar = bar.push(text("No matches").size(12).color(look.danger));
     }
+    // `icon` fills the space it is given: a fixed size keeps the bar small.
     let close = button(icon(Icon::Close, 10.0, look.fg))
-        .padding([4, 6])
+        .width(22)
+        .height(22)
+        .padding(0)
         .style(move |_theme, status| hover_style(look, status, false))
         .on_press(Message::Search(SearchMsg::Close));
     let bar = bar
