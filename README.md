@@ -46,6 +46,41 @@
 </p>
 <p align="center"><em>Split panes, each on its own host.</em></p>
 
+### Settings
+
+<p align="center">
+  <img src="docs/screenshots/settings-terminal.png" alt="Settings, Terminal page: font, cursor, spacing and bell" width="860">
+</p>
+<p align="center"><em>Settings (<code>Ctrl+,</code>): every change applies live and is saved to
+<code>config.toml</code>, comments kept. Search finds any option across the pages.</em></p>
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/settings-appearance.png" alt="Appearance: UI styles, accent and palettes"></td>
+    <td><img src="docs/screenshots/settings-shortcuts.png" alt="Shortcuts: press-to-capture key bindings"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Appearance: UI styles, accents, palettes</em></td>
+    <td align="center"><em>Shortcuts: press the keys, conflicts flagged</em></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/settings-profiles.png" alt="Profiles: default profile, sidebar, profile list and groups"></td>
+    <td><img src="docs/screenshots/settings-sftp.png" alt="SFTP: panel, transfer and limit options"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Profiles: default profile, groups, profile defaults</em></td>
+    <td align="center"><em>SFTP: panel, transfers and limits</em></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/settings-keys.png" alt="Keys: stored passwords and passphrases behind a recovery phrase"></td>
+    <td><img src="docs/screenshots/settings-advanced.png" alt="Advanced: tab recovery, log level, renderer and config file tools"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Keys: stored secrets, known hosts, key files, agent</em></td>
+    <td align="center"><em>Advanced: recovery, diagnostics, config file</em></td>
+  </tr>
+</table>
+
 ## Why Fogu
 
 Most terminals that ship a decent SSH manager are web apps in disguise: a few hundred megabytes of
@@ -75,6 +110,23 @@ second and stays out of your way.
   shape, docked panels or floating islands, density, buttons and dialogs), each with a paired
   palette; custom styles and colour schemes in TOML
 - Colour schemes, fonts, cursor and every key binding configurable
+- Line height, pane padding and cursor blink speed; the bell as a flash, a tab badge, a taskbar
+  or dock alert and a sound, in any combination
+
+### Settings
+- One window for everything (`Ctrl+,`, `Cmd+,` on macOS): Appearance, Terminal, Profiles,
+  Shortcuts, Keys, SFTP and Advanced, with a search box that jumps to any option
+- Live and saved at once: toggles, lists and sliders apply as you change them, text fields when
+  you press Enter or leave them; the file keeps its comments and only the keys you change move
+- Fonts, spacing, scrollback, word separators and cursor shape change in the open panes too
+- Shortcuts are captured by pressing the keys, with a warning when a chord is taken (and a
+  one-click reassign) or is a key the shell needs; `[hotkeys]` keeps only what differs from the
+  defaults
+- Profiles page: the default profile for new tabs, sidebar options, profile and group management
+  and the defaults every local or SSH profile inherits
+- Advanced: tab recovery on and off without a restart, the log level of the running app, the
+  renderer, and tools to open, reload or reset `config.toml` (a dated backup is written first;
+  profiles and groups stay)
 
 ### SSH manager
 - Sidebar with groups, search and quick connect (`user@host:port`)
@@ -91,6 +143,9 @@ second and stays out of your way.
 - Passwords and key passphrases stored in the desktop keyring (Secret Service on Linux, Keychain
   on macOS, Credential Manager on Windows), never in Fogu's config file
 - Login scripts, starting directory, remembered directory, automatic reconnect with backoff
+- Keys page: set, replace or delete the stored password or passphrase of every profile; review
+  and remove the host keys Fogu trusts; list the keys in `~/.ssh`, copy a public key or create a
+  new ed25519 key; see what the SSH agent holds
 
 ### SFTP browser
 - Side panel on the same SSH connection: no second login
@@ -114,7 +169,9 @@ fogu
 
 `./scripts/install.sh --uninstall` removes exactly what was installed. No root needed.
 
-Build dependencies on Debian/Ubuntu: `sudo apt install build-essential pkg-config libudev-dev libxkbcommon-dev libwayland-dev`.
+Build dependencies on Debian/Ubuntu: `sudo apt install build-essential pkg-config libudev-dev libxkbcommon-dev libwayland-dev libasound2-dev`.
+`libasound2-dev` is only for the bell sound (the default `bell-sound` feature); without it, build
+with `cargo build --release -p fogu --no-default-features --features ssh`.
 
 ### Windows (alpha)
 
@@ -156,7 +213,9 @@ and puts `fogu` in `~/.local/bin`. It needs the Xcode command line tools
 
 ## Configuration
 
-Fogu works with no configuration. To customise it, edit `~/.config/fogu/config.toml`:
+Fogu works with no configuration. Open Settings (`Ctrl+,`) to change anything from the window,
+or edit `~/.config/fogu/config.toml` (`%APPDATA%\fogu\config.toml` on Windows); Settings →
+Advanced → **Reload config.toml** picks up edits made by hand. A small `config.toml`:
 
 ```toml
 [appearance]
@@ -172,6 +231,46 @@ user = "me"
 ```
 
 Hosts from `~/.ssh/config` appear in the sidebar automatically.
+
+### Settings keys
+
+Every key has a control in Settings; these are the ones added with the settings pages:
+
+```toml
+default_profile = "home-server"   # new tabs and the first tab (a stored, built-in or ssh-config profile)
+
+[appearance]
+line_height = 1.0                 # 0.8 to 2.0, a multiple of the font's own
+padding_x = 8                     # pane padding in px, 0 to 32, same on both sides
+padding_y = 6
+cursor_blink_interval_ms = 530    # 100 to 2000
+
+[terminal]
+bell = ["badge"]                  # any of "visual", "badge", "attention", "sound"
+bell_volume = 0.5                 # 0 to 1
+
+[advanced]
+log_level = "info"                # error, warn, info, debug, trace; RUST_LOG wins when set
+renderer = "gpu"                  # gpu, or software (like --software-render), at the next start
+
+[hotkeys]
+open-settings = ["Ctrl-,", "F12"] # Settings writes only the actions that differ from the defaults
+```
+
+Values out of range are clamped where they are used. Font, spacing, scrollback, word separators
+and cursor shape apply to open panes; SFTP engine options apply to panels opened afterwards.
+
+### Stored secrets and the recovery phrase
+
+Passwords and key passphrases live in the system keychain, never in `config.toml`. Settings →
+Keys can set, replace and delete them. Showing one in clear text needs a recovery phrase:
+12 words made once and shown once; only an Argon2id hash of it is kept, in
+`reveal-gate.json` in the state directory. If the phrase is lost, **Replace phrase** makes a new
+one, and the secrets saved before it can no longer be revealed (they keep working and can still be
+replaced or deleted).
+
+The phrase guards Fogu's **Reveal** button only. The keychain itself stays readable by any
+program running as your user, which is how Fogu signs in without asking for the phrase.
 
 ### UI styles
 
@@ -309,8 +408,10 @@ restarting. If you edit the TOML on disk, press Reload themes to pick up the cha
 | Clear | | `Cmd+K` |
 | Zoom | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | `Cmd+=` / `Cmd+-` / `Cmd+0` |
 | Full screen | `F11` | `Ctrl+Cmd+F` |
+| Settings | `Ctrl+,` | `Cmd+,` |
 
-Every action can be rebound under `[hotkeys]`. `Cmd` and `Option` are accepted as modifier
+Windows uses the Linux keys. Every action can be rebound in Settings → Shortcuts or under
+`[hotkeys]`. `Cmd` and `Option` are accepted as modifier
 names on every system (the same keys as `Meta` and `Alt`); macOS shows them that way.
 
 ### Command line
