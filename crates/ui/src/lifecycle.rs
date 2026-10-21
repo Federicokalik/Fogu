@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use fogu_core::{Osc52Policy, Profile, ProfileKind, effective_osc52_write};
 use fogu_session::{ClipboardRequest, SessionError, SessionOutput, SessionWarning};
-use fogu_term::{ClipboardType, sanitize_title};
+use fogu_term::sanitize_title;
 use iced::{Task, clipboard};
 
 use crate::actions::CWD_QUERY_TIMEOUT;
@@ -48,17 +48,16 @@ pub(crate) fn describe(err: &SessionError) -> String {
     sanitize_title(&text)
 }
 
+/// A program's copy goes to both the clipboard and (Linux) the primary selection, whichever it
+/// named: Ctrl+Shift+V and a middle click then both paste what Claude Code, tmux or vim copied.
 fn write_clipboard(request: ClipboardRequest) -> Task<Message> {
-    match request.target {
-        // Also the primary selection (Linux), so a middle click pastes what a program such as
-        // Claude Code or tmux copied, as with a selection made in Fogu.
-        ClipboardType::Clipboard if !cfg!(target_os = "macos") => Task::batch([
-            clipboard::write(request.payload.clone()),
-            clipboard::write_primary(request.payload),
-        ]),
-        ClipboardType::Clipboard => clipboard::write(request.payload),
-        ClipboardType::Selection => write_selection(request.payload),
+    if cfg!(target_os = "macos") {
+        return clipboard::write(request.payload);
     }
+    Task::batch([
+        clipboard::write(request.payload.clone()),
+        clipboard::write_primary(request.payload),
+    ])
 }
 
 /// Writes the primary selection; macOS has none, so the clipboard there.
