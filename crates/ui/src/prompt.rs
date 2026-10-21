@@ -336,6 +336,7 @@ impl App {
             || self.picker.take().is_some()
             || self.forwards.take().is_some()
             || self.pending_close.take().is_some()
+            || self.pending_paste.take().is_some()
             || self.profiles.pending_delete.take().is_some()
         {
             return;

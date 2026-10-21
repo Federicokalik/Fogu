@@ -175,6 +175,20 @@ fn enter_copies_a_pending_osc52_write_instead_of_typing() {
 }
 
 #[test]
+fn enter_confirms_and_escape_cancels_a_pending_paste() {
+    let mut app = app_with(Config::default());
+    let pane = focused(&app);
+    let paste = |text: &str| Message::Pane(pane, Box::new(Message::PasteReady(Some(text.into()))));
+    send(&mut app, paste("ls\nrm -rf build"));
+    assert!(app.pending_paste.is_some(), "multi-line paste asks first");
+    send(&mut app, enter());
+    assert!(app.pending_paste.is_none(), "Enter pastes");
+    send(&mut app, paste("a\nb"));
+    app.on_escape();
+    assert!(app.pending_paste.is_none(), "Escape cancels");
+}
+
+#[test]
 fn osc52_allow_is_silent_and_deny_is_an_info_toast() {
     let mut config = Config::default();
     config.terminal.osc52_write = Osc52Policy::Allow;

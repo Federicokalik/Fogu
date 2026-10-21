@@ -408,13 +408,19 @@ impl App {
         let Some(id) = target.or_else(|| self.active_pane().map(|p| p.id)) else {
             return Task::none();
         };
-        // Enter answers a pending "set the clipboard?" toast (Copy) instead of reaching the shell.
+        // Enter answers the paste confirmation (Paste) or a pending "set the clipboard?" toast
+        // (Copy) instead of reaching the shell.
         if let Message::Key(key) = &message
             && key.key == input::KeyCode::Enter
             && key.mods == input::Mods::default()
-            && let Some(toast) = self.pending_clipboard.last().map(|p| p.toast)
         {
-            return self.accept_toast(toast);
+            if let Some(pending) = self.pending_paste.take() {
+                self.paste_now(pending.pane, &pending.text);
+                return Task::none();
+            }
+            if let Some(toast) = self.pending_clipboard.last().map(|p| p.toast) {
+                return self.accept_toast(toast);
+            }
         }
         let Some(pane) = self.pane_mut(id) else {
             return Task::none();
