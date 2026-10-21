@@ -10,7 +10,7 @@ use crate::app::App;
 use crate::context_menu;
 use crate::drag::{DragMsg, Payload};
 use crate::message::Message;
-use crate::modal::{self, overlay};
+use crate::modal;
 use crate::mouse::MouseConfig;
 use crate::palette::to_iced;
 use crate::profile_picker;
@@ -123,11 +123,11 @@ impl App {
         let sftp_modal = sftp_panel.map(|panel| {
             let width = (self.window_size.width * 0.88).clamp(640.0, 1180.0);
             let height = (self.window_size.height * 0.84).clamp(420.0, 860.0);
-            container(sftp::panel::view(tab.id, panel, look))
+            let card = container(sftp::panel::view(tab.id, panel, look))
                 .width(width)
                 .height(height)
-                .style(move |_theme: &iced::Theme| crate::controls::floating(look))
-                .into()
+                .style(move |_theme: &iced::Theme| crate::controls::floating(look));
+            (tab.id, card.into())
         });
         let dialog = sftp_panel.and_then(|p| sftp::dialog(tab.id, p, look));
         self.chrome(
@@ -151,7 +151,7 @@ impl App {
     fn chrome<'a>(
         &'a self,
         body: Element<'a, Message>,
-        sftp_modal: Option<Element<'a, Message>>,
+        sftp_modal: Option<(crate::tab::TabId, Element<'a, Message>)>,
         dialog: Option<Element<'a, Message>>,
     ) -> Element<'a, Message> {
         let (sftp, forwards) = self.bar_flags();
@@ -223,84 +223,89 @@ impl App {
         self.overlays(main, sftp_modal, dialog)
     }
 
-    /// Modals, the SFTP dialog, the picker and the context menu over `base`.
+    /// Every layer over `base`, bottom to top: the SFTP panel, the settings page, a
+    /// confirmation, a dialog, the profile picker, the context menu, the drag label and the
+    /// window's resize edges. The stack always has the same children (an empty space for a
+    /// layer that is not shown), so opening one never rebuilds the state of those below it: the
+    /// settings page keeps its scroll and a field its focus while a confirmation comes and goes.
     fn overlays<'a>(
         &'a self,
         base: Element<'a, Message>,
-        sftp_modal: Option<Element<'a, Message>>,
+        sftp_modal: Option<(crate::tab::TabId, Element<'a, Message>)>,
         sftp_dialog: Option<Element<'a, Message>>,
     ) -> Element<'a, Message> {
-        let modal = self
+        let look = self.look;
+        let sftp = sftp_modal.map(|(tab, panel)| {
+            let close = Message::Sftp(sftp::SftpMsg::Panel(tab, sftp::PanelMsg::Close));
+            modal::centered(panel, look, Some(close))
+        });
+        let settings = self.settings.as_ref().map(|page| {
+            let width = (self.window_size.width * 0.9).clamp(860.0, 1200.0);
+            let height = (self.window_size.height * 0.86).clamp(600.0, 900.0);
+            let page = crate::settings::view(
+                page,
+                look,
+                &self.config,
+                (&self.schemes, &self.styles),
+                self.env,
+            );
+            let card = container(page)
+                .width(width)
+                .height(height)
+                .style(move |_theme: &iced::Theme| crate::controls::floating(look));
+            let outside = Message::Settings(crate::settings::SettingsMsg::Outside);
+            modal::centered(card.into(), look, Some(outside))
+        });
+        let confirm = self
             .paste_modal()
             .or_else(|| self.close_modal())
             .or_else(|| self.delete_modal())
             .or_else(|| self.clear_sessions_modal())
-            .or_else(|| self.discard_modal());
-        let base = match sftp_modal {
-            Some(panel) => modal::center(base, panel, self.look),
-            None => base,
-        };
-        let base = overlay(base, modal, self.look);
+            .or_else(|| self.discard_modal())
+            .or_else(|| self.settings_modal())
+            .map(|m| modal::modal_layer(m, look));
         let dialog = self
             .secret_dialog
             .as_ref()
-            .map(|dialog| crate::secret_dialog::view(dialog, self.look))
+            .map(|dialog| crate::secret_dialog::view(dialog, look))
             .or(sftp_dialog)
-            .or_else(|| self.forwards_view());
-        let base = match dialog {
-            Some(dialog) => modal::over(base, dialog, self.look),
-            None => base,
-        };
-        let picker_rows = self
-            .picker
+            .or_else(|| self.forwards_view())
+            .map(|d| modal::dialog_layer(d, look));
+        let picker = self.picker.as_ref().map(|picker| {
+            let rows = profile_picker::listing(self).1;
+            profile_picker::layer(picker, &rows, look)
+        });
+        let menu = self
+            .menu
             .as_ref()
-            .map(|_| profile_picker::listing(self).1);
-        let base = profile_picker::overlay(
-            base,
-            self.picker.as_ref(),
-            picker_rows.as_deref().unwrap_or_default(),
-            self.look,
-        );
-        let base = context_menu::overlay(base, self.menu.as_ref(), self.window_size, self.look);
-        let base = match self.drag_label() {
-            Some((at, label)) => {
-                let look = self.look;
-                let ghost = container(iced::widget::text(label).size(13))
-                    .padding([4, 10])
-                    .style(move |_theme: &iced::Theme| context_menu::panel_style(look));
-                let placed = container(ghost)
-                    .padding(iced::Padding::ZERO.left(at.x + 14.0).top(at.y + 14.0))
-                    .width(iced::Length::Fill)
-                    .height(iced::Length::Fill);
-                iced::widget::stack![base, placed].into()
-            }
-            None => base,
-        };
-        let base = match &self.settings {
-            Some(page) => {
-                let width = (self.window_size.width * 0.9).clamp(860.0, 1200.0);
-                let height = (self.window_size.height * 0.86).clamp(600.0, 900.0);
-                let look = self.look;
-                let page = crate::settings::view(
-                    page,
-                    look,
-                    &self.config,
-                    (&self.schemes, &self.styles),
-                    self.env,
-                );
-                let card = container(page)
-                    .width(width)
-                    .height(height)
-                    .style(move |_theme: &iced::Theme| crate::controls::floating(look));
-                modal::center(base, card.into(), look)
-            }
-            None => base,
-        };
+            .map(|menu| context_menu::layer(menu, self.window_size, look));
+        let ghost = self.drag_label().map(|(at, label)| {
+            let ghost = container(iced::widget::text(label).size(13))
+                .padding([4, 10])
+                .style(move |_theme: &iced::Theme| context_menu::panel_style(look));
+            container(ghost)
+                .padding(iced::Padding::ZERO.left(at.x + 14.0).top(at.y + 14.0))
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill)
+                .into()
+        });
         // macOS: winit cannot start a resize from the app; the native frame resizes instead.
-        if self.fullscreen || cfg!(target_os = "macos") {
-            return base;
-        }
-        iced::widget::stack![base, crate::tab_bar::resize_edges()].into()
+        let edges =
+            (!self.fullscreen && !cfg!(target_os = "macos")).then(crate::tab_bar::resize_edges);
+        let layers = [
+            Some(base),
+            sftp,
+            settings,
+            confirm,
+            dialog,
+            picker,
+            menu,
+            ghost,
+            edges,
+        ]
+        .into_iter()
+        .map(|layer| layer.unwrap_or_else(|| iced::widget::space().into()));
+        iced::widget::Stack::with_children(layers).into()
     }
 
     /// The strip above a pane (tabs with several panes) that drags it to another place.

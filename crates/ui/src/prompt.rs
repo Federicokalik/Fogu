@@ -329,33 +329,38 @@ impl App {
         self.on_prompt_msg(message)
     }
 
-    /// Escape closes the innermost overlay: picker, close / delete confirmation, the front
-    /// pane's prompt (declined), menu, the sidebar's search (then its keyboard focus), inline
-    /// rename.
-    pub(crate) fn on_escape(&mut self) {
-        // The settings page's code editor first, then the page itself.
-        if let Some(page) = &mut self.settings {
-            if page.editor.take().is_none() {
-                self.settings = None;
-            }
-            return;
-        }
-        if self.secret_dialog.take().is_some()
-            || self.search.take().is_some()
-            || self.picker.take().is_some()
+    /// Escape closes the innermost overlay, top layer first: the context menu, a dialog, a
+    /// confirmation, the picker, the settings page (its search, code editor, then the page),
+    /// the search bar, the front pane's prompt (declined), the sidebar's search (then its
+    /// keyboard focus), an SFTP operation, inline rename.
+    pub(crate) fn on_escape(&mut self) -> Task<Message> {
+        if self.menu.take().is_some()
+            || self.secret_dialog.take().is_some()
             || self.forwards.take().is_some()
             || self.pending_close.take().is_some()
             || self.profiles.pending_delete.take().is_some()
+            || self
+                .settings
+                .as_mut()
+                .and_then(|p| p.confirm.take())
+                .is_some()
+            || self.picker.take().is_some()
         {
-            return;
+            return Task::none();
+        }
+        if self.settings.is_some() {
+            return self.settings_escape();
+        }
+        if self.search.take().is_some() {
+            return Task::none();
         }
         if let Some(pane) = self.active_pane().filter(|p| p.prompt.is_some()) {
             let id = pane.id;
             self.answer(id, PromptReply::Reject);
-            return;
+            return Task::none();
         }
-        if self.menu.take().is_some() || self.sidebar_escape() {
-            return;
+        if self.sidebar_escape() {
+            return Task::none();
         }
         let active = self.active;
         let panel = self.tabs.iter_mut().find(|t| t.id == active);
@@ -363,9 +368,10 @@ impl App {
             .and_then(|t| t.sftp.as_mut())
             .is_some_and(crate::sftp::SftpPanelState::cancel_op)
         {
-            return;
+            return Task::none();
         }
         self.renaming = None;
+        Task::none()
     }
 }
 

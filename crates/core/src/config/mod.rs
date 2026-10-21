@@ -5,6 +5,7 @@
 mod edit;
 mod io;
 pub mod route;
+mod section;
 pub mod sftp;
 pub mod ssh_opts;
 mod validate;
@@ -14,6 +15,7 @@ pub use edit::{
     unique_group_id, unique_profile_id, unique_profile_name,
 };
 pub use io::{ConfigError, config_dir, load, set_profile_background};
+pub use section::{KeyEdit, TomlValue, set_keys};
 pub use sftp::SftpCfg;
 pub use validate::{ConfigIssue, validate, validate_with_catalog};
 

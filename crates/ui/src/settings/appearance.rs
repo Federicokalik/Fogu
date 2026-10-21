@@ -1,68 +1,34 @@
-//! The settings page: live UI styles, accent and terminal palette selection, persisted to
-//! `config.toml`.
+//! The Appearance page: live UI styles, accent and terminal palette selection.
 
 use fogu_core::{ColorScheme, Config, RgbColor, SchemeCatalog, StyleCatalog, StyleDef};
-use iced::widget::{column, container, mouse_area, row, scrollable, space, text, text_editor};
+use iced::widget::{column, container, mouse_area, row, space, text};
 use iced::{Alignment, Border, Color, Element, Length};
 
+use super::{Anchor, SettingsMsg, anchored};
 use crate::controls::{self, ButtonKind};
 use crate::design::{Env, resolve_style};
 use crate::icons::{Icon, icon};
 use crate::message::Message;
 use crate::palette::Look;
-use crate::style_code::{self, CodeEditor, CodeKind};
+use crate::style_code::CodeKind;
 use crate::style_preview;
-
-/// A choice in the settings page.
-#[derive(Clone, Debug)]
-pub enum SettingsMsg {
-    /// Switch the UI style by key (applies immediately and is saved); the terminal palette
-    /// follows when it was the default or another style's paired palette.
-    Style(String),
-    /// Set or clear the accent override.
-    Accent(Option<RgbColor>),
-    /// Switch the terminal colour scheme by exact name (applies and is saved).
-    Scheme(String),
-    /// Switch to the active style's paired palette.
-    UseMatchingPalette,
-    /// Re-read `styles/` and `themes/`, then apply the configured style and scheme against the
-    /// new catalogs.
-    Reload,
-    /// Open the code editor on a new custom style or palette, based on the active one.
-    NewCode(CodeKind),
-    /// Open the code editor on the file of custom style (key) or palette (name).
-    EditCode(CodeKind, String),
-    /// An action in the code editor.
-    Code(text_editor::Action),
-    /// Write the edited file, reload the catalogs and apply it.
-    SaveCode,
-    /// Close the code editor without saving.
-    CloseCode,
-}
-
-/// The open settings page (only the appearance section exists today).
-#[derive(Debug, Default)]
-pub struct SettingsPage {
-    /// The custom style / palette code editor, when open.
-    pub editor: Option<CodeEditor>,
-}
 
 /// Style cards per row.
 const PER_ROW: usize = 3;
 /// Height of a card's description: two lines of 11 px text.
 const DESCRIPTION_H: f32 = 30.0;
 
-/// The page body, placed inside a floating modal card by [`crate::view`].
+/// The page body (inside the settings page's scroll).
 #[expect(
     clippy::too_many_lines,
     reason = "one settings page; splitting the visual tree would spread related controls apart"
 )]
-pub fn view<'a>(
-    page: &'a SettingsPage,
+pub(super) fn body<'a>(
     look: Look,
     config: &Config,
     (schemes, styles): (&SchemeCatalog, &StyleCatalog),
     env: Env,
+    highlight: Option<Anchor>,
 ) -> Element<'a, Message> {
     let (current, _) = resolve_style(&config.appearance.ui_theme, styles);
     let accent = config.appearance.accent;
@@ -73,49 +39,6 @@ pub fn view<'a>(
             .font(look.text.chrome)
             .color(look.dim)
     };
-
-    let close = iced::widget::button(icon(Icon::Close, 12.0, look.dim))
-        .width(28)
-        .height(28)
-        .padding(0)
-        .style(move |_theme: &iced::Theme, status| controls::flat_button(look, status, false))
-        .on_press(Message::CloseSettings);
-    let header = row![
-        column![
-            crate::modal::title("Settings", look),
-            body("Changes apply live and are saved automatically."),
-        ]
-        .spacing(3)
-        .width(Length::Fill),
-        close,
-    ]
-    .align_y(Alignment::Start);
-
-    let nav_item = |label: &'a str, active: bool| {
-        let (bg, fg) = controls::row_colors(look, active, false);
-        container(
-            text(label)
-                .size(13)
-                .font(look.text.chrome)
-                .color(if active { fg } else { look.dim }),
-        )
-        .width(Length::Fill)
-        .padding([8, 10])
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: bg.map(Into::into),
-            border: Border::default().rounded(look.shape.control),
-            ..container::Style::default()
-        })
-    };
-    let nav = column![
-        nav_item("Appearance", true),
-        nav_item("Terminal", false),
-        nav_item("Profiles", false),
-        nav_item("Keys", false),
-        nav_item("Advanced", false),
-    ]
-    .spacing(2)
-    .width(170);
 
     let card_for = |style: &StyleDef| {
         let scheme = preview_scheme(style, selected_scheme, schemes);
@@ -233,64 +156,60 @@ pub fn view<'a>(
         fogu_core::style::Density::Regular => "Regular rows",
         fogu_core::style::Density::Comfy => "Comfortable rows",
     };
-    let content = column![
-        controls::section_label(look, "UI style"),
-        body(
-            "Each style changes the window's structure: where the tabs sit and how they look, \
-             islands or docked panels, density, buttons and dialogs."
-        ),
-        themes,
-        space().height(8),
-        controls::section_label(look, "Accent"),
-        body(
-            "The accent tints selections, focus rings and active controls; the terminal palette \
-             stays independent."
-        ),
-        accents,
-        space().height(8),
-        palette_header,
-        body(
-            "Switching style also switches to its paired palette while the current one is the \
-             default or another style's pair; a palette you pick stays."
-        ),
-        scheme_list,
-        space().height(8),
-        controls::section_label(look, "Density"),
-        body(&format!("{density}, set by the {} style.", current.name)),
-    ]
-    .spacing(12);
-
-    let content: Element<'a, Message> = match &page.editor {
-        Some(editor) => {
-            let scheme = schemes
-                .by_name(selected_scheme)
-                .unwrap_or_else(|| default_scheme());
-            container(style_code::view(
-                editor,
-                look,
-                (current, scheme),
-                schemes,
-                env,
-            ))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        }
-        None => scrollable(content.padding(iced::Padding::ZERO.right(12)))
-            .height(Length::Fill)
-            .width(Length::Fill)
-            .into(),
+    let block = |anchor: Anchor, content: Element<'a, Message>| {
+        anchored(anchor.id(), highlight == Some(anchor), content, look)
     };
-    let body = row![nav, rule(look), content]
-        .spacing(18)
-        .height(Length::Fill);
-    container(
-        column![header, horizontal_rule(look), body]
-            .spacing(16)
-            .padding(20),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
+    column![
+        block(
+            Anchor::UiStyle,
+            column![
+                controls::section_label(look, "UI style"),
+                body(
+                    "Each style changes the window's structure: where the tabs sit and how they \
+                     look, islands or docked panels, density, buttons and dialogs."
+                ),
+                themes,
+            ]
+            .spacing(12)
+            .into(),
+        ),
+        block(
+            Anchor::Accent,
+            column![
+                controls::section_label(look, "Accent"),
+                body(
+                    "The accent tints selections, focus rings and active controls; the terminal \
+                     palette stays independent."
+                ),
+                accents,
+            ]
+            .spacing(12)
+            .into(),
+        ),
+        block(
+            Anchor::Palette,
+            column![
+                palette_header,
+                body(
+                    "Switching style also switches to its paired palette while the current one \
+                     is the default or another style's pair; a palette you pick stays."
+                ),
+                scheme_list,
+            ]
+            .spacing(12)
+            .into(),
+        ),
+        block(
+            Anchor::Density,
+            column![
+                controls::section_label(look, "Density"),
+                body(&format!("{density}, set by the {} style.", current.name)),
+            ]
+            .spacing(12)
+            .into(),
+        ),
+    ]
+    .spacing(20)
     .into()
 }
 
@@ -309,7 +228,8 @@ fn preview_scheme<'s>(
         .unwrap_or_else(|| default_scheme())
 }
 
-fn default_scheme() -> &'static ColorScheme {
+/// The built-in default scheme, for previews when no scheme resolves.
+pub(super) fn default_scheme() -> &'static ColorScheme {
     static DEFAULT: std::sync::LazyLock<ColorScheme> =
         std::sync::LazyLock::new(ColorScheme::default);
     &DEFAULT
@@ -425,18 +345,6 @@ fn swatch_color(color: RgbColor, look: Look) -> Element<'static, Message> {
             ..container::Style::default()
         })
         .into()
-}
-
-fn rule(look: Look) -> Element<'static, Message> {
-    container(space())
-        .width(1)
-        .height(Length::Fill)
-        .style(move |_theme: &iced::Theme| container::background(look.border))
-        .into()
-}
-
-fn horizontal_rule(look: Look) -> Element<'static, Message> {
-    controls::hairline(look.border)
 }
 
 /// One style: its thumbnail, name, description and paired palette.

@@ -10,6 +10,7 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 
 use super::Config;
 use super::io::{ConfigError, FILE_NAME, write_atomic};
+use super::section::put;
 use crate::profile::{Group, GroupId, Profile, ProfileId};
 
 /// One change to the stored profiles or groups.
@@ -116,50 +117,20 @@ pub fn edit_profiles(dir: &Path, edits: &[ProfileEdit]) -> Result<(), ConfigErro
 
 /// Applies `edit` to the `[appearance]` table of `dir/config.toml` in one write, preserving
 /// comments and the rest of the file. Creates the file and the table when missing.
-fn edit_appearance(dir: &Path, edit: impl FnOnce(&mut Table)) -> Result<(), ConfigError> {
-    std::fs::create_dir_all(dir).map_err(|err| ConfigError::Io {
-        path: dir.to_path_buf(),
-        source: err,
-    })?;
-    let path = dir.join(FILE_NAME);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(err) => {
-            return Err(ConfigError::Io {
-                path: path.clone(),
-                source: err,
-            });
-        }
-    };
-    let parse_error = |message: String| ConfigError::Parse {
-        path: path.clone(),
-        message,
-    };
-    let mut doc: DocumentMut = text
-        .parse()
-        .map_err(|e: toml_edit::TomlError| parse_error(e.to_string()))?;
-    if !doc.contains_key("appearance") {
-        doc.insert("appearance", toml_edit::table());
-    }
-    let table = doc
-        .get_mut("appearance")
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| parse_error("appearance is not a table".to_owned()))?;
-    edit(table);
-    write_atomic(dir, doc.to_string().as_bytes())
+fn edit_appearance(
+    dir: &Path,
+    edit: impl FnOnce(&mut dyn toml_edit::TableLike),
+) -> Result<(), ConfigError> {
+    super::section::edit_section(dir, &["appearance"], edit)
 }
 
-fn put_ui(table: &mut Table, theme: &str, accent: Option<crate::scheme::RgbColor>) {
-    table.insert("ui_theme", value(theme));
-    match accent {
-        Some(color) => {
-            table.insert("accent", value(color.to_string()));
-        }
-        None => {
-            table.remove("accent");
-        }
-    }
+fn put_ui(
+    table: &mut dyn toml_edit::TableLike,
+    theme: &str,
+    accent: Option<crate::scheme::RgbColor>,
+) {
+    put(table, "ui_theme", Some(theme.into()));
+    put(table, "accent", accent.map(|c| c.to_string().into()));
 }
 
 /// Sets `appearance.ui_theme` and `appearance.accent` (or removes the accent when `None`) in
@@ -176,9 +147,7 @@ pub fn set_appearance_ui(
 /// Sets `appearance.color_scheme` in `dir/config.toml`, preserving comments and the rest of the
 /// file. Creates the file and the `[appearance]` table when missing.
 pub fn set_appearance_scheme(dir: &Path, scheme: &str) -> Result<(), ConfigError> {
-    edit_appearance(dir, |table| {
-        table.insert("color_scheme", value(scheme));
-    })
+    edit_appearance(dir, |table| put(table, "color_scheme", Some(scheme.into())))
 }
 
 /// [`set_appearance_ui`] plus, when given, the colour scheme, in a single write (a UI style
@@ -192,7 +161,7 @@ pub fn set_appearance(
     edit_appearance(dir, |table| {
         put_ui(table, theme, accent);
         if let Some(scheme) = scheme {
-            table.insert("color_scheme", value(scheme));
+            put(table, "color_scheme", Some(scheme.into()));
         }
     })
 }

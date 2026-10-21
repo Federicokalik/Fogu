@@ -122,14 +122,12 @@ fn entry_row(
     .into()
 }
 
-/// The picker panel over `base`; a click outside closes it.
-pub(crate) fn overlay<'a>(
-    base: Element<'a, Message>,
-    picker: Option<&'a ProfilePicker>,
+/// The picker panel as a full-window layer; a click outside closes it.
+pub(crate) fn layer<'a>(
+    picker: &'a ProfilePicker,
     rows: &[FuzzyRow],
     look: Look,
 ) -> Element<'a, Message> {
-    let Some(picker) = picker else { return base };
     let shown = fuzzy_list::rank(&picker.filter, rows);
     let mut list = column![].spacing(2);
     for (pos, &index) in shown.iter().enumerate() {
@@ -166,5 +164,5 @@ pub(crate) fn overlay<'a>(
     let placed = container(opaque(panel))
         .padding([48, 0])
         .center_x(Length::Fill);
-    stack![base, opaque(click_away), placed].into()
+    stack![opaque(click_away), placed].into()
 }

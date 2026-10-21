@@ -529,15 +529,9 @@ pub(crate) fn panel_style(look: Look) -> container::Style {
     crate::controls::floating(look)
 }
 
-/// Stacks `menu` over `base` at its anchor; clicks outside it (any button) close it and never
-/// reach `base`. Just `base` when there is no menu.
-pub fn overlay<'a>(
-    base: Element<'a, Message>,
-    menu: Option<&'a ContextMenu>,
-    window: Size,
-    look: Look,
-) -> Element<'a, Message> {
-    let Some(menu) = menu else { return base };
+/// `menu` at its anchor as a full-window layer; clicks outside it (any button) close it and
+/// never reach what lies below.
+pub fn layer(menu: &ContextMenu, window: Size, look: Look) -> Element<'_, Message> {
     let at = menu.position(window);
     let click_away = mouse_area(space().width(Length::Fill).height(Length::Fill))
         .on_press(Message::CloseMenu)
@@ -552,7 +546,7 @@ pub fn overlay<'a>(
         })
         .width(Length::Fill)
         .height(Length::Fill);
-    stack![base, opaque(click_away), placed].into()
+    stack![opaque(click_away), placed].into()
 }
 
 #[cfg(test)]

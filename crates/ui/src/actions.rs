@@ -627,7 +627,7 @@ impl App {
                 }
             }
             Message::CloseMenu => self.menu = None,
-            Message::Escape => self.on_escape(),
+            Message::Escape => return self.on_escape(),
             _ => {}
         }
         Task::none()

@@ -320,246 +320,18 @@ impl App {
     }
 
     /// Recomputes the chrome look and stock-widget theme after an appearance change.
-    fn refresh_look(&mut self) {
+    pub(crate) fn refresh_look(&mut self) {
         let (style, _) = resolve_style(&self.config.appearance.ui_theme, &self.styles);
         self.look = Look::new(&self.colors, style, self.config.appearance.accent, self.env);
         self.theme = self.look.theme(&self.colors);
     }
 
     /// Re-resolves the selected terminal scheme against the current catalog.
-    fn apply_scheme(&mut self) -> Option<Notification> {
+    pub(crate) fn apply_scheme(&mut self) -> Option<Notification> {
         let (scheme, note) = resolve_scheme(&self.config.appearance.color_scheme, &self.schemes);
         self.colors = Colors::new(&scheme);
         self.refresh_look();
         note
-    }
-
-    fn save_ui(&self) -> Option<Notification> {
-        let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
-        let (theme, accent) = {
-            let appearance = &self.config.appearance;
-            (appearance.ui_theme.clone(), appearance.accent)
-        };
-        fogu_core::config::set_appearance_ui(&dir, &theme, accent)
-            .err()
-            .map(|err| {
-                Notification::new(Level::Error, "Settings not saved").detail(err.to_string())
-            })
-    }
-
-    /// Applies and saves UI style `key`. The palette follows the style while it is the default
-    /// or another style's pair; a palette the user picked stays.
-    fn switch_style(&mut self, key: &str) -> Option<Task<Message>> {
-        let follow = self.styles.resolve(key).and_then(|style| {
-            crate::design::suggested_scheme(
-                &self.config.appearance.color_scheme,
-                style,
-                &self.styles,
-                &self.schemes,
-            )
-        });
-        let appearance = &mut Arc::make_mut(&mut self.config).appearance;
-        key.clone_into(&mut appearance.ui_theme);
-        let mut notes = Vec::new();
-        if let Some(scheme) = &follow {
-            appearance.color_scheme.clone_from(scheme);
-            notes.extend(self.apply_scheme());
-        } else {
-            self.refresh_look();
-        }
-        let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
-        let appearance = &self.config.appearance;
-        if let Err(err) = fogu_core::config::set_appearance(
-            &dir,
-            &appearance.ui_theme,
-            appearance.accent,
-            follow.as_deref(),
-        ) {
-            notes.push(
-                Notification::new(Level::Error, "Settings not saved").detail(err.to_string()),
-            );
-        }
-        let tasks: Vec<Task<Message>> = notes.into_iter().map(|note| self.notify(note)).collect();
-        (!tasks.is_empty()).then(|| Task::batch(tasks))
-    }
-
-    /// Re-reads `styles/` and `themes/` and re-applies the configured style and scheme; returns
-    /// what to report (skipped files, a style or scheme that is gone).
-    fn reload_catalogs(&mut self) -> Vec<Notification> {
-        let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
-        self.schemes = SchemeCatalog::load(&dir);
-        self.styles = StyleCatalog::load(&dir);
-        let mut notes: Vec<Notification> = self
-            .schemes
-            .warnings()
-            .iter()
-            .map(|w| Notification::new(Level::Warn, "Colour scheme skipped").detail(w.to_string()))
-            .chain(
-                self.styles.warnings().iter().map(|w| {
-                    Notification::new(Level::Warn, "UI style skipped").detail(w.to_string())
-                }),
-            )
-            .collect();
-        notes.extend(self.apply_scheme());
-        if let (_, Some(note)) = resolve_style(&self.config.appearance.ui_theme, &self.styles) {
-            notes.push(note);
-        }
-        notes
-    }
-
-    /// Opens the settings code editor: on the file of custom style (key) or palette (name)
-    /// `name`, or on a new file based on the active style or palette.
-    fn open_code(
-        &mut self,
-        kind: crate::style_code::CodeKind,
-        name: Option<&str>,
-    ) -> Option<Notification> {
-        use crate::style_code::{CodeEditor, CodeKind, palette_template, style_template};
-        let (text, editing) = if let Some(name) = name {
-            let path = match kind {
-                CodeKind::Style => self.styles.source(name),
-                CodeKind::Palette => self.schemes.source(name),
-            }?
-            .to_path_buf();
-            match std::fs::read_to_string(&path) {
-                Ok(text) => (text, Some(path)),
-                Err(err) => {
-                    return Some(
-                        Notification::new(Level::Error, "Cannot open the file")
-                            .detail(format!("{}: {err}", path.display())),
-                    );
-                }
-            }
-        } else {
-            let text = match kind {
-                CodeKind::Style => {
-                    let (style, _) = resolve_style(&self.config.appearance.ui_theme, &self.styles);
-                    style_template(style, &self.styles)
-                }
-                CodeKind::Palette => {
-                    let (scheme, _) = crate::appearance::resolve_scheme(
-                        &self.config.appearance.color_scheme,
-                        &self.schemes,
-                    );
-                    palette_template(&scheme, &self.schemes)
-                }
-            };
-            (text, None)
-        };
-        let editor = CodeEditor::new(kind, &text, editing, (&self.styles, &self.schemes));
-        self.settings.get_or_insert_with(Default::default).editor = Some(editor);
-        None
-    }
-
-    /// Writes the code editor's file, reloads the catalogs and applies what was saved. A failed
-    /// write stays in the editor with the reason.
-    fn save_code(&mut self) -> Vec<Task<Message>> {
-        use crate::style_code::CodeKind;
-        let Some(editor) = self.settings.as_mut().and_then(|p| p.editor.as_mut()) else {
-            return Vec::new();
-        };
-        let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
-        let text = editor.content.text();
-        let kind = editor.kind;
-        let saved = match kind {
-            CodeKind::Style => self.styles.save(&dir, &text, editor.editing.as_deref()),
-            CodeKind::Palette => self.schemes.save(&dir, &text, editor.editing.as_deref()),
-        };
-        let (name, path) = match saved {
-            Ok(saved) => saved,
-            Err(why) => {
-                editor.error = Some(why);
-                return Vec::new();
-            }
-        };
-        if let Some(page) = &mut self.settings {
-            page.editor = None;
-        }
-        let mut notes = self.reload_catalogs();
-        notes.push(Notification::new(Level::Info, "Saved").detail(path.display().to_string()));
-        let mut tasks: Vec<Task<Message>> = notes.into_iter().map(|n| self.notify(n)).collect();
-        let apply = match kind {
-            CodeKind::Style => crate::settings::SettingsMsg::Style(name),
-            CodeKind::Palette => crate::settings::SettingsMsg::Scheme(name),
-        };
-        tasks.push(self.on_settings(apply));
-        tasks
-    }
-
-    /// Applies and persists one settings choice.
-    fn on_settings(&mut self, message: crate::settings::SettingsMsg) -> Task<Message> {
-        use crate::settings::SettingsMsg;
-        let mut tasks = Vec::new();
-        match message {
-            SettingsMsg::Style(key) => {
-                if let Some(task) = self.switch_style(&key) {
-                    tasks.push(task);
-                }
-            }
-            SettingsMsg::NewCode(kind) => {
-                if let Some(note) = self.open_code(kind, None) {
-                    tasks.push(self.notify(note));
-                }
-            }
-            SettingsMsg::EditCode(kind, name) => {
-                if let Some(note) = self.open_code(kind, Some(&name)) {
-                    tasks.push(self.notify(note));
-                }
-            }
-            SettingsMsg::Code(action) => {
-                let (styles, schemes) = (&self.styles, &self.schemes);
-                if let Some(editor) = self.settings.as_mut().and_then(|p| p.editor.as_mut()) {
-                    let edit = action.is_edit();
-                    editor.content.perform(action);
-                    if edit {
-                        editor.recheck(styles, schemes);
-                    }
-                }
-            }
-            SettingsMsg::SaveCode => tasks.extend(self.save_code()),
-            SettingsMsg::CloseCode => {
-                if let Some(page) = &mut self.settings {
-                    page.editor = None;
-                }
-            }
-            SettingsMsg::UseMatchingPalette => {
-                let (style, _) = resolve_style(&self.config.appearance.ui_theme, &self.styles);
-                if let Some(paired) = style.paired_scheme.clone() {
-                    return self.on_settings(SettingsMsg::Scheme(paired));
-                }
-            }
-            SettingsMsg::Accent(accent) => {
-                Arc::make_mut(&mut self.config).appearance.accent = accent;
-                self.refresh_look();
-                if let Some(note) = self.save_ui() {
-                    tasks.push(self.notify(note));
-                }
-            }
-            SettingsMsg::Scheme(name) => {
-                Arc::make_mut(&mut self.config).appearance.color_scheme = name;
-                if let Some(note) = self.apply_scheme() {
-                    tasks.push(self.notify(note));
-                }
-                let dir = fogu_core::config::config_dir(self.config_dir.as_deref());
-                if let Err(err) = fogu_core::config::set_appearance_scheme(
-                    &dir,
-                    &self.config.appearance.color_scheme,
-                ) {
-                    tasks.push(
-                        self.notify(
-                            Notification::new(Level::Error, "Settings not saved")
-                                .detail(err.to_string()),
-                        ),
-                    );
-                }
-            }
-            SettingsMsg::Reload => {
-                for note in self.reload_catalogs() {
-                    tasks.push(self.notify(note));
-                }
-            }
-        }
-        Task::batch(tasks)
     }
 
     /// Window title = the active tab's title.
@@ -591,10 +363,6 @@ impl App {
         task
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one exhaustive message dispatch; grouping arms hides the message flow"
-    )]
     fn dispatch(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::DismissToast(id) => {
@@ -640,14 +408,8 @@ impl App {
             Message::Prompt(message) => self.on_prompt_msg(message),
             Message::Picker(message) => self.on_picker(message),
             Message::Profiles(message) => self.on_profiles(message),
-            Message::OpenSettings => {
-                self.settings = Some(crate::settings::SettingsPage::default());
-                Task::none()
-            }
-            Message::CloseSettings => {
-                self.settings = None;
-                Task::none()
-            }
+            Message::OpenSettings => self.open_settings(),
+            Message::CloseSettings => self.close_settings(),
             Message::Settings(message) => self.on_settings(message),
             Message::Editor(tab, message) => self.on_editor(tab, message),
             Message::Enter => self.on_enter(),
@@ -665,7 +427,8 @@ impl App {
             }
             Message::MousePressed => {
                 self.on_mouse_pressed();
-                Task::none()
+                // A click elsewhere saves the text typed into a settings field.
+                self.flush_settings()
             }
             Message::Session(pane, event) => self.on_session(pane, event),
             Message::Action(action) => self.on_action(action),

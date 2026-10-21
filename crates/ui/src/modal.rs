@@ -1,12 +1,13 @@
-//! The one modal overlay: dims the view behind it and blocks every event from reaching it.
-//! [`overlay`] shows a plain title / body / buttons dialog (paste confirmation, close
-//! confirmation); [`over`] + [`frame`] carry richer content (the SSH prompt dialogs).
+//! Modal layers: each dims the view behind it and blocks every event from reaching it.
+//! [`modal_layer`] shows a plain title / body / buttons dialog (paste confirmation, close
+//! confirmation); [`dialog_layer`] / [`over`] + [`frame`] carry richer content (the SSH prompt
+//! dialogs); [`centered`] holds the large settings and SFTP panels.
 //!
 //! Small dialogs follow the UI style: a centred card, a sheet hanging from the top edge or a
 //! full-width command line at the bottom, with their buttons inline or in a footer bar.
 
 use fogu_core::style::DialogPlacement;
-use iced::widget::{column, container, opaque, row, space, stack, text};
+use iced::widget::{column, container, mouse_area, opaque, row, space, stack, text};
 use iced::{Alignment, Element, Length};
 
 use crate::controls::{self, ButtonKind};
@@ -36,14 +37,9 @@ pub struct Modal {
 /// Labels of first buttons that destroy something (drawn as danger buttons).
 const DESTRUCTIVE: [&str; 4] = ["Close", "Delete", "Discard", "Clear"];
 
-/// Stacks `modal` over `base`; just `base` when `modal` is `None`. The first button is the
-/// default action (a danger button when it destroys something), the others are secondary.
-pub fn overlay(
-    base: Element<'_, Message>,
-    modal: Option<Modal>,
-    look: Look,
-) -> Element<'_, Message> {
-    let Some(modal) = modal else { return base };
+/// `modal` as a full-window layer (see [`layer`]). The first button is the default action (a
+/// danger button when it destroys something), the others are secondary.
+pub fn modal_layer<'a>(modal: Modal, look: Look) -> Element<'a, Message> {
     let mut buttons = row![].spacing(8);
     for (i, b) in modal.buttons.into_iter().enumerate() {
         let role = match i {
@@ -58,8 +54,7 @@ pub fn overlay(
         text(modal.body).font(look.text.chrome)
     ]
     .spacing(12);
-    over(
-        base,
+    dialog_layer(
         frame(content.into(), Some(buttons.into()), 380.0, look),
         look,
     )
@@ -140,34 +135,51 @@ pub fn over<'a>(
     dialog: Element<'a, Message>,
     look: Look,
 ) -> Element<'a, Message> {
+    stack![base, dialog_layer(dialog, look)].into()
+}
+
+/// A small `dialog` where the style puts dialogs, as a full-window layer (see [`layer`]).
+pub fn dialog_layer(dialog: Element<'_, Message>, look: Look) -> Element<'_, Message> {
     let placed = container(dialog).width(Length::Fill).height(Length::Fill);
     let placed = match look.dialog.placement {
         DialogPlacement::Center => placed.center(Length::Fill),
         DialogPlacement::TopSheet => placed.align_x(Alignment::Center).align_y(Alignment::Start),
         DialogPlacement::CommandBar => placed.align_y(Alignment::End),
     };
-    backdrop(base, placed.into(), look)
+    layer(placed.into(), look, None)
 }
 
-/// Centres a large `panel` (settings, SFTP) over `base` whatever the style's dialog placement.
-pub fn center<'a>(
-    base: Element<'a, Message>,
-    panel: Element<'a, Message>,
+/// A large `panel` (settings, SFTP) centred whatever the style's dialog placement, as a
+/// full-window layer. Presses on the panel stay in it; a press around it publishes
+/// `on_outside` when given.
+pub fn centered(
+    panel: Element<'_, Message>,
     look: Look,
-) -> Element<'a, Message> {
-    let placed = container(panel).center(Length::Fill);
-    backdrop(base, placed.into(), look)
+    on_outside: Option<Message>,
+) -> Element<'_, Message> {
+    layer(
+        container(opaque(panel)).center(Length::Fill).into(),
+        look,
+        on_outside,
+    )
 }
 
-fn backdrop<'a>(
-    base: Element<'a, Message>,
+/// `placed` (already positioned in a full-window container) over a scrim that dims the window
+/// and keeps every event from what lies below. A press on the scrim publishes `on_outside`
+/// when given.
+fn layer<'a>(
     placed: Element<'a, Message>,
     look: Look,
+    on_outside: Option<Message>,
 ) -> Element<'a, Message> {
     let scrim = controls::scrim(look);
-    let shade = container(placed)
+    let shade = container(space())
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_theme: &iced::Theme| container::background(scrim));
-    stack![base, opaque(shade)].into()
+    let shade: Element<'a, Message> = match on_outside {
+        Some(message) => mouse_area(shade).on_press(message).into(),
+        None => shade.into(),
+    };
+    stack![opaque(shade), placed].into()
 }
