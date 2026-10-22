@@ -212,16 +212,11 @@ fn refuse_open(path: &Path) -> Result<(), String> {
         Ok(meta) if path.is_absolute() => meta,
         _ => return Err(format!("{} does not exist", shown())),
     };
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase);
+    let ext = opened_extension(path);
     let listed = |list: &[&str]| ext.as_deref().is_some_and(|e| list.contains(&e));
-    let launchable = listed(LAUNCHABLE);
+    let launchable = listed(LAUNCHABLE) || ext.as_deref().is_some_and(is_windows_executable);
     let bundle = cfg!(target_os = "macos") && listed(LAUNCHABLE_MACOS);
-    if bundle
-        || meta.is_file() && (is_executable(&meta) || launchable || is_windows_executable(path))
-    {
+    if bundle || meta.is_file() && (is_executable(&meta) || launchable) {
         return Err(format!(
             "{} could run code and is not opened from here; use \u{201c}Show in file \
              manager\u{201d}",
@@ -231,26 +226,73 @@ fn refuse_open(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Windows `ShellExecute` runs these extensions; a downloaded file must not start just because
-/// the user double-clicked it in Fogu.
-fn is_windows_executable(path: &Path) -> bool {
+/// The lower-case extension the desktop opens `path` as. Windows ignores trailing dots and
+/// spaces in a name (`setup.exe.` opens `setup.exe`), so they are dropped there first.
+fn opened_extension(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    #[cfg(windows)]
+    let name = name.trim_end_matches(['.', ' ']);
+    let (stem, ext) = name.rsplit_once('.')?;
+    (!stem.is_empty() && !ext.is_empty()).then(|| ext.to_ascii_lowercase())
+}
+
+/// Windows `ShellExecute` runs, installs or follows these extensions (programs, scripts,
+/// installers, shortcuts, registry and control-panel files), plus whatever `PATHEXT` adds; a
+/// downloaded file must not start just because the user double-clicked it in Fogu. `ext` is
+/// lower case.
+fn is_windows_executable(ext: &str) -> bool {
     #[cfg(windows)]
     {
-        const BLOCKED: [&str; 13] = [
-            "exe", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "msi", "msp",
+        const BLOCKED: &[&str] = &[
+            "exe",
+            "com",
+            "bat",
+            "cmd",
+            "ps1",
+            "psm1",
+            "psd1",
+            "vbs",
+            "vbe",
+            "vb",
+            "js",
+            "jse",
+            "wsf",
+            "wsh",
+            "ws",
+            "msi",
+            "msp",
+            "msc",
+            "msix",
+            "msixbundle",
+            "appx",
+            "appxbundle",
+            "appinstaller",
             "lnk",
+            "url",
+            "scf",
+            "pif",
+            "scr",
+            "hta",
+            "reg",
+            "cpl",
+            "inf",
+            "sct",
+            "chm",
+            "application",
+            "appref-ms",
+            "settingcontent-ms",
+            "gadget",
         ];
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                BLOCKED
-                    .iter()
-                    .any(|blocked| extension.eq_ignore_ascii_case(blocked))
+        BLOCKED.contains(&ext)
+            || std::env::var("PATHEXT").is_ok_and(|list| {
+                list.split(';')
+                    .map(|e| e.trim().trim_start_matches('.'))
+                    .any(|e| !e.is_empty() && e.eq_ignore_ascii_case(ext))
             })
     }
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     {
-        let _ = path;
+        let _ = ext;
         false
     }
 }
@@ -332,6 +374,42 @@ fn portal_installed() -> bool {
         .into_iter()
         .chain(std::env::split_paths(&data_dirs))
         .any(|dir| dir.join(service).is_file())
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    #![expect(clippy::unwrap_used, reason = "tests")]
+
+    use super::refuse_open;
+
+    #[test]
+    fn windows_launchers_are_not_opened_even_behind_a_trailing_dot() {
+        let dir = std::env::temp_dir().join(format!("fogu-open-win-{}", std::process::id()));
+        let _stale = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "setup.exe",
+            "saver.SCR",
+            "x.hta",
+            "x.reg",
+            "x.url",
+            "x.lnk",
+            "x.application",
+            "x.appref-ms",
+        ] {
+            std::fs::write(dir.join(name), "x").unwrap();
+            let why = refuse_open(&dir.join(name)).unwrap_err();
+            assert!(why.contains("file manager"), "{name}: {why}");
+        }
+        // Windows drops trailing dots and spaces: this opens setup.exe.
+        assert!(refuse_open(&dir.join("setup.exe.")).is_err());
+        assert!(refuse_open(&dir.join("setup.exe .")).is_err());
+        for name in ["photo.png", "notes.txt", "doc.pdf"] {
+            std::fs::write(dir.join(name), "x").unwrap();
+            assert_eq!(refuse_open(&dir.join(name)), Ok(()), "{name}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[cfg(all(test, unix))]
