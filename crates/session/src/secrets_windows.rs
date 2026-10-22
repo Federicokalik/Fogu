@@ -69,7 +69,7 @@ impl SecretStore {
     /// The stored secret, if any.
     pub async fn get(&self, key: &SecretKey) -> Result<Option<SecretString>, SecretError> {
         match self {
-            Self::Windows => match get_secret(id(key)).await {
+            Self::Windows => match get_secret(key).await {
                 Ok(text) => Ok(Some(SecretString::from(text))),
                 Err(err) if err.contains("No matching entry") => Ok(None),
                 Err(err) => Err(SecretError::new(err)),
@@ -80,7 +80,8 @@ impl SecretStore {
         }
     }
 
-    /// Whether a secret is stored (nothing is read out of the Credential Manager).
+    /// Whether a secret is stored. The Credential Manager has no lookup that leaves the secret
+    /// out, so it is read and dropped at once.
     pub async fn exists(&self, key: &SecretKey) -> Result<bool, SecretError> {
         match self {
             Self::Windows => match self.get(key).await {
@@ -98,9 +99,9 @@ impl SecretStore {
     pub async fn set(&self, key: &SecretKey, value: &SecretString) -> Result<(), SecretError> {
         match self {
             Self::Windows => {
-                let id = id(key);
-                let secret = value.expose_secret().to_owned();
-                call(id, move |entry| entry.set_password(&secret))
+                // Stays a `SecretString` (zeroed on drop) until keyring copies it out.
+                let secret = value.clone();
+                call(key, move |entry| entry.set_password(secret.expose_secret()))
                     .await
                     .map_err(SecretError::new)
             }
@@ -118,14 +119,11 @@ impl SecretStore {
     /// Removes the secret (nothing stored is not an error).
     pub async fn delete(&self, key: &SecretKey) -> Result<(), SecretError> {
         match self {
-            Self::Windows => {
-                let id = id(key);
-                match call(id, Entry::delete_credential).await {
-                    Ok(()) => Ok(()),
-                    Err(err) if err.contains("No matching entry") => Ok(()),
-                    Err(err) => Err(SecretError::new(err)),
-                }
-            }
+            Self::Windows => match call(key, Entry::delete_credential).await {
+                Ok(()) => Ok(()),
+                Err(err) if err.contains("No matching entry") => Ok(()),
+                Err(err) => Err(SecretError::new(err)),
+            },
             Self::Disabled(reason) => Err(SecretError::new(reason)),
             #[cfg(any(test, feature = "test-store"))]
             Self::InMemory(map) => {
@@ -138,26 +136,57 @@ impl SecretStore {
     }
 }
 
-/// A stable Credential Manager target name from the key's attributes. No secret is included.
+/// The Credential Manager's service name.
+const SERVICE: &str = "fogu";
+/// Longest user name the Credential Manager stores (`CRED_MAX_USERNAME_LENGTH` is 513; keyring
+/// counts bytes).
+const USER_NAME_MAX: usize = 512;
+
+/// A stable name from the key's attributes: `fogu:name=value;…`, with `%`, `=` and `;` in a
+/// value percent-escaped so two different keys never share a name. No secret is included.
 fn id(key: &SecretKey) -> String {
-    let attributes = key.attributes();
     let mut out = String::from("fogu:");
-    for (name, value) in attributes {
+    for (name, value) in key.attributes() {
         out.push_str(name);
         out.push('=');
-        out.push_str(&value);
+        for c in value.chars() {
+            match c {
+                '%' => out.push_str("%25"),
+                '=' => out.push_str("%3D"),
+                ';' => out.push_str("%3B"),
+                c => out.push(c),
+            }
+        }
         out.push(';');
     }
     out
 }
 
+/// The credential for `key`. Its target (the Credential Manager's only lookup field) is
+/// `<id>.fogu`, the name earlier builds gave it, so values without `%`, `=` or `;` still find
+/// what they stored. The user name is only shown in the Credential Manager: the key's label,
+/// cut to the length it accepts.
+fn entry(key: &SecretKey) -> keyring::Result<Entry> {
+    let target = format!("{}.{SERVICE}", id(key));
+    let mut user = key.label();
+    if user.len() > USER_NAME_MAX {
+        let mut end = USER_NAME_MAX;
+        while !user.is_char_boundary(end) {
+            end -= 1;
+        }
+        user.truncate(end);
+    }
+    Entry::new_with_target(&target, SERVICE, &user)
+}
+
 /// Runs one blocking Credential Manager call on the blocking pool.
 async fn call(
-    target: String,
+    key: &SecretKey,
     operation: impl FnOnce(&Entry) -> keyring::Result<()> + Send + 'static,
 ) -> Result<(), String> {
+    let key = key.clone();
     let task = tokio::task::spawn_blocking(move || {
-        let entry = Entry::new("fogu", &target).map_err(|err| err.to_string())?;
+        let entry = entry(&key).map_err(|err| err.to_string())?;
         operation(&entry).map_err(|err| err.to_string())
     });
     match tokio::time::timeout(CALL_TIMEOUT, task).await {
@@ -168,9 +197,10 @@ async fn call(
 }
 
 /// Runs a blocking call that returns a secret string.
-async fn get_secret(target: String) -> Result<String, String> {
+async fn get_secret(key: &SecretKey) -> Result<String, String> {
+    let key = key.clone();
     let task = tokio::task::spawn_blocking(move || {
-        let entry = Entry::new("fogu", &target).map_err(|err| err.to_string())?;
+        let entry = entry(&key).map_err(|err| err.to_string())?;
         entry.get_password().map_err(|err| err.to_string())
     });
     match tokio::time::timeout(CALL_TIMEOUT, task).await {
@@ -220,17 +250,7 @@ impl Secrets {
     /// See [`SecretStore::get`].
     pub async fn get(&self, key: &SecretKey) -> Result<Option<SecretString>, SecretError> {
         let (store, key) = (Arc::clone(&self.store), key.clone());
-        let fut = async move {
-            let store = store.get_or_init(SecretStore::detect).await;
-            match store {
-                SecretStore::Windows => match get_secret(id(&key)).await {
-                    Ok(text) => Ok(Some(SecretString::from(text))),
-                    Err(err) if err.contains("No matching entry") => Ok(None),
-                    Err(err) => Err(SecretError::new(err)),
-                },
-                other => other.get(&key).await,
-            }
-        };
+        let fut = async move { store.get_or_init(SecretStore::detect).await.get(&key).await };
         self.spawn(fut).await
     }
 
@@ -328,5 +348,27 @@ mod tests {
         assert!(a.starts_with("fogu:"));
         assert!(!a.contains("hunter2"));
         assert_ne!(a, id(&key("bob")));
+    }
+
+    #[test]
+    fn separators_in_a_value_never_make_two_keys_share_an_id() {
+        let tricky = SecretKey::SshPassword {
+            user: "a;host=x".into(),
+            host: "h".into(),
+            port: 22,
+        };
+        assert_ne!(id(&tricky), id(&key("a")));
+        assert!(id(&tricky).contains("user=a%3Bhost%3Dx;"));
+        // A plain value keeps the name earlier builds stored it under.
+        assert!(id(&key("alice")).contains("user=alice;"));
+    }
+
+    #[test]
+    fn a_long_login_script_key_still_makes_an_entry() {
+        let long = SecretKey::LoginScript {
+            profile_id: fogu_core::ProfileId("p".repeat(400)),
+            name: "n".repeat(400),
+        };
+        entry(&long).unwrap();
     }
 }
