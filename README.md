@@ -123,74 +123,77 @@ second and stays out of your way.
 
 ## Install
 
-Fogu runs on Linux (X11 and Wayland) and macOS (Intel and Apple Silicon).
+Linux (X11 and Wayland) and macOS (Apple Silicon and Intel). No root needed.
 
-### Prebuilt release
-
-Each [release](https://github.com/Revdep/Fogu/releases) has an archive per platform
-(`linux-x86_64`, `macos-aarch64` for Apple Silicon, `macos-x86_64` for Intel). Download,
-unpack and install for the current user, no root and no Rust needed:
+### Linux
 
 ```bash
-platform=linux-x86_64   # or macos-aarch64 / macos-x86_64
-curl -fsSL "https://github.com/Revdep/Fogu/releases/latest/download/fogu-$platform.tar.gz" | tar xz
-cd "fogu-$platform"
-./scripts/install.sh
-fogu
+curl -fsSL https://github.com/Revdep/Fogu/releases/latest/download/fogu-linux-x86_64.tar.gz | tar xz
+cd fogu-linux-x86_64 && ./scripts/install.sh
 ```
 
-On Linux there is also a single-file AppImage, no install step:
+Or the single-file AppImage:
 
 ```bash
 curl -fsSLo Fogu.AppImage https://github.com/Revdep/Fogu/releases/latest/download/Fogu-x86_64.AppImage
-chmod +x Fogu.AppImage
-./Fogu.AppImage
+chmod +x Fogu.AppImage && ./Fogu.AppImage
 ```
 
-`./scripts/install.sh --uninstall` removes the archive install again. The Linux builds need glibc 2.35 or newer
-(Ubuntu 22.04, Debian 12, Fedora 36 and later). Checksums are in `SHA256SUMS` on the release page.
-
-### From source
-
-With a Rust toolchain ([rustup](https://rustup.rs) picks the pinned version automatically):
-
-```bash
-git clone https://github.com/Revdep/Fogu.git
-cd Fogu
-./scripts/install.sh              # release build, installs for the current user
-fogu
-```
-
-`./scripts/install.sh --uninstall` removes exactly what was installed. No root needed.
-
-Build dependencies on Debian/Ubuntu: `sudo apt install build-essential pkg-config libudev-dev libxkbcommon-dev libwayland-dev`.
+Needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36).
 
 ### macOS
 
-The same script installs `~/Applications/Fogu.app` (open it from Finder, Launchpad or Spotlight)
-and puts `fogu` in `~/.local/bin`. Building from source needs the Xcode command line tools
-(`xcode-select --install`). Good to know:
+```bash
+curl -fsSL https://github.com/Revdep/Fogu/releases/latest/download/fogu-macos-aarch64.tar.gz | tar xz
+cd fogu-macos-aarch64 && ./scripts/install.sh
+```
 
-- Fogu is not signed or notarized by Apple (that takes a paid Apple Developer account), so
-  Gatekeeper blocks it when the archive was downloaded with a browser. The `curl` commands above
-  avoid that: files fetched by `curl` are not quarantined. After a browser download, either run
-  `xattr -dr com.apple.quarantine fogu-macos-*` before `./scripts/install.sh`, or try to open
-  Fogu once, then allow it under System Settings → Privacy & Security → Open Anyway.
-- Option + a letter is Meta (`Option+f` moves a word forward); Option + any other key types its
-  character, so `@`, `#`, `[` and `~` work on layouts that need Option. With
-  `alt_is_meta = false` under `[terminal]`, Option only types characters: layouts that put
-  characters on Option + a letter need it (German: `@` is Option+L, `~` is Option+N). Dead keys
-  (Option+e and Option+u on a US layout) never reach the terminal.
-- `Cmd` + a key that is not a Fogu shortcut does nothing, as in Terminal.app (apps that turn on
-  the kitty keyboard protocol still receive it).
-- Local shells get `LANG` from the system language (for example `it_IT.UTF-8`) when Fogu was
-  started without any locale variable, as it is from Finder or the Dock.
-- Stored passwords and passphrases go to the login Keychain (service `fogu` in Keychain
-  Access). After a rebuild macOS may ask once to let the new binary read them.
-- `Cmd+Q` quits without the final session save: tabs come back, but up to the last 30 seconds
-  of scrollback may be missing.
-- Release builds turn core dumps off for Fogu (the soft limit, so shells can raise it again), but macOS has no equivalent of Linux's protection
-  against another process of yours attaching a debugger.
+On Intel Macs use `macos-x86_64` instead of `macos-aarch64`. Fogu then shows up in Applications.
+
+Downloaded with a browser instead of `curl`? Fogu is not notarized by Apple, so unblock it first:
+
+```bash
+xattr -dr com.apple.quarantine fogu-macos-*
+```
+
+<details>
+<summary>Good to know on macOS</summary>
+
+- **Option key:** Option + a letter is Meta (`Option+f` = word forward); Option + other keys types
+  the character (`@`, `#`, `[`, `~`). If your layout puts characters on Option + a letter
+  (German `@` = Option+L), set `alt_is_meta = false` under `[terminal]`.
+- **Cmd key:** `Cmd` + a key that is not a Fogu shortcut does nothing, as in Terminal.app.
+- **Locale:** shells started from Finder or the Dock get `LANG` from the system language.
+- **Passwords** are stored in the login Keychain (service `fogu`). After an update macOS may ask
+  once to allow access.
+- **Cmd+Q** skips the final save: tabs come back, the last ~30 s of scrollback may not.
+
+</details>
+
+### From source
+
+```bash
+git clone https://github.com/Revdep/Fogu.git
+cd Fogu && ./scripts/install.sh
+```
+
+Needs [rustup](https://rustup.rs) (it picks the right Rust version). Plus, on Debian/Ubuntu:
+
+```bash
+sudo apt install build-essential pkg-config libudev-dev libxkbcommon-dev libwayland-dev
+```
+
+and on macOS:
+
+```bash
+xcode-select --install
+```
+
+### Uninstall
+
+```bash
+./scripts/install.sh --uninstall
+```
 
 ## Configuration
 
