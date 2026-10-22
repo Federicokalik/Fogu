@@ -266,7 +266,7 @@ pub(crate) fn local_hostname() -> String {
             .map(|s| s.trim().to_owned())
             .unwrap_or_default()
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(all(unix, not(target_os = "linux")))]
     {
         rustix::system::uname()
             .nodename()
@@ -278,5 +278,9 @@ pub(crate) fn local_hostname() -> String {
         std::env::var("COMPUTERNAME")
             .map(|s| s.trim().to_owned())
             .unwrap_or_default()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        String::new()
     }
 }

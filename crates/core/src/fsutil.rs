@@ -233,7 +233,7 @@ mod tests {
     fn atomic_write_replaces_content_with_a_private_file_and_leaves_no_temp() {
         use std::fs::Permissions;
         use std::os::unix::fs::PermissionsExt as _;
-        let root = std::env::temp_dir().join(format!("fogu-atomic-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("fogu-atomic-private-{}", std::process::id()));
         create_private_dir(&root).unwrap();
         let file = root.join("known_hosts");
         std::fs::write(&file, "old").unwrap();

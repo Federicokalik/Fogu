@@ -154,7 +154,11 @@ fn init_logging(state_dir: &Result<PathBuf, String>) -> Option<WorkerGuard> {
 /// The platform state directory (see [`fogu_core::platform::state_dir`]), created private on
 /// Unix.
 fn state_dir() -> Result<PathBuf, String> {
-    let dir = fogu_core::platform::state_dir();
+    let dir = fogu_core::platform::state_dir().ok_or(if cfg!(windows) {
+        "the local app-data folder (%LOCALAPPDATA%) is not known"
+    } else {
+        "neither XDG_STATE_HOME nor HOME is set"
+    })?;
     fsutil::ensure_private_dir(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     Ok(dir)
 }

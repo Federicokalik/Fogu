@@ -36,24 +36,18 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// `$XDG_STATE_HOME/fogu` on Unix (`~/.local/state/fogu` by default), `%LOCALAPPDATA%\fogu`
-/// on Windows.
+/// on Windows. `None` when no base directory is known: never a path relative to the working
+/// directory.
 #[must_use]
-pub fn state_dir() -> PathBuf {
+pub fn state_dir() -> Option<PathBuf> {
     #[cfg(unix)]
-    {
-        std::env::var_os("XDG_STATE_HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| home_dir().map(|home| home.join(".local/state")))
-            .unwrap_or_else(|| PathBuf::from(".local/state"))
-            .join(APP_DIR)
-    }
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".local/state")));
     #[cfg(windows)]
-    {
-        dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(APP_DIR)
-    }
+    let base = dirs::data_local_dir();
+    base.map(|base| base.join(APP_DIR))
 }
 
 /// The user's download directory, used by SFTP double-click downloads.
@@ -106,7 +100,7 @@ mod tests {
     #[test]
     fn app_directories_end_with_the_app_name() {
         assert!(config_dir().ends_with(APP_DIR));
-        assert!(state_dir().ends_with(APP_DIR));
+        assert!(state_dir().is_none_or(|dir| dir.ends_with(APP_DIR)));
     }
 
     #[test]

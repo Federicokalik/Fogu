@@ -24,7 +24,8 @@ secrecy.workspace = true
 pty-process.workspace = true
 rustix.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+# The Secret Service: every Unix but macOS (same cfg as `secrets.rs`); Windows has keyring.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 oo7 = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
