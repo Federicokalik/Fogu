@@ -139,7 +139,7 @@ curl -fsSLo Fogu.AppImage https://github.com/Revdep/Fogu/releases/latest/downloa
 chmod +x Fogu.AppImage && ./Fogu.AppImage
 ```
 
-Needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36).
+Needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36, Arch Linux).
 
 ### macOS
 
@@ -181,6 +181,12 @@ Needs [rustup](https://rustup.rs) (it picks the right Rust version). Plus, on De
 
 ```bash
 sudo apt install build-essential pkg-config libudev-dev libxkbcommon-dev libwayland-dev
+```
+
+on Arch Linux:
+
+```bash
+sudo pacman -S --needed base-devel pkgconf systemd-libs libxkbcommon wayland
 ```
 
 and on macOS:
