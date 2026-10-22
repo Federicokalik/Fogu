@@ -209,10 +209,13 @@ async fn drain(local: &mut Local, pump: &mut Pump) -> Result<(), Gone> {
 
 /// Close: kill the child, wait up to [`CLOSE_GRACE`], then reap.
 ///
-/// shortcut: only the shell is terminated. A program it started (`ssh`, `python`) keeps running
-/// detached from the closed console; ending the whole tree needs a Job Object with
-/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which is FFI this `unsafe`-free workspace does not do yet.
+/// Only the shell is killed here; what it started still on the console (`ssh`, `python`) ends
+/// when [`release`] closes the `ConPTY`, since `ClosePseudoConsole` terminates its attached
+/// clients. A program that detached itself (`start`, `DETACHED_PROCESS`) outlives the tab, like
+/// `nohup` on Unix.
 async fn close(local: &mut Local) -> io::Result<i32> {
+    // portable-pty 0.9.0 returns `Err` when `TerminateProcess` succeeds (its check is inverted),
+    // so the result means nothing either way: the wait below is what tells.
     let _ = local.killer.kill();
     match timeout(CLOSE_GRACE, &mut local.wait_rx).await {
         Ok(Ok(Ok(code))) => Ok(code),
