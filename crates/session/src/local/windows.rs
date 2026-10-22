@@ -6,7 +6,7 @@
 //! one read per turn, synchronized-update timer, child exit).
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,20 +14,30 @@ use fogu_core::{LocalProfile, Size};
 use fogu_term::TermHandle;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtyPair, PtySize, native_pty_system};
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::time::{Instant, sleep_until, timeout};
+use tokio::time::{Instant, sleep_until, timeout, timeout_at};
 
 use crate::env::build_env;
-use crate::pipeline::{Gone, Pump, WRITE_CHUNK, canonical_dir};
+use crate::pipeline::{Gone, Pump, WRITE_CHUNK};
 use crate::{ExitInfo, SessionError, SessionInput, SessionOutput};
 
 /// PTY read buffer.
 const READ_CHUNK: usize = 64 * 1024;
-/// Time between closing the master and killing the child.
+/// How long a killed shell may take to exit, and how long closing the `ConPTY` may take.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
-/// Upper bound for draining output after the child exited.
+/// Upper bound for draining output after the child exited. The output pipe only reaches EOF
+/// once the `ConPTY` is closed, so the drain also stops after [`DRAIN_IDLE`] without output.
+const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+/// A pause in the output that ends the drain early.
+const DRAIN_IDLE: Duration = Duration::from_millis(100);
 /// How often a watched foreground program is checked (kept for API parity; Windows has no
 /// portable foreground-process query).
 const WATCH_EVERY: Duration = Duration::from_secs(1);
+
+/// Why the main loop stopped.
+enum End {
+    Exited(io::Result<i32>),
+    Close,
+}
 
 /// A spawned shell and our ends of its `ConPTY`.
 struct Local {
@@ -71,10 +81,22 @@ pub(crate) async fn run_local(
             return;
         }
     };
-    let Ok(status) = run_loop(&mut local, &mut pump, &mut in_rx).await else {
-        let _status = close(&mut local).await;
-        return;
+    let status = match run_loop(&mut local, &mut pump, &mut in_rx).await {
+        Ok(End::Exited(status)) => {
+            if drain(&mut local, &mut pump).await.is_err() {
+                release(local).await;
+                return;
+            }
+            status
+        }
+        Ok(End::Close) => close(&mut local).await,
+        Err(Gone) => {
+            let _status = close(&mut local).await;
+            release(local).await;
+            return;
+        }
     };
+    release(local).await;
     let out = match status {
         Ok(code) => SessionOutput::Exited(ExitInfo {
             code: Some(code),
@@ -89,7 +111,7 @@ async fn run_loop(
     local: &mut Local,
     pump: &mut Pump,
     in_rx: &mut Receiver<SessionInput>,
-) -> Result<io::Result<i32>, Gone> {
+) -> Result<End, Gone> {
     let mut watching: Option<Option<String>> = None;
     let mut watch_tick = tokio::time::interval(WATCH_EVERY);
     let mut write_in_flight = false;
@@ -117,7 +139,7 @@ async fn run_loop(
                 Some(SessionInput::WatchForeground(on)) => {
                     watching = on.then_some(None);
                 }
-                Some(SessionInput::Close) | None => return Ok(close(local).await),
+                Some(SessionInput::Close) | None => return Ok(End::Close),
             },
             written = local.write_rx.recv(), if write_in_flight => {
                 write_in_flight = false;
@@ -149,11 +171,11 @@ async fn run_loop(
                 watching = Some(None);
             }
             status = &mut local.wait_rx => {
-                return Ok(match status {
+                return Ok(End::Exited(match status {
                     Ok(Ok(code)) => Ok(code),
                     Ok(Err(err)) => Err(err),
                     Err(err) => Err(io::Error::other(err.to_string())),
-                });
+                }));
             }
         }
 
@@ -170,7 +192,26 @@ async fn run_loop(
     }
 }
 
+/// Feeds what the child wrote before it exited: until EOF, [`DRAIN_TIMEOUT`], or a pause of
+/// [`DRAIN_IDLE`].
+async fn drain(local: &mut Local, pump: &mut Pump) -> Result<(), Gone> {
+    let deadline = Instant::now() + DRAIN_TIMEOUT;
+    while !local.eof {
+        let until = deadline.min(Instant::now() + DRAIN_IDLE);
+        match timeout_at(until, local.read_rx.recv()).await {
+            Ok(Some(Ok(bytes))) if !bytes.is_empty() => pump.feed(&bytes).await?,
+            // EOF, a read error, the reader gone, or no output for a while.
+            _ => break,
+        }
+    }
+    Ok(())
+}
+
 /// Close: kill the child, wait up to [`CLOSE_GRACE`], then reap.
+///
+/// shortcut: only the shell is terminated. A program it started (`ssh`, `python`) keeps running
+/// detached from the closed console; ending the whole tree needs a Job Object with
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which is FFI this `unsafe`-free workspace does not do yet.
 async fn close(local: &mut Local) -> io::Result<i32> {
     let _ = local.killer.kill();
     match timeout(CLOSE_GRACE, &mut local.wait_rx).await {
@@ -182,6 +223,26 @@ async fn close(local: &mut Local) -> io::Result<i32> {
             "the shell did not exit after being killed",
         )),
     }
+}
+
+/// Closes the `ConPTY` without blocking a runtime worker: `ClosePseudoConsole` (the master's
+/// drop) runs on a blocking thread, and the output keeps being read and discarded meanwhile,
+/// because conhost may wait for its last output to be read before it exits. Bounded by
+/// [`CLOSE_GRACE`]; past it the close finishes in the background.
+async fn release(local: Local) {
+    let Local {
+        master,
+        killer,
+        mut read_rx,
+        write_tx,
+        write_rx,
+        ..
+    } = local;
+    drop((write_tx, write_rx, killer));
+    let closing = tokio::task::spawn_blocking(move || drop(master));
+    // The reader task ends at the EOF that follows the close.
+    let discard = async { while read_rx.recv().await.is_some() {} };
+    let _done = timeout(CLOSE_GRACE, async { tokio::join!(closing, discard) }).await;
 }
 
 fn pty_size(size: Size) -> PtySize {
@@ -308,12 +369,6 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&path)
         .map(|dir| dir.join(name))
         .find(|path| path.is_file())
-}
-
-/// Kept for parity with the Unix tests and for callers that need a canonical local directory.
-#[allow(dead_code)]
-fn checked_cwd(path: &Path) -> Option<PathBuf> {
-    canonical_dir(path)
 }
 
 #[cfg(test)]
