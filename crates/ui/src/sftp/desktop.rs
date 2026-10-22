@@ -227,13 +227,15 @@ fn refuse_open(path: &Path) -> Result<(), String> {
 }
 
 /// The lower-case extension the desktop opens `path` as. Windows ignores trailing dots and
-/// spaces in a name (`setup.exe.` opens `setup.exe`), so they are dropped there first.
+/// spaces in a name (`setup.exe.` opens `setup.exe`), so they are dropped there first. A name
+/// that is only an extension counts too: `ShellExecute` runs a file called `.exe`, and the
+/// `*.jar` glob matches `.jar`.
 fn opened_extension(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?;
     #[cfg(windows)]
     let name = name.trim_end_matches(['.', ' ']);
-    let (stem, ext) = name.rsplit_once('.')?;
-    (!stem.is_empty() && !ext.is_empty()).then(|| ext.to_ascii_lowercase())
+    let (_, ext) = name.rsplit_once('.')?;
+    (!ext.is_empty()).then(|| ext.to_ascii_lowercase())
 }
 
 /// Windows `ShellExecute` runs, installs or follows these extensions (programs, scripts,
@@ -396,6 +398,8 @@ mod windows_tests {
             "x.lnk",
             "x.application",
             "x.appref-ms",
+            ".exe",
+            ".cmd",
         ] {
             std::fs::write(dir.join(name), "x").unwrap();
             let why = refuse_open(&dir.join(name)).unwrap_err();
@@ -490,6 +494,8 @@ mod tests {
             "tool.EXE",
             "s.sh",
             "x.py",
+            ".jar",
+            ".desktop",
         ] {
             let path = dir.join(name);
             std::fs::write(&path, "x").unwrap();
