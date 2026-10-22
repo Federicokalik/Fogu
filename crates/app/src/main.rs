@@ -74,7 +74,7 @@ fn make_undumpable() -> rustix::io::Result<()> {
     rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn make_undumpable() -> rustix::io::Result<()> {
     use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
     // The soft limit only: child shells inherit it and may raise it again.
@@ -167,7 +167,7 @@ fn state_dir() -> Result<PathBuf, String> {
 mod tests {
     /// Core dumps off for Fogu, but only the soft limit: shells started in Fogu inherit it and
     /// can still raise it (`ulimit -c unlimited`), as in any other terminal.
-    #[cfg(target_os = "macos")]
+    #[cfg(all(unix, not(target_os = "linux")))]
     #[test]
     fn undumpable_leaves_the_hard_core_limit_alone() {
         use rustix::process::{Resource, getrlimit};

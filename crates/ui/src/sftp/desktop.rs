@@ -323,16 +323,16 @@ async fn open_target(target: &std::ffi::OsStr) -> Result<(), String> {
         .map_err(|err| format!("could not open {shown}: {err}"))
 }
 
-/// Whether a file picker can open: native on Windows and macOS; on Linux it needs
-/// `zenity` or the desktop portal.
+/// Whether a file picker can open: always on Windows and macOS (native dialog), else `zenity`
+/// on `PATH`, or a session bus with the desktop portal service installed.
 pub(crate) fn picker_available() -> bool {
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(windows)]
     {
         true
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
-        in_path("zenity") || portal_installed()
+        cfg!(target_os = "macos") || in_path("zenity") || portal_installed()
     }
 }
 
