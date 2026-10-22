@@ -325,10 +325,12 @@ fn spawn_proxy(
         {
             // Windows has no user shell variable with POSIX `-c` semantics. `cmd /S /C`
             // understands the same redirections and pipes; host/user substitution is already
-            // restricted to characters with no special meaning.
+            // restricted to characters with no special meaning. The command line is passed raw:
+            // std would quote it and escape inner `"` as `\"`, which cmd does not understand.
+            // With `/S`, cmd strips exactly the outer pair of quotes and runs the rest as typed.
             let shell = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
             let mut process = Command::new(shell);
-            process.args(["/S", "/C", &command]);
+            process.raw_arg(format!("/S /C \"{command}\""));
             process
         }
     };
@@ -397,6 +399,10 @@ async fn log_stderr(mut stderr: tokio::process::ChildStderr, last: Arc<Mutex<Str
     finish(&mut line);
 }
 
+/// How [`expand_proxy_command`] quotes host and user: `cmd.exe` keeps single quotes as part of
+/// the argument, so Windows uses double quotes.
+const PROXY_QUOTE: &str = if cfg!(windows) { "\"" } else { "'" };
+
 /// `%h`, `%p`, `%r` and `%%` in a proxy command. Host and user are shell-quoted and limited to
 /// characters that mean nothing to a shell, so a crafted host name can't inject commands.
 pub(crate) fn expand_proxy_command(
@@ -422,9 +428,9 @@ pub(crate) fn expand_proxy_command(
             continue;
         }
         match chars.next() {
-            Some('h') => out.extend(["'", host, "'"]),
+            Some('h') => out.extend([PROXY_QUOTE, host, PROXY_QUOTE]),
             Some('p') => out.push_str(&port.to_string()),
-            Some('r') if safe(user) => out.extend(["'", user, "'"]),
+            Some('r') if safe(user) => out.extend([PROXY_QUOTE, user, PROXY_QUOTE]),
             Some('r') => {
                 return Err("proxy_command: the user name has characters unsafe in a shell".into());
             }
@@ -445,20 +451,21 @@ mod tests {
     #[test]
     fn proxy_command_tokens_are_quoted_and_checked() {
         let expand = |t: &str, host: &str, user: &str| expand_proxy_command(t, host, 2222, user);
+        let q = PROXY_QUOTE;
         assert_eq!(
-            expand("ssh -W %h:%p -l %r gw 100%%", "box.lan", "me").as_deref(),
-            Ok("ssh -W 'box.lan':2222 -l 'me' gw 100%")
+            expand("ssh -W %h:%p -l %r gw 100%%", "box.lan", "me"),
+            Ok(format!("ssh -W {q}box.lan{q}:2222 -l {q}me{q} gw 100%"))
         );
         assert_eq!(
-            expand("nc %h %p", "::1", "x").as_deref(),
-            Ok("nc '::1' 2222")
+            expand("nc %h %p", "::1", "x"),
+            Ok(format!("nc {q}::1{q} 2222"))
         );
         assert!(expand("nc %h %p", "a;touch /tmp/x", "me").is_err());
         assert!(expand("nc %h %p", "$(id)", "me").is_err());
         assert!(expand("nc %h %p", "-oProxyCommand=x", "me").is_err());
         assert!(expand("nc %h %p", "a'b", "me").is_err());
         assert!(expand("ssh -l %r gw", "h", "me`id`").is_err());
-        assert_eq!(expand("nc %h", "h", "me`id`").as_deref(), Ok("nc 'h'"));
+        assert_eq!(expand("nc %h", "h", "me`id`"), Ok(format!("nc {q}h{q}")));
         assert_eq!(
             expand("nc %n", "h", "me"),
             Err("proxy_command: unsupported token %n".to_owned())
