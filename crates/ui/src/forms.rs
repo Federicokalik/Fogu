@@ -278,8 +278,9 @@ pub fn number<'a, Id: Copy + 'a>(
     value: &str,
     placeholder: &str,
 ) -> Element<'a, Field<Id>> {
-    let step = |label: &'static str, by| {
-        button(text(label).size(14))
+    // Phosphor glyphs, centred: a text "−"/"+" sits on the font's baseline, off centre.
+    let step = |glyph: crate::icons::Icon, by| {
+        button(container(crate::icons::glyph(glyph, 13.0, look.fg)).center(Length::Fill))
             .width(NUMBER_H)
             .height(NUMBER_H)
             .padding(0)
@@ -296,10 +297,14 @@ pub fn number<'a, Id: Copy + 'a>(
     labeled(
         look,
         label,
-        row![step("−", -1), input, step("+", 1)]
-            .spacing(4)
-            .align_y(Alignment::Center)
-            .into(),
+        row![
+            step(crate::icons::Icon::Minimize, -1),
+            input,
+            step(crate::icons::Icon::Plus, 1)
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center)
+        .into(),
     )
 }
 
