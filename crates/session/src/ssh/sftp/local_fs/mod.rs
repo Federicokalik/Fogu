@@ -3,9 +3,10 @@
 //! The two platforms share the same small vocabulary ([`LocalDir`], [`DirHandle`], [`Mode`],
 //! [`Existing`]); their security models differ. Unix uses directory file descriptors and
 //! `O_NOFOLLOW`, so a planted symlink can never redirect a write. Windows has no `openat`; it
-//! validates each name component, refuses reparse points (symlinks and junctions) on the path,
-//! and uses `create_new` for new files.
+//! validates each name component, refuses symlinks and junctions on the path, and uses
+//! `create_new` for new files.
 
+#[cfg(windows)]
 use std::io;
 
 #[cfg(unix)]
@@ -73,22 +74,21 @@ pub(crate) fn part_name(name: &str) -> Option<String> {
     (name.len() + PART_SUFFIX.len() <= NAME_MAX).then(|| format!("{name}{PART_SUFFIX}"))
 }
 
-/// Local permission bits for a downloaded file. On Windows modes are not enforced; the value
-/// is still carried for reporting and for the Unix build.
+/// Local permission bits for a downloaded file.
+#[cfg(unix)]
+pub(crate) use rustix::fs::Mode;
+
+/// Local permission bits for a downloaded file. Windows does not enforce them; the value is only
+/// carried so both platforms share one signature.
+#[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Mode(u32);
 
+#[cfg(windows)]
 impl Mode {
     /// Wraps raw permission bits.
-    #[cfg_attr(windows, allow(dead_code, reason = "used by Windows tests only"))]
     pub(crate) const fn from_raw_mode(mode: u32) -> Self {
         Self(mode)
-    }
-
-    /// The raw permission bits.
-    #[cfg_attr(windows, allow(dead_code, reason = "used by Windows tests only"))]
-    pub(crate) const fn as_raw_mode(self) -> u32 {
-        self.0
     }
 }
 
@@ -97,9 +97,9 @@ impl Mode {
 /// never copied.
 pub(crate) fn file_mode(remote_mode: Option<u32>, keep_exec: bool) -> Mode {
     if keep_exec && remote_mode.is_some_and(|m| m & 0o111 != 0) {
-        Mode(0o755)
+        Mode::from_raw_mode(0o755)
     } else {
-        Mode(0o644)
+        Mode::from_raw_mode(0o644)
     }
 }
 
@@ -114,6 +114,7 @@ pub(crate) enum Existing {
 }
 
 /// Converts an I/O result to [`Existing`] for `symlink_metadata` style probes.
+#[cfg(windows)]
 pub(crate) fn classify(metadata: io::Result<std::fs::Metadata>) -> io::Result<Existing> {
     match metadata {
         Ok(meta) => {
@@ -134,20 +135,11 @@ pub(crate) fn classify(metadata: io::Result<std::fs::Metadata>) -> io::Result<Ex
     }
 }
 
-/// Whether a path entry is a symlink or a Windows reparse point (junction).
+/// Whether a path entry redirects somewhere else: a symlink or a junction (std reports every
+/// name-surrogate reparse point as a symlink). Other reparse points are left alone: `OneDrive`
+/// placeholders ("Files On-Demand") and `WOF`-compressed files (`compact /c`) are ordinary
+/// files and folders, and `Downloads` is on `OneDrive` by default on Windows 11.
+#[cfg(windows)]
 pub(crate) fn is_reparse(meta: &std::fs::Metadata) -> bool {
-    if meta.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    meta.file_type().is_symlink()
 }

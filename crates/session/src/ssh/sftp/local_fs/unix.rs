@@ -7,24 +7,18 @@
 
 use std::fs::File;
 use std::io;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::path::Path;
 
-use rustix::fs::{self as rfs, AtFlags, FileType, OFlags, RenameFlags};
+use rustix::fs::{self as rfs, AtFlags, FileType, Mode, OFlags, RenameFlags};
 use rustix::io::Errno;
 
-use super::{Existing, Mode};
+use super::Existing;
 
 /// The download destination root and every opened subdirectory.
 #[derive(Debug)]
 pub(crate) struct DirHandle {
     fd: OwnedFd,
-}
-
-impl DirHandle {
-    pub(crate) fn as_fd(&self) -> BorrowedFd<'_> {
-        self.fd.as_fd()
-    }
 }
 
 /// The download destination, opened once.
@@ -135,7 +129,7 @@ pub(crate) fn create_file(
     } else {
         OFlags::EXCL
     };
-    let fd = rfs::openat(&dir.fd, name, flags, mode.0)?;
+    let fd = rfs::openat(&dir.fd, name, flags, mode)?;
     regular_only(fd)
 }
 
@@ -188,9 +182,7 @@ pub(crate) fn remove(dir: &DirHandle, name: &str) -> io::Result<()> {
 /// Free bytes for the unprivileged user on the filesystem holding `dir`.
 pub(crate) fn available_space(dir: &DirHandle) -> io::Result<u64> {
     let stat = rfs::fstatvfs(&dir.fd)?;
-    Ok(u64::try_from(stat.f_bavail)
-        .unwrap_or(0)
-        .saturating_mul(u64::try_from(stat.f_frsize).unwrap_or(0)))
+    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
 #[cfg(test)]

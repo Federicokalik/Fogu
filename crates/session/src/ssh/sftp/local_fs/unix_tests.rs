@@ -4,6 +4,7 @@ use std::io::Write as _;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::path::PathBuf;
 
+use super::super::{NAME_MAX, file_mode, part_name};
 use super::*;
 
 struct Tmp(PathBuf);

@@ -8,11 +8,6 @@ use crate::background::{Background, Fit};
 
 /// The config file's name inside [`config_dir`].
 pub(super) const FILE_NAME: &str = "config.toml";
-/// Permissions for the config file and its backup (may contain nothing secret today, but
-/// `profiles` will later carry hostnames/usernames some users consider sensitive). Unix only:
-/// Windows protects the profile directory with its ACL.
-#[cfg(unix)]
-const FILE_MODE: u32 = 0o600;
 
 /// Something went wrong loading or saving the config file.
 #[derive(Debug, thiserror::Error)]
@@ -325,9 +320,10 @@ background = { color = \"#112233\" }   # keep me
         {
             use std::os::unix::fs::PermissionsExt as _;
 
+            // The file and its backup are written through `fsutil`, private on Unix.
             let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode(&path), FILE_MODE);
-            assert_eq!(mode(&bak), FILE_MODE);
+            assert_eq!(mode(&path), crate::fsutil::FILE_MODE);
+            assert_eq!(mode(&bak), crate::fsutil::FILE_MODE);
         }
     }
 

@@ -2,17 +2,22 @@
 //!
 //! There is no `openat`/`O_NOFOLLOW`, so the model is: canonical root, every component validated
 //! by [`validate_name`], every existing component checked with `symlink_metadata` and refused if
-//! it is a reparse point (symlink or junction), new files created with `create_new`, and the
-//! final publish done with `rename` only after re-checking the target. This closes the common
-//! escape paths; a same-user process racing the checks is outside what a non-privileged,
+//! it is a symlink or junction, new files created with `create_new`, files opened with
+//! `FILE_FLAG_OPEN_REPARSE_POINT` (a link planted after the check is opened itself and refused),
+//! and the final publish done with `rename` only after re-checking the target. This closes the
+//! common escape paths; a same-user process racing the checks is outside what a non-privileged,
 //! `unsafe`-free Windows program can fully prevent without `NtCreateFile`.
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::os::windows::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use super::{Existing, Mode, classify, is_reparse, validate_name};
+
+/// `FILE_FLAG_OPEN_REPARSE_POINT`: open a symlink or junction itself, never what it points at.
+const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 /// A directory below the destination root.
 #[derive(Clone, Debug)]
@@ -153,7 +158,7 @@ pub(crate) fn create_file(
         .create(true)
         .truncate(truncate_existing)
         .create_new(!truncate_existing);
-    options.open(path)
+    open_regular(&path, &mut options)
 }
 
 /// Opens an existing `.part` for resume and returns its length.
@@ -166,9 +171,23 @@ pub(crate) fn open_for_resume(dir: &DirHandle, name: &str) -> io::Result<(File, 
             "not a regular file",
         ));
     }
-    let file = OpenOptions::new().read(true).write(true).open(path)?;
+    let file = open_regular(&path, OpenOptions::new().read(true).write(true))?;
     let len = file.metadata()?.len();
     Ok((file, len))
+}
+
+/// Opens `path` without following a symlink or junction planted after the checks above, and
+/// keeps the handle only if it is a regular file.
+fn open_regular(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
+    let file = options.custom_flags(OPEN_REPARSE_POINT).open(path)?;
+    let meta = file.metadata()?;
+    if is_reparse(&meta) || !meta.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 /// Publishes `part` as `name`; without `replace`, an existing target is a conflict.
