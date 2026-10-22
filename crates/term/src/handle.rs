@@ -14,7 +14,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::color::COUNT;
 use alacritty_terminal::term::search::RegexSearch;
-use alacritty_terminal::term::{Config, TermMode};
+use alacritty_terminal::term::{Config, MIN_COLUMNS, TermMode};
 use alacritty_terminal::vte::ansi::{ClearMode, CursorShape, Handler as _, Processor};
 
 use crate::event_proxy::{
@@ -70,12 +70,15 @@ impl fmt::Debug for TermHandle {
     }
 }
 
+// alacritty's reflow never terminates at 1 column once a wide char is on screen
+const MIN_COLS: u16 = MIN_COLUMNS as u16;
+
 impl TermHandle {
-    /// Creates a terminal of `cols` x `rows` cells (each at least 1) keeping `scrollback_lines`
+    /// Creates a terminal of `cols` x `rows` cells (at least 2 x 1) keeping `scrollback_lines`
     /// lines of history. `word_separators` ends a double-click (semantic) selection
     /// (`Config.terminal.word_separators`); pass [`WORD_SEPARATORS`] for the default.
     pub fn new(cols: u16, rows: u16, scrollback_lines: usize, word_separators: &str) -> Self {
-        let (cols, rows) = (cols.max(1), rows.max(1));
+        let (cols, rows) = (cols.max(MIN_COLS), rows.max(1));
         let shared = Arc::new(Mutex::new(Shared {
             events: Vec::new(),
             palette: default_palette(),
@@ -143,9 +146,9 @@ impl TermHandle {
         self.processor.sync_timeout().sync_timeout()
     }
 
-    /// Resizes (and reflows) the grid to `cols` x `rows` cells, each at least 1.
+    /// Resizes (and reflows) the grid to `cols` x `rows` cells, at least 2 x 1.
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        let (cols, rows) = (cols.max(1), rows.max(1));
+        let (cols, rows) = (cols.max(MIN_COLS), rows.max(1));
         self.term.lock().resize(Size {
             cols: cols.into(),
             rows: rows.into(),

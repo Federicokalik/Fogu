@@ -111,6 +111,14 @@ fn resize_reflows() {
 }
 
 #[test]
+fn resize_to_one_column_with_wide_chars_terminates() {
+    // fuzz regression: a 1-column reflow of a wide char looped forever (OOM)
+    let mut t = fed(10, 2, "日本".as_bytes());
+    t.resize(0, 0);
+    assert_eq!(t.snapshot().cols, 2);
+}
+
+#[test]
 fn wide_chars_take_two_cells() {
     let t = fed(10, 2, "日本😀x".as_bytes());
     insta::assert_snapshot!(t.dump_grid());

@@ -13,7 +13,7 @@ fuzz_target!(|data: &[u8]| {
     let _ = term.drain_events();
 
     // Derive a resize target from the data itself so the fuzzer explores odd grid sizes
-    // (including the 1x1 clamp floor) without needing a structured input format.
+    // (including the 2x1 clamp floor) without needing a structured input format.
     let cols = u16::from(data.first().copied().unwrap_or(1));
     let rows = u16::from(data.get(1).copied().unwrap_or(1));
     term.resize(cols, rows);
