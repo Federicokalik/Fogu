@@ -69,9 +69,9 @@ impl SecretStore {
     /// The stored secret, if any.
     pub async fn get(&self, key: &SecretKey) -> Result<Option<SecretString>, SecretError> {
         match self {
-            Self::Windows => match get_secret(key).await {
+            Self::Windows => match call(key, Entry::get_password).await {
                 Ok(text) => Ok(Some(SecretString::from(text))),
-                Err(err) if err.contains("No matching entry") => Ok(None),
+                Err(keyring::Error::NoEntry) => Ok(None),
                 Err(err) => Err(SecretError::new(err)),
             },
             Self::Disabled(reason) => Err(SecretError::new(reason)),
@@ -120,8 +120,7 @@ impl SecretStore {
     pub async fn delete(&self, key: &SecretKey) -> Result<(), SecretError> {
         match self {
             Self::Windows => match call(key, Entry::delete_credential).await {
-                Ok(()) => Ok(()),
-                Err(err) if err.contains("No matching entry") => Ok(()),
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
                 Err(err) => Err(SecretError::new(err)),
             },
             Self::Disabled(reason) => Err(SecretError::new(reason)),
@@ -179,35 +178,20 @@ fn entry(key: &SecretKey) -> keyring::Result<Entry> {
     Entry::new_with_target(&target, SERVICE, &user)
 }
 
-/// Runs one blocking Credential Manager call on the blocking pool.
-async fn call(
+/// Runs one blocking Credential Manager call on the blocking pool. A task that fails or does not
+/// answer in time is a `PlatformFailure`, so callers match only on keyring's own variants.
+async fn call<T: Send + 'static>(
     key: &SecretKey,
-    operation: impl FnOnce(&Entry) -> keyring::Result<()> + Send + 'static,
-) -> Result<(), String> {
+    operation: impl FnOnce(&Entry) -> keyring::Result<T> + Send + 'static,
+) -> keyring::Result<T> {
     let key = key.clone();
-    let task = tokio::task::spawn_blocking(move || {
-        let entry = entry(&key).map_err(|err| err.to_string())?;
-        operation(&entry).map_err(|err| err.to_string())
-    });
-    match tokio::time::timeout(CALL_TIMEOUT, task).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(err)) => Err(format!("Credential Manager task failed: {err}")),
-        Err(_elapsed) => Err("Credential Manager did not answer in time".to_owned()),
-    }
-}
-
-/// Runs a blocking call that returns a secret string.
-async fn get_secret(key: &SecretKey) -> Result<String, String> {
-    let key = key.clone();
-    let task = tokio::task::spawn_blocking(move || {
-        let entry = entry(&key).map_err(|err| err.to_string())?;
-        entry.get_password().map_err(|err| err.to_string())
-    });
-    match tokio::time::timeout(CALL_TIMEOUT, task).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(err)) => Err(format!("Credential Manager task failed: {err}")),
-        Err(_elapsed) => Err("Credential Manager did not answer in time".to_owned()),
-    }
+    let task = tokio::task::spawn_blocking(move || operation(&entry(&key)?));
+    let failure = match tokio::time::timeout(CALL_TIMEOUT, task).await {
+        Ok(Ok(result)) => return result,
+        Ok(Err(err)) => format!("Credential Manager task failed: {err}"),
+        Err(_elapsed) => "Credential Manager did not answer in time".to_owned(),
+    };
+    Err(keyring::Error::PlatformFailure(failure.into()))
 }
 
 /// The session runtime's secret store: connected on first use, called on the session runtime.
