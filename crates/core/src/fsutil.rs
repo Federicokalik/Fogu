@@ -211,8 +211,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ensure_private_dir_tightens_an_existing_open_dir() {
-        use std::os::unix::fs::PermissionsExt as _;
         use std::fs::Permissions;
+        use std::os::unix::fs::PermissionsExt as _;
         let dir = std::env::temp_dir().join(format!("fogu-fsutil-open-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, Permissions::from_mode(0o755)).unwrap();
@@ -231,8 +231,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn atomic_write_replaces_content_with_a_private_file_and_leaves_no_temp() {
-        use std::os::unix::fs::PermissionsExt as _;
         use std::fs::Permissions;
+        use std::os::unix::fs::PermissionsExt as _;
         let root = std::env::temp_dir().join(format!("fogu-atomic-{}", std::process::id()));
         create_private_dir(&root).unwrap();
         let file = root.join("known_hosts");
